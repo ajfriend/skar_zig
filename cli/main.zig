@@ -90,10 +90,12 @@ fn writeRecord(w: anytype, args: Args, info: sphar.Info, time_s: f64) !void {
     if (info.status == .converged) {
         try w.print(",\"aspect_ratio\":{d},", .{info.aspectRatio()});
         try w.writeAll("\"Q\":[");
-        try writeVec3(w, info.Q.e1.m);
+        try writeVec3(w, info.Q.col(0).m);
         try w.writeAll(",");
-        try writeVec3(w, info.Q.e2.m);
-        try w.print("],\"mu\":[{d},{d}],", .{ info.mu[0], info.mu[1] });
+        try writeVec3(w, info.Q.col(1).m);
+        try w.writeAll(",");
+        try writeVec3(w, info.Q.col(2).m);
+        try w.print("],\"mu\":[{d},{d},{d}],", .{ info.mu[0], info.mu[1], info.mu[2] });
         try w.writeAll("\"lambdas\":");
         try writeLambdas(w, info.cert.indices, info.cert.lambdas);
         try w.print(",\"claimed_gap\":{d}", .{info.cert.claimed_gap});

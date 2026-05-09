@@ -317,22 +317,37 @@ pub const Mat3 = struct {
         const b = other.m;
         var r: Mat3 = undefined;
         for (0..3) |row| {
-            for (0..3) |col| {
-                r.m[row * 3 + col] =
-                    a[row * 3 + 0] * b[0 * 3 + col] +
-                    a[row * 3 + 1] * b[1 * 3 + col] +
-                    a[row * 3 + 2] * b[2 * 3 + col];
+            for (0..3) |c| {
+                r.m[row * 3 + c] =
+                    a[row * 3 + 0] * b[0 * 3 + c] +
+                    a[row * 3 + 1] * b[1 * 3 + c] +
+                    a[row * 3 + 2] * b[2 * 3 + c];
             }
         }
         return r;
+    }
+
+    /// Build a Mat3 from its three columns. Row-major storage; `c0` populates
+    /// indices {0,3,6}, `c1` populates {1,4,7}, `c2` populates {2,5,8}.
+    pub inline fn fromCols(c0: Vec3, c1: Vec3, c2: Vec3) Mat3 {
+        return .{ .m = .{
+            c0.m[0], c1.m[0], c2.m[0],
+            c0.m[1], c1.m[1], c2.m[1],
+            c0.m[2], c1.m[2], c2.m[2],
+        } };
+    }
+
+    /// Extract column `i` (0..2) as a Vec3.
+    pub inline fn col(self: Mat3, i: usize) Vec3 {
+        return .{ .m = .{ self.m[i], self.m[3 + i], self.m[6 + i] } };
     }
 
     /// Outer product x yᵀ.
     pub inline fn outer(x: Vec3, y: Vec3) Mat3 {
         var r: Mat3 = undefined;
         for (0..3) |row| {
-            for (0..3) |col| {
-                r.m[row * 3 + col] = x.m[row] * y.m[col];
+            for (0..3) |c| {
+                r.m[row * 3 + c] = x.m[row] * y.m[c];
             }
         }
         return r;
@@ -377,8 +392,8 @@ pub const Mat3 = struct {
     pub inline fn symOuter(x: Vec3, z: Vec3) Mat3 {
         var r: Mat3 = undefined;
         for (0..3) |row| {
-            for (0..3) |col| {
-                r.m[row * 3 + col] = (x.m[row] * z.m[col] + z.m[row] * x.m[col]) * 0.5;
+            for (0..3) |c| {
+                r.m[row * 3 + c] = (x.m[row] * z.m[c] + z.m[row] * x.m[c]) * 0.5;
             }
         }
         return r;
@@ -1238,14 +1253,16 @@ pub const Cert = struct {
 
 pub const Info = struct {
     status: Status,
-    /// Principal-axes orthonormal basis: columns (Q.e1, Q.e2) are the two
-    /// eigenvectors of A in the tangent plane. The third eigenvector is
-    /// b = Q.e1 × Q.e2 (right-hand rule); structurally λ_b = 1/√3.
-    Q: Mat3x2,
-    /// Eigenvalues of A in the tangent plane, ascending:
-    ///   mu[0] ≤ mu[1];  mu[0] pairs with Q.e1 (longer semi-axis direction).
-    /// Aspect ratio of the cone cross-section = mu[1] / mu[0].
-    mu: [2]f64,
+    /// Full eigenbasis of A as columns of a 3×3 orthonormal matrix:
+    ///   Q[:,0] = b (cone axis, structural eigenvalue λ_b = 1/√3)
+    ///   Q[:,1], Q[:,2] = tangent-plane eigenvectors
+    /// Right-handed: det(Q) = +1.
+    Q: Mat3,
+    /// Eigenvalues of A pairing with Q's columns (A·Q[:,i] = mu[i]·Q[:,i]):
+    ///   mu[0] = 1/√3 (LAM_B): structural axial eigenvalue
+    ///   mu[1] ≤ mu[2]: tangent-plane eigenvalues
+    /// Aspect ratio of the cone cross-section = mu[2] / mu[1].
+    mu: [3]f64,
     outer_iters: u32,
     /// Count of outer iterations where Newton polish bailed and FW weights were used.
     newton_polish_failures: u32,
@@ -1257,28 +1274,31 @@ pub const Info = struct {
         self.allocator.free(self.cert.lambdas);
     }
 
-    /// Aspect ratio of the cone cross-section = mu[1] / mu[0] ≥ 1.
+    /// Aspect ratio of the cone cross-section = mu[2] / mu[1] ≥ 1.
     /// NaN on INFEASIBLE (mu initialized to zeros).
     pub fn aspectRatio(self: Info) f64 {
-        return self.mu[1] / self.mu[0];
+        return self.mu[2] / self.mu[1];
     }
 
-    /// Cone axis: b = Q.e1 × Q.e2 (sign pinned at output time in `solve`).
+    /// Cone axis: first column of Q.
     pub fn b(self: Info) Vec3 {
-        return self.Q.e1.cross(self.Q.e2);
+        return self.Q.col(0);
     }
 
-    /// Materialize A as an explicit Mat3: (1/√3)·b·bᵀ + mu[0]·Q.e1·Q.e1ᵀ
-    /// + mu[1]·Q.e2·Q.e2ᵀ. Cheap (three symmetric rank-1 updates). For a
-    /// loop applying A to many vectors, call once and reuse.
+    /// Materialize A from its eigendecomposition: Σᵢ mu[i] · Q[:,i] · Q[:,i]ᵀ.
+    /// Cheap (three symmetric rank-1 updates). For a loop applying A to many
+    /// vectors, call once and reuse.
     pub fn A(self: Info) Mat3 {
-        return buildA(self.b(), self.Q.e1, self.Q.e2, self.mu[0], self.mu[1]);
+        var m = Mat3.zero;
+        m.addSymRank1(self.mu[0], self.Q.col(0));
+        m.addSymRank1(self.mu[1], self.Q.col(1));
+        m.addSymRank1(self.mu[2], self.Q.col(2));
+        return m;
     }
 };
 
 /// Assemble A from its eigendecomposition: A = (1/√3)·b·bᵀ + μ₁·v₁·v₁ᵀ
-/// + μ₂·v₂·v₂ᵀ, where (b, v₁, v₂) is the orthonormal eigenbasis of A with
-/// eigenvalues (1/√3, μ₁, μ₂). Three symmetric rank-1 updates.
+/// + μ₂·v₂·v₂ᵀ. Used internally; consumers should call `Info.A()` instead.
 fn buildA(b: Vec3, v1: Vec3, v2: Vec3, mu1: f64, mu2: f64) Mat3 {
     var m = Mat3.zero;
     m.addSymRank1(LAM_B, b);
@@ -1309,8 +1329,8 @@ pub fn solve(
 ) !Info {
     var info = Info{
         .status = .did_not_converge,
-        .Q = .{ .e1 = Vec3.zero, .e2 = Vec3.zero },
-        .mu = .{ 0, 0 },     // aspectRatio() returns NaN via 0/0 on INFEASIBLE
+        .Q = Mat3.zero,
+        .mu = .{ 0, 0, 0 },  // aspectRatio() returns NaN via 0/0 on INFEASIBLE
         .outer_iters = 0,
         .newton_polish_failures = 0,
         .cert = .{
@@ -1488,12 +1508,14 @@ pub fn solve(
     info.newton_polish_failures = newton_polish_failures;
     info.cert = .{ .indices = indices, .lambdas = lambdas, .claimed_gap = final_gap };
 
-    // Principal-axes Shape: reuse (v1, v2, mu) from the last gap call; just
-    // pin b's sign so b = Q_principal.e1 × Q_principal.e2.
-    var Q_p: Mat3x2 = .{ .e1 = last_gap.v1, .e2 = last_gap.v2 };
-    if (last_gap.v1.cross(last_gap.v2).dot(b) < 0) Q_p.e2 = last_gap.v2.scale(-1.0);
-    info.Q = Q_p;
-    info.mu = last_gap.mu;
+    // Bundle the full eigendecomposition: Q's columns are (b, v1, v2) with
+    // eigenvalues (LAM_B, mu[0], mu[1]). Flip v2 if needed so (b, v1, v2) is
+    // right-handed (det Q = +1).
+    var v1 = last_gap.v1;
+    var v2 = last_gap.v2;
+    if (v1.cross(v2).dot(b) < 0) v2 = v2.scale(-1.0);
+    info.Q = Mat3.fromCols(b, v1, v2);
+    info.mu = .{ LAM_B, last_gap.mu[0], last_gap.mu[1] };
     info.status = if (converged) .converged else .did_not_converge;
     return info;
 }

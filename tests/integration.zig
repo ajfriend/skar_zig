@@ -170,7 +170,7 @@ test "did_not_converge case raises DNC status" {
     }
 }
 
-test "Shape invariants: Q orthonormal, b = Q.e1 × Q.e2, AR = mu[1]/mu[0]" {
+test "Shape invariants: Q right-handed orthonormal, mu paired with columns, AR = mu[2]/mu[1]" {
     const allocator = std.testing.allocator;
     const X = try loadCase(allocator, "cases/np100.txt");
     defer allocator.free(X);
@@ -178,28 +178,42 @@ test "Shape invariants: Q orthonormal, b = Q.e1 × Q.e2, AR = mu[1]/mu[0]" {
     var info = try sphar.solve(allocator, X, 1e-6, 10);
     defer info.deinit();
 
-    // Q columns are orthonormal.
-    try std.testing.expect(@abs(info.Q.e1.dot(info.Q.e1) - 1.0) < 1e-14);
-    try std.testing.expect(@abs(info.Q.e2.dot(info.Q.e2) - 1.0) < 1e-14);
-    try std.testing.expect(@abs(info.Q.e1.dot(info.Q.e2)) < 1e-14);
+    const c0 = info.Q.col(0);
+    const c1 = info.Q.col(1);
+    const c2 = info.Q.col(2);
 
-    // b = Q.e1 × Q.e2 is a unit vector orthogonal to both Q columns.
+    // Q's three columns are an orthonormal basis.
+    try std.testing.expect(@abs(c0.dot(c0) - 1.0) < 1e-14);
+    try std.testing.expect(@abs(c1.dot(c1) - 1.0) < 1e-14);
+    try std.testing.expect(@abs(c2.dot(c2) - 1.0) < 1e-14);
+    try std.testing.expect(@abs(c0.dot(c1)) < 1e-14);
+    try std.testing.expect(@abs(c0.dot(c2)) < 1e-14);
+    try std.testing.expect(@abs(c1.dot(c2)) < 1e-14);
+
+    // Right-handed: c0 × c1 = c2.
+    const cross = c0.cross(c1);
+    try std.testing.expect(@abs(cross.m[0] - c2.m[0]) < 1e-14);
+    try std.testing.expect(@abs(cross.m[1] - c2.m[1]) < 1e-14);
+    try std.testing.expect(@abs(cross.m[2] - c2.m[2]) < 1e-14);
+
+    // b() returns the first column.
     const b = info.b();
-    try std.testing.expect(@abs(b.norm() - 1.0) < 1e-14);
-    try std.testing.expect(@abs(b.dot(info.Q.e1)) < 1e-14);
-    try std.testing.expect(@abs(b.dot(info.Q.e2)) < 1e-14);
+    try std.testing.expect(@abs(b.m[0] - c0.m[0]) < 1e-14);
+    try std.testing.expect(@abs(b.m[1] - c0.m[1]) < 1e-14);
+    try std.testing.expect(@abs(b.m[2] - c0.m[2]) < 1e-14);
 
-    // mu ascending; aspectRatio() derives mu[1]/mu[0].
-    try std.testing.expect(info.mu[0] <= info.mu[1]);
-    try std.testing.expect(@abs(info.mu[1] / info.mu[0] - info.aspectRatio()) < 1e-14);
+    // mu[0] = 1/√3, tangent eigenvalues ascending, AR = mu[2]/mu[1].
+    try std.testing.expect(@abs(info.mu[0] - 1.0 / @sqrt(3.0)) < 1e-14);
+    try std.testing.expect(info.mu[1] <= info.mu[2]);
+    try std.testing.expect(@abs(info.mu[2] / info.mu[1] - info.aspectRatio()) < 1e-14);
 
-    // info.A() reconstructs A faithfully: Q.e1 and Q.e2 remain eigenvectors
-    // with eigenvalues mu[0] and mu[1]; b remains an eigenvector with 1/√3.
+    // info.A() reconstructs A faithfully: each Q column is an eigenvector of
+    // A with the corresponding mu as eigenvalue.
     const A_mat = info.A();
-    const Ae1 = A_mat.apply(info.Q.e1);
-    const Ae2 = A_mat.apply(info.Q.e2);
-    const Ab = A_mat.apply(info.b());
-    try std.testing.expect(@abs(info.Q.e1.dot(Ae1) - info.mu[0]) < 1e-12);
-    try std.testing.expect(@abs(info.Q.e2.dot(Ae2) - info.mu[1]) < 1e-12);
-    try std.testing.expect(@abs(info.b().dot(Ab) - 1.0 / @sqrt(3.0)) < 1e-12); // 1/√3 = LAM_B
+    const Ac0 = A_mat.apply(c0);
+    const Ac1 = A_mat.apply(c1);
+    const Ac2 = A_mat.apply(c2);
+    try std.testing.expect(@abs(c0.dot(Ac0) - info.mu[0]) < 1e-12);
+    try std.testing.expect(@abs(c1.dot(Ac1) - info.mu[1]) < 1e-12);
+    try std.testing.expect(@abs(c2.dot(Ac2) - info.mu[2]) < 1e-12);
 }
