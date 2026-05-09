@@ -1,0 +1,17 @@
+.{
+    .name = .skar,
+    .version = "0.0.0",
+    .fingerprint = 0xdea1be595fe97874,
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "tests",
+        "cli",
+        "bench",
+        "cases",
+        "README.md",
+    },
+}

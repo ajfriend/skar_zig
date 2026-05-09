@@ -1,0 +1,6 @@
+# description: octahedron face: S pole + equator at (180°, 270°); covers 1/8 of sphere; AR = 1 by symmetry
+# n: 3
+# tags: small, symmetric, wide_angle
+0 0 -1
+-1 1.2246467991473532e-16 0
+-1.8369701987210297e-16 -1 0
