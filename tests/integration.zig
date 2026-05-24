@@ -14,6 +14,30 @@ comptime {
     _ = @import("extreme_aspect.zig");
 }
 
+/// Labeled approx-equal check on aspect ratios. On failure prints
+/// the case label and full-precision expected/actual/delta — the
+/// equivalent of the hand-rolled diagnostic that pre-dated the move
+/// to `std.testing.expectApproxEqAbs` (which prints values but no
+/// label, leaving "which case tripped it?" implicit). The failure
+/// branch is exercised by a dedicated negative test below, so kcov
+/// covers the print path.
+fn checkArEq(label: []const u8, expected: f64, actual: f64, tol: f64) !void {
+    if (@abs(expected - actual) > tol) {
+        std.debug.print(
+            "AR mismatch case={s}: expected={d:.17} actual={d:.17} delta={e:.3}\n",
+            .{ label, expected, actual, @abs(expected - actual) },
+        );
+        return error.AspectRatioMismatch;
+    }
+}
+
+test "checkArEq prints case label on failure" {
+    try std.testing.expectError(
+        error.AspectRatioMismatch,
+        checkArEq("test_label", 1.0, 1.1, 1e-6),
+    );
+}
+
 const ExpectedAr = struct { name: []const u8, ar: f64 };
 
 const EXPECTED: []const ExpectedAr = &.{
@@ -93,10 +117,9 @@ test "converged cases match C baseline AR" {
         // AR agrees with C baseline to within solve tolerance. Zig and C
         // are independent numerical algorithms; the certified duality gap
         // is the source of truth for correctness, not cross-implementation
-        // AR equality. expectApproxEqAbs prints both values + delta on
-        // failure; the case index in the EXPECTED slice identifies which
-        // input tripped it.
-        try std.testing.expectApproxEqAbs(exp.ar, info.aspectRatio(), tol);
+        // AR equality. Use the labeled helper so the case name appears
+        // in the failure diagnostic.
+        try checkArEq(exp.name, exp.ar, info.aspectRatio(), tol);
 
         // Feasibility: ‖Ax_i‖ ≤ b·x_i for all i (tol includes numerics buffer).
         const viol = sphar.checkFeasibility(info, X);
