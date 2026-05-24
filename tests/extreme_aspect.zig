@@ -148,6 +148,95 @@ const Case = struct {
     points: [3][3]f64,
 };
 
+/// Rotation-invariance assertion with case + rotation-index labels.
+/// Three checks against a converged `rot_info`: status, gap magnitude,
+/// AR drift from canonical. Each failure prints case={s} k={d} +
+/// offending value so a future regression is easy to localize. The
+/// three failure-print branches are exercised by negative tests below.
+fn checkRotationInvariance(
+    label: []const u8,
+    k: u32,
+    canon_ar: f64,
+    rot_info: sphar.Info,
+    tol: f64,
+    ar_rel_tol: f64,
+) !void {
+    if (rot_info.status != sphar.Status.converged) {
+        std.debug.print(
+            "rotation status mismatch case={s} k={d}: expected converged, got {any}\n",
+            .{ label, k, rot_info.status },
+        );
+        return error.RotationNotConverged;
+    }
+    const gap_abs = @abs(rot_info.cert.claimed_gap);
+    if (gap_abs >= tol) {
+        std.debug.print(
+            "rotation gap exceeds tol case={s} k={d}: |gap|={e:.3} tol={e:.3}\n",
+            .{ label, k, gap_abs, tol },
+        );
+        return error.RotationGapTooLarge;
+    }
+    const ar_delta = @abs(canon_ar - rot_info.aspectRatio());
+    const ar_tol = ar_rel_tol * canon_ar;
+    if (ar_delta > ar_tol) {
+        std.debug.print(
+            "rotation AR drift case={s} k={d}: canon={d:.10} rot={d:.10} delta={e:.3} tol={e:.3}\n",
+            .{ label, k, canon_ar, rot_info.aspectRatio(), ar_delta, ar_tol },
+        );
+        return error.RotationArMismatch;
+    }
+}
+
+test "checkRotationInvariance: status branch prints case+k label" {
+    const fake = sphar.Info{
+        .status = .infeasible,
+        .Q = sphar.Mat3.zero,
+        .sigma = .{ 0, 0, 0 },
+        .outer_iters = 0,
+        .newton_polish_failures = 0,
+        .cert = .{ .indices = &[_]u32{}, .lambdas = &[_]f64{}, .claimed_gap = 0 },
+        .allocator = std.testing.allocator,
+    };
+    try std.testing.expectError(
+        error.RotationNotConverged,
+        checkRotationInvariance("test_label", 7, 1.0, fake, 1e-6, 1e-4),
+    );
+}
+
+test "checkRotationInvariance: gap branch prints case+k label" {
+    const fake = sphar.Info{
+        .status = .converged,
+        .Q = sphar.Mat3.zero,
+        .sigma = .{ 0, 1, 1 },
+        .outer_iters = 0,
+        .newton_polish_failures = 0,
+        .cert = .{ .indices = &[_]u32{}, .lambdas = &[_]f64{}, .claimed_gap = 1.0 },
+        .allocator = std.testing.allocator,
+    };
+    try std.testing.expectError(
+        error.RotationGapTooLarge,
+        checkRotationInvariance("test_label", 3, 1.0, fake, 1e-6, 1e-4),
+    );
+}
+
+test "checkRotationInvariance: AR branch prints case+k label" {
+    // sigma[2]/sigma[1] = 2.0, which deviates from canon_ar = 1.0
+    // by far more than ar_rel_tol * canon_ar = 1e-4.
+    const fake = sphar.Info{
+        .status = .converged,
+        .Q = sphar.Mat3.zero,
+        .sigma = .{ 0, 1, 2 },
+        .outer_iters = 0,
+        .newton_polish_failures = 0,
+        .cert = .{ .indices = &[_]u32{}, .lambdas = &[_]f64{}, .claimed_gap = 0 },
+        .allocator = std.testing.allocator,
+    };
+    try std.testing.expectError(
+        error.RotationArMismatch,
+        checkRotationInvariance("test_label", 0, 1.0, fake, 1e-6, 1e-4),
+    );
+}
+
 test "extreme aspect ratio: three geometries, rotation-invariant" {
     const allocator = std.testing.allocator;
     const tol: f64 = 1e-6;
@@ -193,12 +282,10 @@ test "extreme aspect ratio: three geometries, rotation-invariant" {
             var rot_info = try sphar.solve(allocator, rot_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = 1e-12, .max_outer = max_outer });
             defer rot_info.deinit();
 
-            // Status + gap + AR all checked via std.testing helpers so
-            // failures get diagnostics for free (and we don't carry dead
-            // hand-rolled-print branches under coverage).
-            try std.testing.expectEqual(sphar.Status.converged, rot_info.status);
-            try std.testing.expect(@abs(rot_info.cert.claimed_gap) < tol);
-            try std.testing.expectApproxEqAbs(canon_ar, rot_info.aspectRatio(), ar_rel_tol * canon_ar);
+            // Labeled check: status + gap + AR with case + rotation
+            // index in the failure diagnostic. Negative tests below
+            // exercise each print branch.
+            try checkRotationInvariance(case.name, k, canon_ar, rot_info, tol, ar_rel_tol);
         }
     }
 }
