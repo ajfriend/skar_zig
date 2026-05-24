@@ -520,8 +520,19 @@ test "acceptBUpdate fallback: all backtracks fail when a point sits below FEAS_M
     var P_buf: [1][2]f64 = undefined;
     var Ps: [1][2]f64 = undefined;
     const step = acceptBUpdate(&Xw, b, Q, u, 1.0, &P_buf, &Ps);
-    // Fallback returns the input (b, Q) unchanged.
+    // Fallback returns the input (b, Q) unchanged and a freshly
+    // recomputed s_scale from rescaleP on the re-projected P_buf.
+    // Assert all three so a future change that drops the rescaleP
+    // call (leaving s_scale undefined) or perturbs Q is caught.
     try std.testing.expectEqual(b.m[0], step.b.m[0]);
     try std.testing.expectEqual(b.m[1], step.b.m[1]);
     try std.testing.expectEqual(b.m[2], step.b.m[2]);
+    try std.testing.expectEqual(Q.e1.m[0], step.Q.e1.m[0]);
+    try std.testing.expectEqual(Q.e1.m[1], step.Q.e1.m[1]);
+    try std.testing.expectEqual(Q.e1.m[2], step.Q.e1.m[2]);
+    try std.testing.expectEqual(Q.e2.m[0], step.Q.e2.m[0]);
+    try std.testing.expectEqual(Q.e2.m[1], step.Q.e2.m[1]);
+    try std.testing.expectEqual(Q.e2.m[2], step.Q.e2.m[2]);
+    try std.testing.expect(std.math.isFinite(step.s_scale));
+    try std.testing.expect(step.s_scale > 0);
 }
