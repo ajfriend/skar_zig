@@ -8,6 +8,10 @@ const std = @import("std");
 const sphar = @import("skar");
 const Vec3 = sphar.Vec3;
 
+comptime {
+    _ = @import("extreme_aspect.zig");
+}
+
 fn loadCase(allocator: std.mem.Allocator, path: []const u8) ![][3]f64 {
     const content = try std.fs.cwd().readFileAlloc(allocator, path, 10 * 1024 * 1024);
     defer allocator.free(content);
