@@ -1412,25 +1412,42 @@ fn hullPreprocess(
 /// sphere (e.g. H3 res-15) have full-rank 2D scatter regardless of absolute
 /// scale, so this correctly distinguishes them from genuinely rank-deficient
 /// input.
+///
+/// Implementation: two-pass accumulator. Pass 1 computes the mean; pass 2
+/// accumulates squared deviations from the mean. The textbook one-pass form
+/// (`Σx² − (Σx)²/n`) is cancellation-prone when the projection cluster sits
+/// far from the tangent-plane origin (mean comparable in magnitude to spread).
+/// Two-pass avoids the subtraction entirely — each deviation term is small
+/// and non-negative, so `tr ≥ 0` is structural rather than a roundoff
+/// coincidence.
 fn isCoplanarInput(points: []const Vec3, b: Vec3, threshold: f64) bool {
     const Qh = b.orthoBasis();
+
+    // Pass 1: mean of the 2D projections.
     var ps0: f64 = 0;
     var ps1: f64 = 0;
-    var s00: f64 = 0;
-    var s01: f64 = 0;
-    var s11: f64 = 0;
     for (points) |xi| {
         const p = Qh.applyT(xi);
         ps0 += p.m[0];
         ps1 += p.m[1];
-        s00 += p.m[0] * p.m[0];
-        s01 += p.m[0] * p.m[1];
-        s11 += p.m[1] * p.m[1];
     }
     const inv_n = 1.0 / @as(f64, @floatFromInt(points.len));
-    const c00 = s00 - ps0 * ps0 * inv_n;
-    const c01 = s01 - ps0 * ps1 * inv_n;
-    const c11 = s11 - ps1 * ps1 * inv_n;
+    const m0 = ps0 * inv_n;
+    const m1 = ps1 * inv_n;
+
+    // Pass 2: squared deviations from mean — no cancellation.
+    var c00: f64 = 0;
+    var c01: f64 = 0;
+    var c11: f64 = 0;
+    for (points) |xi| {
+        const p = Qh.applyT(xi);
+        const d0 = p.m[0] - m0;
+        const d1 = p.m[1] - m1;
+        c00 += d0 * d0;
+        c01 += d0 * d1;
+        c11 += d1 * d1;
+    }
+
     const tr = c00 + c11;
     const det = c00 * c11 - c01 * c01;
     return tr <= 0 or 4.0 * det < threshold * tr * tr;

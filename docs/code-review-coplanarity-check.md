@@ -102,11 +102,19 @@ non-converged status, or document that callers must guard explicitly.
 
 ---
 
-## 4. One-pass centered-scatter formula is cancellation-prone
+## 4. One-pass centered-scatter formula is cancellation-prone — *RESOLVED*
 
 - **Location:** `src/skar.zig` — `c00 = s00 - ps0 * ps0 * inv_n` and
   analogues.
 - **Severity:** numerical edge case; can misclassify on legitimate input.
+- **Status:** Resolved by switching `isCoplanarInput` to a two-pass
+  accumulator: pass 1 computes the mean, pass 2 accumulates squared
+  deviations from the mean. Each deviation term is small and
+  non-negative, so the subtraction-induced cancellation is gone and
+  `tr ≥ 0` is structural rather than a roundoff coincidence. All 7
+  existing tests pass without modification. Bench impact lost in
+  measurement noise (sub-µs per case, runs on the hull subset which
+  is typically ≤ 10 points).
 
 The centered scatter uses the textbook one-pass form
 `Var = Σx² − (Σx)²/n`. When the tangent-plane projections have a large
