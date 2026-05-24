@@ -446,22 +446,31 @@ test "convexHull2d tie-break sort: points sharing an x-coordinate" {
 }
 
 // FailingAllocator-based tests targeting the errdefer cleanup paths
-// in solve's three cert-allocation sites. fail_index is the count of
-// allocator calls (counted from 0) at which OutOfMemory is returned;
-// we tune it to fire AFTER the first cert alloc succeeds (so the
-// errdefer on `indices` is hit) but on the second.
+// in buildPrimalCert (converged path) and buildFarkasCert (infeasible
+// path). On both paths the LAST parent-allocator call is the cert's
+// `lambdas = alloc(f64, k)` — the second of two back-to-back allocs
+// in the respective cert builder. Failing that last alloc exercises
+// the `errdefer allocator.free(indices)` immediately above it.
+//
+// `lastAllocFailIndex` runs solve once under a non-failing
+// FailingAllocator to count parent-allocator calls, then returns
+// `total - 1` for the test to use as fail_index. Robust to
+// ArenaAllocator page-pull / halfspaceCheck scratch / future build
+// changes that would shift a hard-coded fail_index off-target.
 
 fn runWithFailIndex(fail_index: usize, X: []const [3]f64, opts: sphar.SolveOptions) !sphar.Info {
     var fa = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = fail_index });
     return sphar.solve(fa.allocator(), X, opts);
 }
 
-test "OOM partway through buildPrimalCert hits the indices errdefer" {
-    // Small 3-point input — converged path runs buildPrimalCert at
-    // the end. Per a one-time probe, this case uses 5 parent-allocator
-    // calls total: arena init + 2 scratch page pulls + cert.indices +
-    // cert.lambdas. fail_index = 4 fails the lambdas alloc, leaving
-    // indices allocated → errdefer cleans up.
+fn lastAllocFailIndex(X: []const [3]f64, opts: sphar.SolveOptions) !usize {
+    var fa = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    var info = try sphar.solve(fa.allocator(), X, opts);
+    info.deinit();
+    return fa.alloc_index - 1;
+}
+
+test "OOM in the last cert alloc hits buildPrimalCert's indices errdefer" {
     const half = std.math.pi / 4.0;
     var pts: [3][3]f64 = .{
         .{ @cos(-half), @sin(-half), 0.1 },
@@ -474,14 +483,14 @@ test "OOM partway through buildPrimalCert hits the indices errdefer" {
         p.*[1] /= n;
         p.*[2] /= n;
     }
-    try std.testing.expectError(error.OutOfMemory, runWithFailIndex(4, pts[0..], .{}));
+    const fi = try lastAllocFailIndex(pts[0..], .{});
+    try std.testing.expectError(error.OutOfMemory, runWithFailIndex(fi, pts[0..], .{}));
 }
 
-test "OOM partway through buildFarkasCert hits the indices errdefer" {
+test "OOM in the last cert alloc hits buildFarkasCert's indices errdefer" {
     // Three equiangular equatorial points (120° apart) — the convex
     // hull contains the origin, so no hemisphere fits all three;
     // solve takes the .infeasible branch and calls buildFarkasCert.
-    // Same fail_index = 2 logic.
     const c120 = -0.5;
     const s120 = @sqrt(3.0) / 2.0;
     const pts = [_][3]f64{
@@ -489,10 +498,9 @@ test "OOM partway through buildFarkasCert hits the indices errdefer" {
         .{ c120, s120, 0.0 },
         .{ c120, -s120, 0.0 },
     };
-    try std.testing.expectError(
-        error.OutOfMemory,
-        runWithFailIndex(2, &pts, .{ .coplanarity_tol = -1 }),
-    );
+    const opts: sphar.SolveOptions = .{ .coplanarity_tol = -1 };
+    const fi = try lastAllocFailIndex(&pts, opts);
+    try std.testing.expectError(error.OutOfMemory, runWithFailIndex(fi, &pts, opts));
 }
 
 
