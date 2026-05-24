@@ -1195,16 +1195,57 @@ fn dualityGapConstructed(
 // ----------------------------------------------------------------
 // Public API
 // ----------------------------------------------------------------
+//
+// Two-axis result model for `solve`:
+//
+//   - Errors (`SolveError || Allocator.Error`, signaled via the `!` in
+//     the return type) mean the call could not produce a meaningful
+//     `Info`. Either the host couldn't cooperate (`OutOfMemory`) or the
+//     library miscomputed something internally (`NegativeDualityGap`).
+//     Neither is recoverable from the caller's side, so `try`
+//     propagation is the right default behavior.
+//
+//   - `Info.status` describes what the algorithm *found* on the input.
+//     Callers switch on it to dispatch — use the certificate, ask the
+//     user to fix the input, retry with more iterations, etc. Every
+//     status variant corresponds to a meaningful (possibly partial)
+//     `Info` the caller can inspect.
+//
+// In short: errors = "couldn't run"; status = "ran, here's the answer."
 
-pub const Status = enum { converged, infeasible, did_not_converge };
+pub const Status = enum {
+    /// Solver closed the duality gap within `gap_tol`. `Info.cert` holds
+    /// the primal certificate; `Info.Q` and `Info.sigma` hold the
+    /// eigendecomposition of A.
+    converged,
+    /// No feasible cone exists for the input. `Info.cert` holds the
+    /// Farkas certificate (`λ ≥ 0`, `Σλ = 1`, `‖Σ λᵢ xᵢ‖` small) and
+    /// `claimed_gap` is the Farkas residual.
+    infeasible,
+    /// Solver hit max iterations without closing the gap. `Info.Q` and
+    /// `Info.sigma` reflect the last iterate (near-feasible but
+    /// uncertified).
+    did_not_converge,
+    /// Coplanarity check rejected the input before iteration: all
+    /// points lie in a 2D subspace through the origin, so the SDP is
+    /// degenerate (one tangent eigenvalue → 0). `Info` is otherwise
+    /// empty. Disable the check by passing `coplanarity_tol < 0` to
+    /// `solve` if you want to handle this case yourself.
+    coplanar_input,
+};
 
-/// Solver errors that indicate the gap computation produced a meaningfully
-/// negative value — i.e. a broken certificate (dual not actually feasible,
-/// or log-det computed on ill-conditioned input). Weak duality says
-/// gap ≥ 0; ulp-level negatives are float noise and ignored, but anything
-/// beyond that is a bug signal we want to propagate loudly rather than
-/// silently accept.
-pub const SolveError = error{NegativeDualityGap};
+/// Internal-correctness errors. Distinct from `Allocator.Error` (the
+/// host couldn't allocate) — these mean the library produced a result
+/// that violates a theorem and the bug needs to be surfaced loudly.
+pub const SolveError = error{
+    /// The duality-gap computation produced a meaningfully negative
+    /// value — either the dual certificate is not actually feasible,
+    /// or the log-det was computed on ill-conditioned input. Weak
+    /// duality (`gap ≥ 0`) is a theorem, so this signals a bug.
+    /// ulp-level negatives are float noise and silently ignored;
+    /// anything beyond that propagates as this error.
+    NegativeDualityGap,
+};
 
 pub const Cert = struct {
     indices: []u32,
@@ -1284,11 +1325,22 @@ pub fn checkFeasibility(info: Info, X: []const [3]f64) f64 {
 
 /// Main solver. `n_hull` convex-hull threshold: if n > n_hull, reduce to hull.
 /// Pass -1 to disable, 0 to always hull, 10 for the default.
+///
+/// `coplanarity_tol`: rejects rank-deficient inputs (all points in a 2D
+/// subspace through the origin) with `Status.coplanar_input`. After
+/// projecting to the tangent plane at the feasible axis, the 2×2 centered
+/// scatter C is checked against `4·det(C) < tol · trace(C)²` —
+/// "fraction-of-isotropic" ∈ [0, 1] where 1 is a circular scatter and 0 is
+/// a perfect line. tol = 1e-12 flags inputs whose scatter ellipse is roughly
+/// >10⁶× longer than wide; tighter catches only essentially-exact
+/// coplanarity, looser also rejects near-coplanar inputs the solver would
+/// otherwise produce NaN on. Pass < 0 to disable the check entirely.
 pub fn solve(
     allocator: std.mem.Allocator,
     X: []const [3]f64,
     gap_tol: f64,
     n_hull: i32,
+    coplanarity_tol: f64,
 ) !Info {
     var info = Info{
         .status = .did_not_converge,
@@ -1341,6 +1393,48 @@ pub fn solve(
         info.status = .infeasible;
         info.cert = .{ .indices = indices, .lambdas = lambdas, .claimed_gap = hs.residual };
         return info;
+    }
+
+    // 1.5) Coplanarity check. Reject inputs where all points lie in a 2D
+    //      subspace through the origin (i.e., on a single great circle).
+    //      Such inputs drive the optimum to a degenerate cone (one tangent
+    //      eigenvalue → 0) and produce NaN downstream. Projecting to the
+    //      tangent plane at b reduces this to a 2D rank check: the
+    //      projected points are collinear iff the 3D points are coplanar
+    //      with the origin. Scale-invariant "fraction of isotropic" via
+    //      4·det / trace² ∈ [0, 1] on the 2×2 centered scatter C — 1 for
+    //      isotropic (circular), → 0 for collinear. Equivalent to the
+    //      cancellation-safe form of λ_min/λ_max for ill-conditioned C
+    //      (where (T − √(T² − 4D))/2 loses precision). Tight clusters on
+    //      the sphere (e.g. H3 res-15) have full-rank 2D scatter
+    //      regardless of absolute scale, so this correctly distinguishes
+    //      them from genuinely rank-deficient input. Disabled by
+    //      coplanarity_tol < 0.
+    if (coplanarity_tol >= 0) {
+        const Qh = b.orthoBasis();
+        var ps0: f64 = 0;
+        var ps1: f64 = 0;
+        var s00: f64 = 0;
+        var s01: f64 = 0;
+        var s11: f64 = 0;
+        for (Xv) |xi| {
+            const p = Qh.applyT(xi);
+            ps0 += p.m[0];
+            ps1 += p.m[1];
+            s00 += p.m[0] * p.m[0];
+            s01 += p.m[0] * p.m[1];
+            s11 += p.m[1] * p.m[1];
+        }
+        const inv_n = 1.0 / @as(f64, @floatFromInt(Xv.len));
+        const c00 = s00 - ps0 * ps0 * inv_n;
+        const c01 = s01 - ps0 * ps1 * inv_n;
+        const c11 = s11 - ps1 * ps1 * inv_n;
+        const tr = c00 + c11;
+        const det = c00 * c11 - c01 * c01;
+        if (tr <= 0 or 4.0 * det < coplanarity_tol * tr * tr) {
+            info.status = .coplanar_input;
+            return info;
+        }
     }
 
     // 2) Optional hull preprocessing.

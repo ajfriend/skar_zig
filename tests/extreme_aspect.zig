@@ -48,13 +48,15 @@
 //!     noise gets amplified by the optimum's ill-conditioning, so an
 //!     absolute tolerance fixed against AR=1 cases would be too tight)
 //!
-//! Known limitations surfaced while writing these tests (both
-//! verified pre-existing on HEAD~1, identical numbers — neither is a
-//! Cholesky regression):
+//! Known limitations (both verified pre-existing on HEAD~1, identical
+//! numbers — neither is a Cholesky regression):
 //!  - 3 points exactly coplanar with the origin (great-circle inputs,
-//!    z = 0 in canonical orientation) make the solver diverge to NaN
-//!    even at modest arc spans. All three cases here include a
-//!    z-perturbation specifically to skirt this.
+//!    z = 0 in canonical orientation) caused the solver to diverge to
+//!    NaN. Now caught by the coplanarity preprocessing check in
+//!    `solve` (returns `Status.coplanar_input`); see the
+//!    "coplanarity check flags great-circle inputs" test below. The
+//!    three high-AR cases here include a z-perturbation that keeps
+//!    them safely above the rank-deficiency threshold.
 //!  - Near-antipodal (174°) cases hit a convergence plateau around
 //!    AR ≈ 80–100: some rotations plateau at gap ~1e-4 and don't
 //!    tighten in 1000 outer iterations. Each chosen `eps` here is
@@ -169,7 +171,7 @@ test "extreme aspect ratio: three geometries, rotation-invariant" {
     for (cases) |case| {
         // Canonical (unrotated) solve establishes the reference AR.
         var canon_pts: [3][3]f64 = case.points;
-        var canon_info = try sphar.solve(allocator, canon_pts[0..], tol, max_outer);
+        var canon_info = try sphar.solve(allocator, canon_pts[0..], tol, max_outer, 1e-12);
         defer canon_info.deinit();
 
         try std.testing.expectEqual(sphar.Status.converged, canon_info.status);
@@ -188,7 +190,7 @@ test "extreme aspect ratio: three geometries, rotation-invariant" {
             for (case.points, 0..) |p, i| {
                 rot_pts[i] = applyRot(R, p);
             }
-            var rot_info = try sphar.solve(allocator, rot_pts[0..], tol, max_outer);
+            var rot_info = try sphar.solve(allocator, rot_pts[0..], tol, max_outer, 1e-12);
             defer rot_info.deinit();
 
             const ar_delta = @abs(rot_info.aspectRatio() - canon_ar);
@@ -206,4 +208,82 @@ test "extreme aspect ratio: three geometries, rotation-invariant" {
             }
         }
     }
+}
+
+test "coplanarity check cutoff is near the parameter's value" {
+    // For arcPoints(90°, eps), the 2D centered-scatter eigenvalue ratio
+    // works out to 4·det/trace² ≈ 10.67·eps². So the cutoff against
+    // tol=1e-12 lands at eps ≈ 3e-7 (10.67·eps² = tol). We test inputs
+    // sitting ~40× above and ~37× below that cutoff: tight enough to
+    // catch a missing/changed 4× factor in the trigger condition, loose
+    // enough that ordinary numerical drift won't flip the result.
+    const allocator = std.testing.allocator;
+    const tol: f64 = 1e-6;
+    const max_outer: u32 = 100;
+    const coplanarity_tol: f64 = 1e-12;
+
+    // Above cutoff: ratio ≈ 4.3e-11 (43× above tol). Must not flag.
+    {
+        var pts: [3][3]f64 = arcPoints(90.0, 2.0e-6);
+        var info = try sphar.solve(allocator, pts[0..], tol, max_outer, coplanarity_tol);
+        defer info.deinit();
+        try std.testing.expect(info.status != sphar.Status.coplanar_input);
+    }
+
+    // Below cutoff: ratio ≈ 2.7e-14 (37× below tol). Must flag.
+    {
+        var pts: [3][3]f64 = arcPoints(90.0, 5.0e-8);
+        var info = try sphar.solve(allocator, pts[0..], tol, max_outer, coplanarity_tol);
+        defer info.deinit();
+        try std.testing.expectEqual(sphar.Status.coplanar_input, info.status);
+    }
+
+    // Same near-degenerate input, but tol tightened by 1e8: ratio
+    // (2.7e-14) is now ~3700× above the tighter threshold (1e-20),
+    // so must not flag. Confirms the parameter actually drives the
+    // cutoff rather than the threshold being baked in.
+    {
+        var pts: [3][3]f64 = arcPoints(90.0, 5.0e-8);
+        var info = try sphar.solve(allocator, pts[0..], tol, max_outer, 1e-20);
+        defer info.deinit();
+        try std.testing.expect(info.status != sphar.Status.coplanar_input);
+    }
+}
+
+test "coplanarity check flags great-circle inputs" {
+    const allocator = std.testing.allocator;
+    const tol: f64 = 1e-6;
+    const max_outer: u32 = 100;
+    const coplanarity_tol: f64 = 1e-12;
+
+    // Three points exactly on a great circle (z=0): mathematically
+    // coplanar with the origin. Without the check, the solver diverges
+    // to NaN (verified at the time the check was added).
+    const half = deg(170.0 / 2.0);
+    var canon_pts: [3][3]f64 = .{
+        .{ std.math.cos(-half), std.math.sin(-half), 0.0 },
+        .{ 1.0, 0.0, 0.0 },
+        .{ std.math.cos(half), std.math.sin(half), 0.0 },
+    };
+    var info = try sphar.solve(allocator, canon_pts[0..], tol, max_outer, coplanarity_tol);
+    defer info.deinit();
+    try std.testing.expectEqual(sphar.Status.coplanar_input, info.status);
+
+    // Rotational invariance: should still be flagged after rotation.
+    var rng_state: u64 = 0xCA7;
+    var k: u32 = 0;
+    while (k < 10) : (k += 1) {
+        const R = randomRotation(&rng_state);
+        var rot_pts: [3][3]f64 = undefined;
+        for (canon_pts, 0..) |p, i| rot_pts[i] = applyRot(R, p);
+        var rinfo = try sphar.solve(allocator, rot_pts[0..], tol, max_outer, coplanarity_tol);
+        defer rinfo.deinit();
+        try std.testing.expectEqual(sphar.Status.coplanar_input, rinfo.status);
+    }
+
+    // Sanity: same input passes when the check is disabled (we don't
+    // care whether it converges — only that we're not flagging it).
+    var unchecked = try sphar.solve(allocator, canon_pts[0..], tol, max_outer, -1);
+    defer unchecked.deinit();
+    try std.testing.expect(unchecked.status != sphar.Status.coplanar_input);
 }

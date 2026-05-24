@@ -45,7 +45,7 @@ pub fn main() !void {
 
         // Warm up.
         for (0..N_WARMUP) |_| {
-            var info = sphar.solve(allocator, X, TOL, 10) catch continue;
+            var info = sphar.solve(allocator, X, TOL, 10, 1e-12) catch continue;
             info.deinit();
         }
 
@@ -55,7 +55,7 @@ pub fn main() !void {
         var last_info: ?sphar.Info = null;
         for (0..N_RUNS) |r| {
             const t0 = std.time.nanoTimestamp();
-            const info = try sphar.solve(allocator, X, TOL, 10);
+            const info = try sphar.solve(allocator, X, TOL, 10, 1e-12);
             const t1 = std.time.nanoTimestamp();
             times[r] = @as(f64, @floatFromInt(t1 - t0)) / 1000.0;
             if (last_info) |*li| li.deinit();
@@ -72,6 +72,7 @@ pub fn main() !void {
                 .converged => "ok",
                 .infeasible => "infeas",
                 .did_not_converge => "DNC",
+                .coplanar_input => "coplanar",
             };
             try stdout.print("{s:22}  {s:8}  {d:2}  {d:5}  {d:11.2}  {d:14.2}  {d:12.6}  {d:7}\n", .{
                 name,           status_str,      X.len,

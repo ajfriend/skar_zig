@@ -61,6 +61,7 @@ fn statusString(s: sphar.Status) []const u8 {
         .converged => "converged",
         .infeasible => "infeasible",
         .did_not_converge => "did_not_converge",
+        .coplanar_input => "coplanar_input",
     };
 }
 
@@ -127,7 +128,7 @@ pub fn main() !void {
 
     // Warmup — discard timing.
     for (0..args.warmup) |_| {
-        var info = sphar.solve(allocator, X, args.tol, N_HULL) catch continue;
+        var info = sphar.solve(allocator, X, args.tol, N_HULL, 1e-12) catch continue;
         info.deinit();
     }
 
@@ -138,7 +139,7 @@ pub fn main() !void {
     var last_info: ?sphar.Info = null;
     for (0..n_runs) |r| {
         const t0 = std.time.nanoTimestamp();
-        const info = try sphar.solve(allocator, X, args.tol, N_HULL);
+        const info = try sphar.solve(allocator, X, args.tol, N_HULL, 1e-12);
         const t1 = std.time.nanoTimestamp();
         times[r] = @as(f64, @floatFromInt(t1 - t0)) / 1e9;
         if (last_info) |*li| li.deinit();
