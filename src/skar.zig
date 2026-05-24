@@ -1395,48 +1395,6 @@ pub fn solve(
         return info;
     }
 
-    // 1.5) Coplanarity check. Reject inputs where all points lie in a 2D
-    //      subspace through the origin (i.e., on a single great circle).
-    //      Such inputs drive the optimum to a degenerate cone (one tangent
-    //      eigenvalue → 0) and produce NaN downstream. Projecting to the
-    //      tangent plane at b reduces this to a 2D rank check: the
-    //      projected points are collinear iff the 3D points are coplanar
-    //      with the origin. Scale-invariant "fraction of isotropic" via
-    //      4·det / trace² ∈ [0, 1] on the 2×2 centered scatter C — 1 for
-    //      isotropic (circular), → 0 for collinear. Equivalent to the
-    //      cancellation-safe form of λ_min/λ_max for ill-conditioned C
-    //      (where (T − √(T² − 4D))/2 loses precision). Tight clusters on
-    //      the sphere (e.g. H3 res-15) have full-rank 2D scatter
-    //      regardless of absolute scale, so this correctly distinguishes
-    //      them from genuinely rank-deficient input. Disabled by
-    //      coplanarity_tol < 0.
-    if (coplanarity_tol >= 0) {
-        const Qh = b.orthoBasis();
-        var ps0: f64 = 0;
-        var ps1: f64 = 0;
-        var s00: f64 = 0;
-        var s01: f64 = 0;
-        var s11: f64 = 0;
-        for (Xv) |xi| {
-            const p = Qh.applyT(xi);
-            ps0 += p.m[0];
-            ps1 += p.m[1];
-            s00 += p.m[0] * p.m[0];
-            s01 += p.m[0] * p.m[1];
-            s11 += p.m[1] * p.m[1];
-        }
-        const inv_n = 1.0 / @as(f64, @floatFromInt(Xv.len));
-        const c00 = s00 - ps0 * ps0 * inv_n;
-        const c01 = s01 - ps0 * ps1 * inv_n;
-        const c11 = s11 - ps1 * ps1 * inv_n;
-        const tr = c00 + c11;
-        const det = c00 * c11 - c01 * c01;
-        if (tr <= 0 or 4.0 * det < coplanarity_tol * tr * tr) {
-            info.status = .coplanar_input;
-            return info;
-        }
-    }
-
     // 2) Optional hull preprocessing.
     var Xw_storage: []const Vec3 = Xv;
     var work_to_orig: ?[]const u32 = null;
@@ -1460,6 +1418,50 @@ pub fn solve(
 
     const Xw = Xw_storage;
     const nw = Xw.len;
+
+    // 2.5) Coplanarity check. Reject inputs where the working set lies in a
+    //      2D subspace through the origin (i.e., on a single great circle).
+    //      Such inputs drive the optimum to a degenerate cone (one tangent
+    //      eigenvalue → 0) and produce NaN downstream. Projecting to the
+    //      tangent plane at b reduces this to a 2D rank check: the
+    //      projected points are collinear iff the 3D points are coplanar
+    //      with the origin. Scale-invariant "fraction of isotropic" via
+    //      4·det / trace² ∈ [0, 1] on the 2×2 centered scatter C — 1 for
+    //      isotropic (circular), → 0 for collinear. Equivalent to the
+    //      cancellation-safe form of λ_min/λ_max for ill-conditioned C
+    //      (where (T − √(T² − 4D))/2 loses precision). Tight clusters on
+    //      the sphere (e.g. H3 res-15) have full-rank 2D scatter
+    //      regardless of absolute scale, so this correctly distinguishes
+    //      them from genuinely rank-deficient input. Runs on Xw (the
+    //      hulled subset when hull preprocessing fired) so an input
+    //      whose hull is collinear gets caught even if the full cloud
+    //      jitter looked full-rank. Disabled by coplanarity_tol < 0.
+    if (coplanarity_tol >= 0) {
+        const Qh = b.orthoBasis();
+        var ps0: f64 = 0;
+        var ps1: f64 = 0;
+        var s00: f64 = 0;
+        var s01: f64 = 0;
+        var s11: f64 = 0;
+        for (Xw) |xi| {
+            const p = Qh.applyT(xi);
+            ps0 += p.m[0];
+            ps1 += p.m[1];
+            s00 += p.m[0] * p.m[0];
+            s01 += p.m[0] * p.m[1];
+            s11 += p.m[1] * p.m[1];
+        }
+        const inv_n = 1.0 / @as(f64, @floatFromInt(nw));
+        const c00 = s00 - ps0 * ps0 * inv_n;
+        const c01 = s01 - ps0 * ps1 * inv_n;
+        const c11 = s11 - ps1 * ps1 * inv_n;
+        const tr = c00 + c11;
+        const det = c00 * c11 - c01 * c01;
+        if (tr <= 0 or 4.0 * det < coplanarity_tol * tr * tr) {
+            info.status = .coplanar_input;
+            return info;
+        }
+    }
 
     // 3) Working buffers (all in the arena).
     const P_buf = try scratch_alloc.alloc([2]f64, nw);

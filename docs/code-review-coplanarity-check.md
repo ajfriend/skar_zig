@@ -12,11 +12,16 @@ yet or fragilities that would manifest under future change.
 
 ---
 
-## 1. Coplanarity check runs on full input, but solver iterates on the hull subset
+## 1. Coplanarity check runs on full input, but solver iterates on the hull subset — *RESOLVED*
 
 - **Location:** `src/skar.zig` — the new `if (coplanarity_tol >= 0)` block
   sits between `halfspaceCheck` and the hull preprocessing.
 - **Severity:** correctness gap.
+- **Status:** Resolved by moving the check to step 2.5 (after hull
+  preprocessing), running it on `Xw` rather than `Xv`. For small-n
+  inputs that bypass hull preprocessing, `Xw == Xv` so behavior is
+  unchanged; for large-n inputs with hull enabled, the check now sees
+  what the solver will actually iterate on. Same move addresses #9.
 
 The check measures the 2D scatter of the **full** input `Xv`, but if
 `n_hull` is enabled (default 10) the solver then iterates on the hulled
@@ -223,12 +228,15 @@ detection is broader than the name strictly suggests.
 
 ---
 
-## 9. O(n) coplanarity check runs before hull preprocessing
+## 9. O(n) coplanarity check runs before hull preprocessing — *RESOLVED*
 
 - **Location:** `src/skar.zig` — check sits between `halfspaceCheck` and
   hull reduction.
 - **Severity:** performance regression at large n; invisible in current
   bench.
+- **Status:** Resolved alongside #1 by moving the check to after hull
+  preprocessing. For large-n with hull enabled, the check now runs on
+  the hulled subset (~hull_size instead of n).
 
 For very large inputs (n ≫ n_hull), the check adds an unavoidable full
 O(n) pass even though the solver only operates on the small hull. Bench
