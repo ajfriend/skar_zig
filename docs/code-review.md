@@ -151,13 +151,17 @@ finding #7 below.
 
 ---
 
-## 5. Back-to-back `try allocator.alloc(...)` without `errdefer` on the first
+## 5. Back-to-back `try allocator.alloc(...)` without `errdefer` on the first — *RESOLVED*
 
 - **Location:** `src/skar.zig` — three sites:
   - `buildFarkasCert` (the indices + lambdas pair)
   - the `.coplanar_input` early-return path
   - the final convergence path's cert assembly
 - **Severity:** real leak under OOM only; constrained.
+- **Status:** Resolved by adding `errdefer allocator.free(indices);`
+  between the two allocations at all three sites. The coplanar_input
+  path was refactored from a struct-literal initializer to two
+  statements to accommodate the errdefer.
 
 Each site does `const indices = try allocator.alloc(u32, k); const
 lambdas = try allocator.alloc(f64, k);`. If the second alloc fails

@@ -1399,6 +1399,7 @@ fn buildFarkasCert(allocator: std.mem.Allocator, hs: HalfspaceResult) !Cert {
         k += 1;
     };
     const indices = try allocator.alloc(u32, k);
+    errdefer allocator.free(indices);
     const lambdas = try allocator.alloc(f64, k);
     var j: u32 = 0;
     for (hs.lam, 0..) |l, i| {
@@ -1575,11 +1576,10 @@ pub fn solve(
     if (coplanarity_tol > 0 and isCoplanarInput(Xw, b, coplanarity_tol)) {
         // Allocate empty cert slices on the parent allocator so Info.deinit
         // is uniform across statuses — never frees a static-literal pointer.
-        info.cert = .{
-            .indices = try allocator.alloc(u32, 0),
-            .lambdas = try allocator.alloc(f64, 0),
-            .claimed_gap = 0,
-        };
+        const indices = try allocator.alloc(u32, 0);
+        errdefer allocator.free(indices);
+        const lambdas = try allocator.alloc(f64, 0);
+        info.cert = .{ .indices = indices, .lambdas = lambdas, .claimed_gap = 0 };
         info.status = .coplanar_input;
         return info;
     }
@@ -1677,6 +1677,7 @@ pub fn solve(
 
     // 5) Build final cert (translate work indices back to original X indices).
     const indices = try allocator.alloc(u32, cert_n);
+    errdefer allocator.free(indices);
     const lambdas = try allocator.alloc(f64, cert_n);
     for (0..cert_n) |i| {
         const idx_in_work = cert_active[i];
