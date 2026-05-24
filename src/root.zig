@@ -37,4 +37,6 @@ pub const _internal = struct {
     pub const halfspace = @import("halfspace.zig");
     pub const newton = @import("newton.zig");
     pub const config = @import("config.zig");
+    pub const acceptBUpdate = skar.acceptBUpdate;
+    pub const BStep = skar.BStep;
 };

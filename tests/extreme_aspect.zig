@@ -409,3 +409,32 @@ test "OOM partway through buildFarkasCert hits the indices errdefer" {
 }
 
 
+
+test "acceptBUpdate fallback: all backtracks fail when a point sits below FEAS_MARGIN" {
+    // halfspaceCheck only guarantees `b·xᵢ > 0` strictly — not
+    // `≥ FEAS_MARGIN`. So a single point at `b·x = ε < FEAS_MARGIN`
+    // can survive into the outer loop. From there, every backtracked
+    // b-trial = normalize(b + α·dQc) still has `b_trial·x ≈ ε` for
+    // small enough α, so all 30 backtracks fail their feasibility
+    // check and acceptBUpdate falls through to the "keep (b, Q)
+    // unchanged + re-project" tail. This test crafts that exact
+    // setup directly to hit lines 174-176 of src/skar.zig.
+    const acceptBUpdate = sphar._internal.acceptBUpdate;
+    const b = sphar.Vec3{ .m = .{ 1, 0, 0 } };
+    const Q = b.orthoBasis();
+    // x dotted with b equals 1e-9 — below FEAS_MARGIN = 1e-8.
+    const x_eps: f64 = 1e-9;
+    const x = sphar.Vec3{ .m = .{ x_eps, @sqrt(1.0 - x_eps * x_eps), 0 } };
+    const Xw = [_]sphar.Vec3{x};
+    // u sends Q·u in the -y direction with b=x̂, Q=(ŷ, ẑ); since x has
+    // y ≈ 1, this pushes b_trial · x further below FEAS_MARGIN — every
+    // backtrack stays infeasible.
+    const u = sphar.Vec2{ .m = .{ -1, 0 } };
+    var P_buf: [1][2]f64 = undefined;
+    var Ps: [1][2]f64 = undefined;
+    const step = acceptBUpdate(&Xw, b, Q, u, 1.0, &P_buf, &Ps);
+    // Fallback returns the input (b, Q) unchanged.
+    try std.testing.expectEqual(b.m[0], step.b.m[0]);
+    try std.testing.expectEqual(b.m[1], step.b.m[1]);
+    try std.testing.expectEqual(b.m[2], step.b.m[2]);
+}

@@ -148,9 +148,9 @@ inline fn quasiNewtonAxisDirection(outer: u32, M: Mat2, center: Vec2) AxisStep {
 /// On full rejection, the last rejected trial partially overwrote
 /// P_buf; restore it (and Ps/s_scale) against the input (b, Q) so the
 /// caller's loop invariant still holds.
-const BStep = struct { b: Vec3, Q: Mat3x2, s_scale: f64 };
+pub const BStep = struct { b: Vec3, Q: Mat3x2, s_scale: f64 };
 
-fn acceptBUpdate(
+pub fn acceptBUpdate(
     Xw: []const Vec3,
     b: Vec3,
     Q: Mat3x2,
