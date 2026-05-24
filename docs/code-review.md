@@ -183,11 +183,17 @@ two allocations at all three sites. Mechanical change.
 
 ---
 
-## 6. `Info.b()` and `Info.A()` silently return zero on non-converged statuses
+## 6. `Info.b()` and `Info.A()` silently return zero on non-converged statuses — *RESOLVED (doc only)*
 
 - **Location:** `src/skar.zig` — `Info.b()` and `Info.A()` methods;
   their doc comments do not document a non-converged contract.
 - **Severity:** caller gets garbage with no warning.
+- **Status:** Resolved with a doc-only tweak — both methods now spell
+  out that they're only meaningful on `.converged` and silently
+  return zeros otherwise. Behavior unchanged. A more invasive fix
+  (populate Q with the halfspace axis on `.infeasible` /
+  `.coplanar_input`) is left for later if a caller actually wants
+  best-effort axis output from those paths.
 
 `Info.b()` says "Cone axis: first column of Q." On `.infeasible`,
 `.coplanar_input`, and (depending on path) `.did_not_converge`,
@@ -310,12 +316,18 @@ finite, or treat NaN as user error (panic / return an error). Cheap.
 
 ---
 
-## 10. `Cert.claimed_gap` undocumented for `did_not_converge` and `coplanar_input`
+## 10. `Cert.claimed_gap` undocumented for `did_not_converge` and `coplanar_input` — *RESOLVED (doc only)*
 
 - **Location:** `src/skar.zig` — `Cert` struct doc-comment for
   `claimed_gap` mentions only `.converged` and `.infeasible`.
 - **Severity:** caller misuse risk under a uniform "quality metric"
   pattern.
+- **Status:** Resolved with a doc-only tweak — `claimed_gap`'s
+  field comment now spells out the value for all four statuses
+  (`.converged`: gap; `.infeasible`: Farkas residual;
+  `.did_not_converge`: last computed gap, possibly meaningless
+  without context; `.coplanar_input`: 0). Callers using it as a
+  uniform quality metric will see the warning to gate on status.
 
 `claimed_gap` on `.coplanar_input` is silently 0 (initialized in the
 Info literal, never overwritten). On `.did_not_converge` it's the

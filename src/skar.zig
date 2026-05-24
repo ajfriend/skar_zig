@@ -1318,8 +1318,14 @@ pub const InputError = error{
 pub const Cert = struct {
     indices: []u32,
     lambdas: []f64,
-    /// On CONVERGED: the duality gap |primal - dual|.
-    /// On INFEASIBLE: the Farkas residual ‖∑ λᵢ xᵢ‖.
+    /// On `.converged`: the duality gap |primal − dual| (≤ `gap_tol`).
+    /// On `.infeasible`: the Farkas residual ‖∑ λᵢ xᵢ‖.
+    /// On `.did_not_converge`: the last computed gap from the final
+    /// outer iteration. May be near zero (almost converged) or large
+    /// (the solver gave up far from optimal); inspect alongside
+    /// `status` and `outer_iters` rather than as a uniform quality
+    /// metric.
+    /// On `.coplanar_input`: 0 (no certificate was constructed).
     claimed_gap: f64,
 };
 
@@ -1356,14 +1362,19 @@ pub const Info = struct {
         return self.sigma[2] / self.sigma[1];
     }
 
-    /// Cone axis: first column of Q.
+    /// Cone axis: first column of Q. Only meaningful on `.converged` —
+    /// on other statuses Q stays at its zero-initialized value and
+    /// this silently returns `Vec3.zero`. Callers should gate on
+    /// `status == .converged` before reading.
     pub fn b(self: Info) Vec3 {
         return self.Q.col(0);
     }
 
     /// Materialize A from its eigendecomposition: Σᵢ sigma[i] · Q[:,i] · Q[:,i]ᵀ.
     /// Cheap (three symmetric rank-1 updates). For a loop applying A to many
-    /// vectors, call once and reuse.
+    /// vectors, call once and reuse. Only meaningful on `.converged` — on
+    /// other statuses sigma and Q stay at zero and this silently returns
+    /// the zero matrix.
     pub fn A(self: Info) Mat3 {
         var m = Mat3.zero;
         m.addSymRank1(self.sigma[0], self.Q.col(0));
