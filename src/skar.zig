@@ -535,6 +535,35 @@ const GapScratch = struct {
     }
 };
 
+/// Per-call working buffers backing the outer loop. All allocations
+/// live on the scratch arena passed to `init`, so there's no `deinit` —
+/// `solve` frees the arena once at the end. The fields are mutable
+/// slices; methods that take them (`mveeFw`, `newtonPolish`,
+/// `dualityGapConstructed`, etc.) read or write directly.
+const WorkBuffers = struct {
+    P_buf: [][2]f64,
+    Ps: [][2]f64,
+    Ql: []Vec3,
+    w: []f64,
+    cert_active: []usize,
+    cert_lambdas: []f64,
+    newton_scratch: NewtonScratch,
+    gap_scratch: GapScratch,
+
+    fn init(scratch: std.mem.Allocator, nw: usize) !WorkBuffers {
+        return .{
+            .P_buf = try scratch.alloc([2]f64, nw),
+            .Ps = try scratch.alloc([2]f64, nw),
+            .Ql = try scratch.alloc(Vec3, nw),
+            .w = try scratch.alloc(f64, nw),
+            .cert_active = try scratch.alloc(usize, nw),
+            .cert_lambdas = try scratch.alloc(f64, nw),
+            .newton_scratch = try NewtonScratch.init(scratch, nw),
+            .gap_scratch = try GapScratch.init(scratch, nw),
+        };
+    }
+};
+
 /// LU factorization with partial pivoting. Storage (`data`, `piv`) is
 /// borrowed from the caller — `factorize` mutates `data` in place to hold
 /// the packed L\U factors. The returned handle just binds the dimension
@@ -1249,23 +1278,14 @@ pub fn solve(
         return info;
     }
 
-    // 3) Working buffers (all in the arena).
-    const P_buf = try scratch_alloc.alloc([2]f64, nw);
-    const Ps = try scratch_alloc.alloc([2]f64, nw);
-    const Ql = try scratch_alloc.alloc(Vec3, nw);
-    const w = try scratch_alloc.alloc(f64, nw);
-
-    var newton_scratch = try NewtonScratch.init(scratch_alloc, nw);
-    var gap_scratch = try GapScratch.init(scratch_alloc, nw);
-    // No deinit: arena frees everything at end.
-
-    const cert_active = try scratch_alloc.alloc(usize, nw);
-    const cert_lambdas = try scratch_alloc.alloc(f64, nw);
+    // 3) Working buffers — all backed by the arena, freed once at the
+    //    end of `solve`.
+    var wb = try WorkBuffers.init(scratch_alloc, nw);
     var cert_n: usize = 0;
     var final_gap: f64 = 1e30;
 
     const inv_nw = 1.0 / @as(f64, @floatFromInt(nw));
-    for (w) |*wi| wi.* = inv_nw;
+    for (wb.w) |*wi| wi.* = inv_nw;
 
     var damp = DampState{};
     var outer_count: u32 = 0;
@@ -1284,8 +1304,8 @@ pub fn solve(
     // Seed P_buf/Ps/s_scale so the loop invariant holds on entry to the
     // first cycle. `halfspaceCheck` guarantees b·xᵢ > 0 strictly (not
     // necessarily ≥ algo.FEAS_MARGIN), so bypass the feasibility check here.
-    _ = projectGnomonic(Xw, b, Q, P_buf, -std.math.inf(f64));
-    var s_scale: f64 = rescaleP(P_buf, Ps);
+    _ = projectGnomonic(Xw, b, Q, wb.P_buf, -std.math.inf(f64));
+    var s_scale: f64 = rescaleP(wb.P_buf, wb.Ps);
 
     // 4) Hybrid outer loop. Each outer iteration runs algo.FW_PER_NEWTON cycles
     //    of (FW + b-update); only the last cycle also runs Newton polish +
@@ -1303,19 +1323,19 @@ pub fn solve(
         while (cycle < algo.FW_PER_NEWTON) : (cycle += 1) {
             const is_full = (cycle == algo.FW_PER_NEWTON - 1);
 
-            mveeFw(Ps, 1, 0.0, Ql, w, true);
+            mveeFw(wb.Ps, 1, 0.0, wb.Ql, wb.w, true);
 
             if (is_full) {
-                if (!newtonPolish(Ql, w, algo.ACTIVE_THRESH, 20, tol.NEWTON_INNER, &newton_scratch)) {
+                if (!newtonPolish(wb.Ql, wb.w, algo.ACTIVE_THRESH, 20, tol.NEWTON_INNER, &wb.newton_scratch)) {
                     newton_polish_failures += 1;
                 }
             }
 
-            const m = computeMoments(Ps, w, s_scale);
+            const m = computeMoments(wb.Ps, wb.w, s_scale);
 
             if (is_full) {
-                const A_perp = try recoverAPerp(P_buf, m.M);
-                last_gap = try dualityGapConstructed(w, b, Xw, A_perp, Q, &gap_scratch, cert_active, cert_lambdas);
+                const A_perp = try recoverAPerp(wb.P_buf, m.M);
+                last_gap = try dualityGapConstructed(wb.w, b, Xw, A_perp, Q, &wb.gap_scratch, wb.cert_active, wb.cert_lambdas);
                 final_gap = last_gap.gap;
                 cert_n = last_gap.cert_n;
                 // Convergence: |gap| ≤ tol. FP noise can push the gap
@@ -1333,7 +1353,7 @@ pub fn solve(
 
             const axis = quasiNewtonAxisDirection(outer, m.M, m.center);
             damp.tick(axis.c_norm);
-            const step = acceptBUpdate(Xw, b, Q, axis.u, damp.alpha, P_buf, Ps);
+            const step = acceptBUpdate(Xw, b, Q, axis.u, damp.alpha, wb.P_buf, wb.Ps);
             b = step.b;
             Q = step.Q;
             s_scale = step.s_scale;
@@ -1345,9 +1365,9 @@ pub fn solve(
     errdefer allocator.free(indices);
     const lambdas = try allocator.alloc(f64, cert_n);
     for (0..cert_n) |i| {
-        const idx_in_work = cert_active[i];
+        const idx_in_work = wb.cert_active[i];
         indices[i] = if (work_to_orig) |wto| wto[idx_in_work] else @intCast(idx_in_work);
-        lambdas[i] = cert_lambdas[i];
+        lambdas[i] = wb.cert_lambdas[i];
     }
 
     info.outer_iters = outer_count;
