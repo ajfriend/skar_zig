@@ -1279,7 +1279,11 @@ pub const Info = struct {
     }
 
     /// Aspect ratio of the cone cross-section = sigma[2] / sigma[1] ≥ 1.
-    /// NaN on INFEASIBLE (sigma initialized to zeros).
+    /// NaN (via 0/0) on any non-converged status — sigma stays at its
+    /// zero-initialized value on `infeasible` and `coplanar_input`, and
+    /// `did_not_converge` may have partial sigma but no guarantee of
+    /// meaningful aspect ratio. Callers that care should gate on
+    /// `status == .converged` before reading.
     pub fn aspectRatio(self: Info) f64 {
         return self.sigma[2] / self.sigma[1];
     }
@@ -1431,9 +1435,12 @@ fn isCoplanarInput(points: []const Vec3, b: Vec3, threshold: f64) bool {
 /// scatter C is checked against `4·det(C) < tol · trace(C)²` —
 /// "fraction-of-isotropic" ∈ [0, 1] where 1 is a circular scatter and 0 is
 /// a perfect line. tol = 1e-12 flags inputs whose scatter ellipse is roughly
-/// >10⁶× longer than wide; tighter catches only essentially-exact
-/// coplanarity, looser also rejects near-coplanar inputs the solver would
-/// otherwise produce NaN on. Pass < 0 to disable the check entirely.
+/// >10⁶× longer than wide; smaller positive values catch only
+/// essentially-exact coplanarity, larger ones also reject near-coplanar
+/// inputs the solver would otherwise produce NaN on. Pass ≤ 0 to disable
+/// the check entirely (0 is treated as disabled because `4·det < 0` is
+/// unreachable for the PSD scatter — it would be a silent partial-disable
+/// rather than the maximum-strictness it superficially looks like).
 pub fn solve(
     allocator: std.mem.Allocator,
     X: []const [3]f64,
@@ -1444,7 +1451,7 @@ pub fn solve(
     var info = Info{
         .status = .did_not_converge,
         .Q = Mat3.zero,
-        .sigma = .{ 0, 0, 0 },  // aspectRatio() returns NaN via 0/0 on INFEASIBLE
+        .sigma = .{ 0, 0, 0 },  // aspectRatio() returns NaN via 0/0 on any non-converged status
         .outer_iters = 0,
         .newton_polish_failures = 0,
         .cert = .{
@@ -1489,7 +1496,14 @@ pub fn solve(
     // 2.5) Coplanarity check on the hulled subset — an input whose hull is
     //      collinear in the tangent plane drives the SDP to a degenerate
     //      cone (one tangent eigenvalue → 0) and produces NaN downstream.
-    if (coplanarity_tol >= 0 and isCoplanarInput(Xw, b, coplanarity_tol)) {
+    if (coplanarity_tol > 0 and isCoplanarInput(Xw, b, coplanarity_tol)) {
+        // Allocate empty cert slices on the parent allocator so Info.deinit
+        // is uniform across statuses — never frees a static-literal pointer.
+        info.cert = .{
+            .indices = try allocator.alloc(u32, 0),
+            .lambdas = try allocator.alloc(f64, 0),
+            .claimed_gap = 0,
+        };
         info.status = .coplanar_input;
         return info;
     }

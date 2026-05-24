@@ -64,12 +64,17 @@ non-converged status. Document the contract.
 
 ---
 
-## 3. `aspectRatio()` returns NaN on `coplanar_input`, but docs and callers don't anticipate it
+## 3. `aspectRatio()` returns NaN on `coplanar_input`, but docs and callers don't anticipate it — *RESOLVED*
 
 - **Location:** `src/skar.zig` (Info struct doc), `bench/main.zig:80`
   (unconditional print of `info.aspectRatio()`).
 - **Severity:** silent NaN propagation; cosmetic in bench but real in
   callers.
+- **Status:** Resolved by updating the `aspectRatio()` field doc to
+  list all NaN-producing statuses (not just `.infeasible`) and to
+  recommend callers gate on `.converged` before reading. Bench's
+  unconditional print still emits "nan" for any non-converged row —
+  consistent with how `.infeasible` rows already printed.
 
 `aspectRatio()` computes `sigma[2] / sigma[1]` and the field-level doc
 comment notes it returns NaN via 0/0 specifically on `INFEASIBLE`. With
@@ -117,13 +122,17 @@ overkill for n ≥ ~50.
 
 ---
 
-## 5. Empty-literal slice passed to `allocator.free` on the early-return path
+## 5. Empty-literal slice passed to `allocator.free` on the early-return path — *RESOLVED*
 
 - **Location:** `src/skar.zig` — the initial `Info` literal sets
   `cert.indices = &[_]u32{}` and `cert.lambdas = &[_]f64{}`. These are
   returned as-is on `Status.coplanar_input`.
 - **Severity:** fragile; works on standard allocators, breaks on strict
   custom ones.
+- **Status:** Resolved by allocating zero-length slices on the
+  `.coplanar_input` early-return (mirrors the `.infeasible` branch).
+  `Info.deinit` now always frees allocator-owned pointers across all
+  statuses.
 
 Other status paths (`infeasible`, `converged`, `did_not_converge`) allocate
 `cert.indices` / `cert.lambdas` via the allocator even when length is
@@ -144,11 +153,15 @@ slices through `allocator` even on `coplanar_input`. Or document that
 
 ---
 
-## 6. `coplanarity_tol = 0` is a partial-disable, not "maximally strict"
+## 6. `coplanarity_tol = 0` is a partial-disable, not "maximally strict" — *RESOLVED*
 
 - **Location:** `src/skar.zig` — gate condition
   `if (coplanarity_tol >= 0)` plus trigger `4·det < tol · tr²`.
 - **Severity:** docs/behavior mismatch around the boundary value.
+- **Status:** Resolved by changing the gate from `>= 0` to `> 0` so
+  exactly-zero is treated as disabled (matching the silent behavior it
+  had before). The parameter doc now spells out *why* 0 is disabled
+  rather than being a usable strictness setting.
 
 The gate accepts `0` as "enabled," but the trigger inequality becomes
 `4·det < 0`, which is unreachable for a PSD 2×2 matrix (centered
@@ -256,11 +269,12 @@ of a coplanar input is coplanar.
 
 ---
 
-## 10. Comment math error in test rationale
+## 10. Comment math error in test rationale — *RESOLVED*
 
 - **Location:** `tests/extreme_aspect.zig` — the third arm of
   `coplanarity check cutoff is near the parameter's value`.
 - **Severity:** minor; future-maintenance footgun.
+- **Status:** Resolved — "3700×" replaced with "2.7e6×".
 
 Comment says "ratio (2.7e-14) is now ~3700× above the tighter threshold
 (1e-20)" but the actual ratio is `2.7e-14 / 1e-20 = 2.7e6` (millions,

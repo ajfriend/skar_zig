@@ -239,7 +239,7 @@ test "coplanarity check cutoff is near the parameter's value" {
     }
 
     // Same near-degenerate input, but tol tightened by 1e8: ratio
-    // (2.7e-14) is now ~3700× above the tighter threshold (1e-20),
+    // (2.7e-14) is now ~2.7e6× above the tighter threshold (1e-20),
     // so must not flag. Confirms the parameter actually drives the
     // cutoff rather than the threshold being baked in.
     {
