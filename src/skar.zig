@@ -1110,6 +1110,28 @@ fn buildFarkasCert(allocator: std.mem.Allocator, hs: HalfspaceResult) !Cert {
     return .{ .indices = indices, .lambdas = lambdas, .claimed_gap = hs.residual };
 }
 
+/// Build the primal certificate for a converged (or DNC-best-effort) solve.
+/// Translates work-set indices back to the caller's original `X[]` indexing
+/// via `work_to_orig` (`null` when no hull reduction happened).
+fn buildPrimalCert(
+    allocator: std.mem.Allocator,
+    cert_active: []const usize,
+    cert_lambdas: []const f64,
+    cert_n: usize,
+    work_to_orig: ?[]const u32,
+    claimed_gap: f64,
+) !Cert {
+    const indices = try allocator.alloc(u32, cert_n);
+    errdefer allocator.free(indices);
+    const lambdas = try allocator.alloc(f64, cert_n);
+    for (0..cert_n) |i| {
+        const idx_in_work = cert_active[i];
+        indices[i] = if (work_to_orig) |wto| wto[idx_in_work] else @intCast(idx_in_work);
+        lambdas[i] = cert_lambdas[i];
+    }
+    return .{ .indices = indices, .lambdas = lambdas, .claimed_gap = claimed_gap };
+}
+
 const HullResult = struct {
     /// The working point set the solver should iterate on. Either the hull
     /// subset (when reduction fired) or the original input (when disabled,
@@ -1361,18 +1383,9 @@ pub fn solve(
     }
 
     // 5) Build final cert (translate work indices back to original X indices).
-    const indices = try allocator.alloc(u32, cert_n);
-    errdefer allocator.free(indices);
-    const lambdas = try allocator.alloc(f64, cert_n);
-    for (0..cert_n) |i| {
-        const idx_in_work = wb.cert_active[i];
-        indices[i] = if (work_to_orig) |wto| wto[idx_in_work] else @intCast(idx_in_work);
-        lambdas[i] = wb.cert_lambdas[i];
-    }
-
     info.outer_iters = outer_count;
     info.newton_polish_failures = newton_polish_failures;
-    info.cert = .{ .indices = indices, .lambdas = lambdas, .claimed_gap = final_gap };
+    info.cert = try buildPrimalCert(allocator, wb.cert_active, wb.cert_lambdas, cert_n, work_to_orig, final_gap);
 
     // Bundle the full eigendecomposition: Q's columns are (b, v1, v2) with
     // eigenvalues (SIGMA_0, sigma[0], sigma[1]). Flip v2 if needed so (b, v1, v2) is
