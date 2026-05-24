@@ -41,11 +41,19 @@ duplicate it (cheap on the hulled subset).
 
 ---
 
-## 2. `checkFeasibility(info, X)` returns 0 on `coplanar_input`
+## 2. `checkFeasibility(info, X)` returns 0 on `coplanar_input` — *RESOLVED*
 
 - **Location:** `src/skar.zig` — `checkFeasibility` reads `info.A()` and
   `info.b()`, both of which are zero on the new early-return path.
 - **Severity:** silent downstream pitfall.
+- **Status:** Resolved by adding a guard at the top of
+  `checkFeasibility`: any non-converged status returns `+inf`. The
+  `inf` sentinel composes cleanly with the typical
+  `checkFeasibility(...) <= tol` gate — it always rejects, so a caller
+  using the function as a "is this Info usable" check no longer sees
+  apparent feasibility on a rejected input. Function doc updated to
+  document the precondition explicitly. New test assertion exercises
+  the guard on a `.coplanar_input` result.
 
 On `Status.coplanar_input`, `Info.Q` is the zero matrix and
 `Info.sigma = .{0, 0, 0}`. So `info.A() = 0`, `info.b() = (0,0,0)`. The

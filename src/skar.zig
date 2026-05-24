@@ -1315,7 +1315,17 @@ fn buildA(b: Vec3, v1: Vec3, v2: Vec3, sigma1: f64, sigma2: f64) Mat3 {
     return m;
 }
 
+/// Max primal violation `‖A·xᵢ‖ − b·xᵢ` over all input points. Negative
+/// or zero means every point sits inside the cone defined by `info`;
+/// positive means the certificate doesn't cover at least one point.
+///
+/// Returns `+inf` on any non-converged status — `info.A()` and `info.b()`
+/// are not meaningful when the solver didn't produce a certificate, so
+/// "violation = 0 for every point" would be misleading apparent
+/// feasibility. The `+inf` sentinel composes correctly with the typical
+/// `checkFeasibility(info, X) <= tol` gate: it always rejects.
 pub fn checkFeasibility(info: Info, X: []const [3]f64) f64 {
+    if (info.status != .converged) return std.math.inf(f64);
     const A = info.A();
     const bv = info.b();
     var max_viol: f64 = -1e30;

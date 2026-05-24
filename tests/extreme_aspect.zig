@@ -268,6 +268,10 @@ test "coplanarity check flags great-circle inputs" {
     var info = try sphar.solve(allocator, canon_pts[0..], tol, max_outer, coplanarity_tol);
     defer info.deinit();
     try std.testing.expectEqual(sphar.Status.coplanar_input, info.status);
+    // checkFeasibility on a non-converged status must signal violation
+    // (else a caller using it as a "is this Info usable" gate would
+    // see apparent feasibility on a rejected input).
+    try std.testing.expect(std.math.isInf(sphar.checkFeasibility(info, canon_pts[0..])));
 
     // Rotational invariance: should still be flagged after rotation.
     var rng_state: u64 = 0xCA7;
