@@ -55,9 +55,9 @@ const PRECOND_COND_MIN: f64 = 1.2;
 /// becomes a more meaningful proxy Hessian for the b-update.
 const AXIS_WARMUP: u32 = 2;
 
-/// Structural axial eigenvalue: A·b = LAM_B·b, where b is the cone axis.
-/// Derived in `recoverL2` via the budget/g_max rescaling: λ_b = √(1 − 2/3).
-const LAM_B: f64 = 1.0 / @sqrt(3.0);
+/// Structural axial eigenvalue: A·b = SIGMA_0·b, where b is the cone axis.
+/// Derived in `recoverAPerp` via the budget/g_max rescaling: λ_b = √(1 − 2/3).
+const SIGMA_0: f64 = 1.0 / @sqrt(3.0);
 
 /// Numerical tolerances — the "how small is small" guards. Algorithm
 /// parameters (MAX_OUTER, DAMP_*, ACTIVE_THRESH, FEAS_MARGIN, AXIS_WARMUP,
@@ -83,7 +83,7 @@ const tol = struct {
     const UNDERFLOW: f64 = 1e-300;
     /// eig2: |b|/scale relative threshold for closed-form vs. axis-aligned fallback.
     const EIG2_REL: f64 = 1e-8;
-    /// dualityGapConstructed: relative PSD slack on Cs eigenvalues (broken-cert cutoff).
+    /// dualityGapConstructed: relative PSD slack on Z eigenvalues (broken-cert cutoff).
     const CS_PSD_REL: f64 = 1e-3;
 };
 
@@ -869,11 +869,11 @@ fn mveeFw(
 // Solution recovery: 2D shape M → 3D A
 // ----------------------------------------------------------------
 
-/// Recovers the 2×2 tangent-plane shape L2 from the weights' moment matrix M.
-/// L2 is Minv_half scaled by √(2/(3·g_max)), where g_max = max_i pᵢᵀ·M⁻¹·pᵢ
-/// enforces the budget max_i ‖L2·pᵢ‖² = 2/3 that pins the axial eigenvalue
-/// of A to LAM_B.
-fn recoverL2(P: []const [2]f64, M: Mat2) Mat2 {
+/// Recovers the 2×2 tangent-plane shape A_perp from the weights' moment matrix M.
+/// A_perp is Minv_half scaled by √(2/(3·g_max)), where g_max = max_i pᵢᵀ·M⁻¹·pᵢ
+/// enforces the budget max_i ‖A_perp·pᵢ‖² = 2/3 that pins the axial eigenvalue
+/// of A to SIGMA_0.
+fn recoverAPerp(P: []const [2]f64, M: Mat2) Mat2 {
     const Minv = M.inverse();
 
     // Max of pᵀ M⁻¹ p over points (used for scaling).
@@ -936,14 +936,14 @@ const NewtonScratch = struct {
 /// Scratch for `dualityGapConstructed` (constructed dual certificate + gap).
 const GapScratch = struct {
     active_idx: []usize, // [nmax]  points with w > thresh
-    lam_raw: []f64, // [nmax]  dual lambdas: 3 w_i / (b·x_i)
+    lam: []f64, // [nmax]  dual lambdas: 3 w_i / (b·x_i)
     xa: []Vec3, // [nmax]  active x_i (from X_work)
     za: []Vec3, // [nmax]  normalized A x_i / ‖A x_i‖
 
     fn init(allocator: std.mem.Allocator, nmax: usize) !GapScratch {
         return .{
             .active_idx = try allocator.alloc(usize, nmax),
-            .lam_raw = try allocator.alloc(f64, nmax),
+            .lam = try allocator.alloc(f64, nmax),
             .xa = try allocator.alloc(Vec3, nmax),
             .za = try allocator.alloc(Vec3, nmax),
         };
@@ -1123,36 +1123,36 @@ const GapResult = struct {
     gap: f64,
     cert_n: usize,
     /// A's tangent-plane eigenvectors (lifted to 3D) and eigenvalues. Valid
-    /// only when gap < 1e30; `solve` reuses these to fill `info.Q`/`info.mu`,
+    /// only when gap < 1e30; `solve` reuses these to fill `info.Q`/`info.sigma`,
     /// skipping a redundant eig2 + lift at the end of the outer loop.
     v1: Vec3,
     v2: Vec3,
-    mu: [2]f64,
+    sigma: [2]f64,
 };
 
-/// Structural dual gap on (b, L2, Q_ortho). A's eigendecomposition falls out
-/// of eig(L2) + lifting through Q_ortho, so we build L = V·√Λ directly — no
+/// Structural dual gap on (b, A_perp, Q_ortho). A's eigendecomposition falls out
+/// of eig(A_perp) + lifting through Q_ortho, so we build L = V·√Λ directly — no
 /// Cholesky with fallback.
 fn dualityGapConstructed(
     w: []const f64,
     b: Vec3,
     X_work: []const Vec3,
-    L2: Mat2,
+    A_perp: Mat2,
     Q_ortho: Mat3x2,
     s: *GapScratch,
     cert_active_out: []usize,
     cert_lambdas_out: []f64,
 ) GapResult {
-    // A's eigendecomposition: V = [b | v₁ | v₂], Λ = diag(LAM_B, μ₁, μ₂).
-    // Always valid (depends only on L2 and Q_ortho); returned in GapResult
+    // A's eigendecomposition: V = [b | v₁ | v₂], Λ = diag(SIGMA_0, σ₁, σ₂).
+    // Always valid (depends only on A_perp and Q_ortho); returned in GapResult
     // so `solve`'s finalization reuses it without re-decomposing.
-    const eL2 = eig2(L2.m);
-    const mu: [2]f64 = eL2.vals;
-    const v1 = Vec3.lincomb(eL2.vecs.m[0], Q_ortho.e1, eL2.vecs.m[1], Q_ortho.e2);
-    const v2 = Vec3.lincomb(eL2.vecs.m[2], Q_ortho.e1, eL2.vecs.m[3], Q_ortho.e2);
+    const eAPerp = eig2(A_perp.m);
+    const sigma: [2]f64 = eAPerp.vals;
+    const v1 = Vec3.lincomb(eAPerp.vecs.m[0], Q_ortho.e1, eAPerp.vecs.m[1], Q_ortho.e2);
+    const v2 = Vec3.lincomb(eAPerp.vecs.m[2], Q_ortho.e1, eAPerp.vecs.m[3], Q_ortho.e2);
 
     const active_idx = s.active_idx;
-    const lam_raw = s.lam_raw;
+    const lam = s.lam;
     const xa = s.xa;
     const za = s.za;
     var k: usize = 0;
@@ -1162,61 +1162,61 @@ fn dualityGapConstructed(
             k += 1;
         }
     }
-    if (k == 0) return .{ .gap = 1e30, .cert_n = 0, .v1 = v1, .v2 = v2, .mu = mu };
+    if (k == 0) return .{ .gap = 1e30, .cert_n = 0, .v1 = v1, .v2 = v2, .sigma = sigma };
 
     // Materialize A once; per-point matvec in the zᵢ loop is cheaper than a
     // structural A·x decomposition once there are ≥ 2 points.
-    const A = buildA(b, v1, v2, mu[0], mu[1]);
+    const A = buildA(b, v1, v2, sigma[0], sigma[1]);
 
     for (0..k) |i| {
         const idx = active_idx[i];
         xa[i] = X_work[idx];
-        lam_raw[i] = 3.0 * w[idx] / b.dot(xa[i]);
+        lam[i] = 3.0 * w[idx] / b.dot(xa[i]);
         za[i] = A.apply(xa[i]).normalize();
     }
 
-    // Cs_raw = Σᵢ λᵢ · (xᵢ zᵢᵀ + zᵢ xᵢᵀ) / 2
-    var Cs_raw = Mat3.zero;
+    // Z = Σᵢ λᵢ · (xᵢ zᵢᵀ + zᵢ xᵢᵀ) / 2
+    var Z = Mat3.zero;
     for (0..k) |i| {
-        Cs_raw.addSymRank2(lam_raw[i], xa[i], za[i]);
+        Z.addSymRank2(lam[i], xa[i], za[i]);
     }
 
     // L = V·√Λ so L·Lᵀ = A. Non-triangular, but we only use it in the
-    // symmetric similarity Lᵀ·Cs_raw·L — any square root of A works there.
-    const L0 = b.scale(@sqrt(LAM_B));
-    const L1 = v1.scale(@sqrt(mu[0]));
-    const L2c = v2.scale(@sqrt(mu[1]));
-    const L_mat = Mat3{ .m = .{
-        L0.m[0], L1.m[0], L2c.m[0],
-        L0.m[1], L1.m[1], L2c.m[1],
-        L0.m[2], L1.m[2], L2c.m[2],
+    // symmetric similarity Lᵀ·Z·L — any square root of A works there.
+    const L0 = b.scale(@sqrt(SIGMA_0));
+    const L1 = v1.scale(@sqrt(sigma[0]));
+    const L2 = v2.scale(@sqrt(sigma[1]));
+    const L = Mat3{ .m = .{
+        L0.m[0], L1.m[0], L2.m[0],
+        L0.m[1], L1.m[1], L2.m[1],
+        L0.m[2], L1.m[2], L2.m[2],
     } };
 
-    // M_sim = Lᵀ · Cs_raw · L. eig(M_sim) = eig(A·Cs_raw); eigenvalues
+    // M = Lᵀ · Z · L. eig(M) = eig(A·Z); eigenvalues
     // cluster near 1 at convergence, so closed-form eig on it is stable.
-    const M_sim = L_mat.transpose().mul(Cs_raw).mul(L_mat).symmetrize();
-    const m_eigs = M_sim.symEigvals();
+    const M = L.transpose().mul(Z).mul(L).symmetrize();
+    const m_eigs = M.symEigvals();
 
-    // Indefinite-dual guard: Cs must be PSD for log det to be defined.
+    // Indefinite-dual guard: Z must be PSD for log det to be defined.
     const neg_tol = tol.CS_PSD_REL * @max(m_eigs[2], 1.0);
-    if (m_eigs[0] < -neg_tol) return .{ .gap = 1e30, .cert_n = 0, .v1 = v1, .v2 = v2, .mu = mu };
+    if (m_eigs[0] < -neg_tol) return .{ .gap = 1e30, .cert_n = 0, .v1 = v1, .v2 = v2, .sigma = sigma };
 
     var w_sum = Vec3.zero;
     for (0..k) |i| {
-        w_sum = Vec3.lincomb(1.0, w_sum, lam_raw[i], xa[i]);
+        w_sum = Vec3.lincomb(1.0, w_sum, lam[i], xa[i]);
     }
 
     for (0..k) |i| {
         cert_active_out[i] = active_idx[i];
-        cert_lambdas_out[i] = lam_raw[i];
+        cert_lambdas_out[i] = lam[i];
     }
 
-    // gap = (−log det Cs − 3 + ‖w‖) − log det A, and via the similarity
-    //   log det Cs = log det M_sim − log det A,
-    // so the two log det A terms cancel:  gap = ‖w‖ − 3 − log det M_sim.
-    // Routing through M_sim (eigenvalues near 1 at convergence) avoids the
-    // ~1e-3 error that sum-of-logs on Cs's own ill-conditioned eigenvalues
-    // would suffer (hex-degenerate cases, κ(Cs) ~ 1e7).
+    // gap = (−log det Z − 3 + ‖w‖) − log det A, and via the similarity
+    //   log det Z = log det M − log det A,
+    // so the two log det A terms cancel:  gap = ‖w‖ − 3 − log det M.
+    // Routing through M (eigenvalues near 1 at convergence) avoids the
+    // ~1e-3 error that sum-of-logs on Z's own ill-conditioned eigenvalues
+    // would suffer (hex-degenerate cases, κ(Z) ~ 1e7).
     var log_det_M: f64 = 0;
     for (m_eigs) |e| log_det_M += @log(@max(e, tol.UNDERFLOW));
     const gap = w_sum.norm() - 3.0 - log_det_M;
@@ -1225,7 +1225,7 @@ fn dualityGapConstructed(
         .cert_n = k,
         .v1 = v1,
         .v2 = v2,
-        .mu = mu,
+        .sigma = sigma,
     };
 }
 
@@ -1258,11 +1258,11 @@ pub const Info = struct {
     ///   Q[:,1], Q[:,2] = tangent-plane eigenvectors
     /// Right-handed: det(Q) = +1.
     Q: Mat3,
-    /// Eigenvalues of A pairing with Q's columns (A·Q[:,i] = mu[i]·Q[:,i]):
-    ///   mu[0] = 1/√3 (LAM_B): structural axial eigenvalue
-    ///   mu[1] ≤ mu[2]: tangent-plane eigenvalues
-    /// Aspect ratio of the cone cross-section = mu[2] / mu[1].
-    mu: [3]f64,
+    /// Eigenvalues of A pairing with Q's columns (A·Q[:,i] = sigma[i]·Q[:,i]):
+    ///   sigma[0] = 1/√3 (SIGMA_0): structural axial eigenvalue
+    ///   sigma[1] ≤ sigma[2]: tangent-plane eigenvalues
+    /// Aspect ratio of the cone cross-section = sigma[2] / sigma[1].
+    sigma: [3]f64,
     outer_iters: u32,
     /// Count of outer iterations where Newton polish bailed and FW weights were used.
     newton_polish_failures: u32,
@@ -1274,10 +1274,10 @@ pub const Info = struct {
         self.allocator.free(self.cert.lambdas);
     }
 
-    /// Aspect ratio of the cone cross-section = mu[2] / mu[1] ≥ 1.
-    /// NaN on INFEASIBLE (mu initialized to zeros).
+    /// Aspect ratio of the cone cross-section = sigma[2] / sigma[1] ≥ 1.
+    /// NaN on INFEASIBLE (sigma initialized to zeros).
     pub fn aspectRatio(self: Info) f64 {
-        return self.mu[2] / self.mu[1];
+        return self.sigma[2] / self.sigma[1];
     }
 
     /// Cone axis: first column of Q.
@@ -1285,25 +1285,25 @@ pub const Info = struct {
         return self.Q.col(0);
     }
 
-    /// Materialize A from its eigendecomposition: Σᵢ mu[i] · Q[:,i] · Q[:,i]ᵀ.
+    /// Materialize A from its eigendecomposition: Σᵢ sigma[i] · Q[:,i] · Q[:,i]ᵀ.
     /// Cheap (three symmetric rank-1 updates). For a loop applying A to many
     /// vectors, call once and reuse.
     pub fn A(self: Info) Mat3 {
         var m = Mat3.zero;
-        m.addSymRank1(self.mu[0], self.Q.col(0));
-        m.addSymRank1(self.mu[1], self.Q.col(1));
-        m.addSymRank1(self.mu[2], self.Q.col(2));
+        m.addSymRank1(self.sigma[0], self.Q.col(0));
+        m.addSymRank1(self.sigma[1], self.Q.col(1));
+        m.addSymRank1(self.sigma[2], self.Q.col(2));
         return m;
     }
 };
 
-/// Assemble A from its eigendecomposition: A = (1/√3)·b·bᵀ + μ₁·v₁·v₁ᵀ
-/// + μ₂·v₂·v₂ᵀ. Used internally; consumers should call `Info.A()` instead.
-fn buildA(b: Vec3, v1: Vec3, v2: Vec3, mu1: f64, mu2: f64) Mat3 {
+/// Assemble A from its eigendecomposition: A = (1/√3)·b·bᵀ + σ₁·v₁·v₁ᵀ
+/// + σ₂·v₂·v₂ᵀ. Used internally; consumers should call `Info.A()` instead.
+fn buildA(b: Vec3, v1: Vec3, v2: Vec3, sigma1: f64, sigma2: f64) Mat3 {
     var m = Mat3.zero;
-    m.addSymRank1(LAM_B, b);
-    m.addSymRank1(mu1, v1);
-    m.addSymRank1(mu2, v2);
+    m.addSymRank1(SIGMA_0, b);
+    m.addSymRank1(sigma1, v1);
+    m.addSymRank1(sigma2, v2);
     return m;
 }
 
@@ -1330,7 +1330,7 @@ pub fn solve(
     var info = Info{
         .status = .did_not_converge,
         .Q = Mat3.zero,
-        .mu = .{ 0, 0, 0 },  // aspectRatio() returns NaN via 0/0 on INFEASIBLE
+        .sigma = .{ 0, 0, 0 },  // aspectRatio() returns NaN via 0/0 on INFEASIBLE
         .outer_iters = 0,
         .newton_polish_failures = 0,
         .cert = .{
@@ -1427,9 +1427,9 @@ pub fn solve(
     var converged = false;
     var newton_polish_failures: u32 = 0;
 
-    // Eigen-data from the last gap call — feeds info.Q/info.mu at finalization
+    // Eigen-data from the last gap call — feeds info.Q/info.sigma at finalization
     // without a redundant eig2 + lift.
-    var last_gap = GapResult{ .gap = 1e30, .cert_n = 0, .v1 = Vec3.zero, .v2 = Vec3.zero, .mu = .{ 0, 0 } };
+    var last_gap = GapResult{ .gap = 1e30, .cert_n = 0, .v1 = Vec3.zero, .v2 = Vec3.zero, .sigma = .{ 0, 0 } };
 
     // Orthonormal tangent basis at the current b. Rebuilt after each
     // accepted step in the outer loop (trivial: one project-and-normalize
@@ -1469,8 +1469,8 @@ pub fn solve(
             const m = computeMoments(Ps, w, s_scale);
 
             if (is_full) {
-                const L2 = recoverL2(P_buf, m.M);
-                last_gap = dualityGapConstructed(w, b, Xw, L2, Q, &gap_scratch, cert_active, cert_lambdas);
+                const A_perp = recoverAPerp(P_buf, m.M);
+                last_gap = dualityGapConstructed(w, b, Xw, A_perp, Q, &gap_scratch, cert_active, cert_lambdas);
                 final_gap = last_gap.gap;
                 cert_n = last_gap.cert_n;
                 // Convergence: |gap| ≤ tol. FP noise can push the gap
@@ -1509,13 +1509,13 @@ pub fn solve(
     info.cert = .{ .indices = indices, .lambdas = lambdas, .claimed_gap = final_gap };
 
     // Bundle the full eigendecomposition: Q's columns are (b, v1, v2) with
-    // eigenvalues (LAM_B, mu[0], mu[1]). Flip v2 if needed so (b, v1, v2) is
+    // eigenvalues (SIGMA_0, sigma[0], sigma[1]). Flip v2 if needed so (b, v1, v2) is
     // right-handed (det Q = +1).
     var v1 = last_gap.v1;
     var v2 = last_gap.v2;
     if (v1.cross(v2).dot(b) < 0) v2 = v2.scale(-1.0);
     info.Q = Mat3.fromCols(b, v1, v2);
-    info.mu = .{ LAM_B, last_gap.mu[0], last_gap.mu[1] };
+    info.sigma = .{ SIGMA_0, last_gap.sigma[0], last_gap.sigma[1] };
     info.status = if (converged) .converged else .did_not_converge;
     return info;
 }

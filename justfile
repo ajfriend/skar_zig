@@ -5,7 +5,7 @@ build:
     zig build -Doptimize=ReleaseFast
 
 test:
-    zig build test
+    zig build test --summary all
 
 bench: build
     ./zig-out/bin/skar-bench

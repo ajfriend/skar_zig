@@ -95,7 +95,7 @@ fn writeRecord(w: anytype, args: Args, info: sphar.Info, time_s: f64) !void {
         try writeVec3(w, info.Q.col(1).m);
         try w.writeAll(",");
         try writeVec3(w, info.Q.col(2).m);
-        try w.print("],\"mu\":[{d},{d},{d}],", .{ info.mu[0], info.mu[1], info.mu[2] });
+        try w.print("],\"sigma\":[{d},{d},{d}],", .{ info.sigma[0], info.sigma[1], info.sigma[2] });
         try w.writeAll("\"lambdas\":");
         try writeLambdas(w, info.cert.indices, info.cert.lambdas);
         try w.print(",\"claimed_gap\":{d}", .{info.cert.claimed_gap});

@@ -170,7 +170,7 @@ test "did_not_converge case raises DNC status" {
     }
 }
 
-test "Shape invariants: Q right-handed orthonormal, mu paired with columns, AR = mu[2]/mu[1]" {
+test "Shape invariants: Q right-handed orthonormal, sigma paired with columns, AR = sigma[2]/sigma[1]" {
     const allocator = std.testing.allocator;
     const X = try loadCase(allocator, "cases/np100.txt");
     defer allocator.free(X);
@@ -202,18 +202,18 @@ test "Shape invariants: Q right-handed orthonormal, mu paired with columns, AR =
     try std.testing.expect(@abs(b.m[1] - c0.m[1]) < 1e-14);
     try std.testing.expect(@abs(b.m[2] - c0.m[2]) < 1e-14);
 
-    // mu[0] = 1/√3, tangent eigenvalues ascending, AR = mu[2]/mu[1].
-    try std.testing.expect(@abs(info.mu[0] - 1.0 / @sqrt(3.0)) < 1e-14);
-    try std.testing.expect(info.mu[1] <= info.mu[2]);
-    try std.testing.expect(@abs(info.mu[2] / info.mu[1] - info.aspectRatio()) < 1e-14);
+    // sigma[0] = 1/√3, tangent eigenvalues ascending, AR = sigma[2]/sigma[1].
+    try std.testing.expect(@abs(info.sigma[0] - 1.0 / @sqrt(3.0)) < 1e-14);
+    try std.testing.expect(info.sigma[1] <= info.sigma[2]);
+    try std.testing.expect(@abs(info.sigma[2] / info.sigma[1] - info.aspectRatio()) < 1e-14);
 
     // info.A() reconstructs A faithfully: each Q column is an eigenvector of
-    // A with the corresponding mu as eigenvalue.
+    // A with the corresponding sigma as eigenvalue.
     const A_mat = info.A();
     const Ac0 = A_mat.apply(c0);
     const Ac1 = A_mat.apply(c1);
     const Ac2 = A_mat.apply(c2);
-    try std.testing.expect(@abs(c0.dot(Ac0) - info.mu[0]) < 1e-12);
-    try std.testing.expect(@abs(c1.dot(Ac1) - info.mu[1]) < 1e-12);
-    try std.testing.expect(@abs(c2.dot(Ac2) - info.mu[2]) < 1e-12);
+    try std.testing.expect(@abs(c0.dot(Ac0) - info.sigma[0]) < 1e-12);
+    try std.testing.expect(@abs(c1.dot(Ac1) - info.sigma[1]) < 1e-12);
+    try std.testing.expect(@abs(c2.dot(Ac2) - info.sigma[2]) < 1e-12);
 }
