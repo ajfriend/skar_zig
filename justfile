@@ -6,6 +6,8 @@ test:
     zig build install-test
     rm -rf coverage
     kcov --include-pattern=src/,tests/ coverage zig-out/bin/skar-test
+    @n=$(ls -1d coverage/skar-test.*/ 2>/dev/null | wc -l | tr -d ' '); \
+        if [ "$n" != "1" ]; then echo "expected exactly 1 coverage/skar-test.*/ dir, got $n"; exit 1; fi
     @jq -r '"skar coverage: \(.percent_covered)%"' coverage/skar-test.*/coverage.json
     @jq -e '(.percent_covered | tonumber) >= 100' coverage/skar-test.*/coverage.json > /dev/null
 
