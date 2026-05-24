@@ -171,7 +171,7 @@ test "extreme aspect ratio: three geometries, rotation-invariant" {
     for (cases) |case| {
         // Canonical (unrotated) solve establishes the reference AR.
         var canon_pts: [3][3]f64 = case.points;
-        var canon_info = try sphar.solve(allocator, canon_pts[0..], tol, max_outer, 1e-12);
+        var canon_info = try sphar.solve(allocator, canon_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = 1e-12, .max_outer = max_outer });
         defer canon_info.deinit();
 
         try std.testing.expectEqual(sphar.Status.converged, canon_info.status);
@@ -190,7 +190,7 @@ test "extreme aspect ratio: three geometries, rotation-invariant" {
             for (case.points, 0..) |p, i| {
                 rot_pts[i] = applyRot(R, p);
             }
-            var rot_info = try sphar.solve(allocator, rot_pts[0..], tol, max_outer, 1e-12);
+            var rot_info = try sphar.solve(allocator, rot_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = 1e-12, .max_outer = max_outer });
             defer rot_info.deinit();
 
             const ar_delta = @abs(rot_info.aspectRatio() - canon_ar);
@@ -225,7 +225,7 @@ test "coplanarity check cutoff is near the parameter's value" {
     // Above cutoff: ratio ≈ 4.3e-11 (43× above tol). Must not flag.
     {
         var pts: [3][3]f64 = arcPoints(90.0, 2.0e-6);
-        var info = try sphar.solve(allocator, pts[0..], tol, max_outer, coplanarity_tol);
+        var info = try sphar.solve(allocator, pts[0..], .{ .gap_tol = tol, .coplanarity_tol = coplanarity_tol, .max_outer = max_outer });
         defer info.deinit();
         try std.testing.expect(info.status != sphar.Status.coplanar_input);
     }
@@ -233,7 +233,7 @@ test "coplanarity check cutoff is near the parameter's value" {
     // Below cutoff: ratio ≈ 2.7e-14 (37× below tol). Must flag.
     {
         var pts: [3][3]f64 = arcPoints(90.0, 5.0e-8);
-        var info = try sphar.solve(allocator, pts[0..], tol, max_outer, coplanarity_tol);
+        var info = try sphar.solve(allocator, pts[0..], .{ .gap_tol = tol, .coplanarity_tol = coplanarity_tol, .max_outer = max_outer });
         defer info.deinit();
         try std.testing.expectEqual(sphar.Status.coplanar_input, info.status);
     }
@@ -244,7 +244,7 @@ test "coplanarity check cutoff is near the parameter's value" {
     // cutoff rather than the threshold being baked in.
     {
         var pts: [3][3]f64 = arcPoints(90.0, 5.0e-8);
-        var info = try sphar.solve(allocator, pts[0..], tol, max_outer, 1e-20);
+        var info = try sphar.solve(allocator, pts[0..], .{ .gap_tol = tol, .coplanarity_tol = 1e-20, .max_outer = max_outer });
         defer info.deinit();
         try std.testing.expect(info.status != sphar.Status.coplanar_input);
     }
@@ -265,7 +265,7 @@ test "coplanarity check flags great-circle inputs" {
         .{ 1.0, 0.0, 0.0 },
         .{ std.math.cos(half), std.math.sin(half), 0.0 },
     };
-    var info = try sphar.solve(allocator, canon_pts[0..], tol, max_outer, coplanarity_tol);
+    var info = try sphar.solve(allocator, canon_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = coplanarity_tol, .max_outer = max_outer });
     defer info.deinit();
     try std.testing.expectEqual(sphar.Status.coplanar_input, info.status);
     // checkFeasibility on a non-converged status must signal violation
@@ -280,14 +280,14 @@ test "coplanarity check flags great-circle inputs" {
         const R = randomRotation(&rng_state);
         var rot_pts: [3][3]f64 = undefined;
         for (canon_pts, 0..) |p, i| rot_pts[i] = applyRot(R, p);
-        var rinfo = try sphar.solve(allocator, rot_pts[0..], tol, max_outer, coplanarity_tol);
+        var rinfo = try sphar.solve(allocator, rot_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = coplanarity_tol, .max_outer = max_outer });
         defer rinfo.deinit();
         try std.testing.expectEqual(sphar.Status.coplanar_input, rinfo.status);
     }
 
     // Sanity: same input passes when the check is disabled (we don't
     // care whether it converges — only that we're not flagging it).
-    var unchecked = try sphar.solve(allocator, canon_pts[0..], tol, max_outer, -1);
+    var unchecked = try sphar.solve(allocator, canon_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = -1, .max_outer = max_outer });
     defer unchecked.deinit();
     try std.testing.expect(unchecked.status != sphar.Status.coplanar_input);
 }
@@ -303,42 +303,48 @@ test "solve rejects malformed inputs with typed errors" {
         .{ 0, 0, 1 },
     };
 
+    const opts: sphar.SolveOptions = .{
+        .gap_tol = valid_tol,
+        .coplanarity_tol = valid_cop,
+        .max_outer = max_outer,
+    };
+
     // n < 3 → InsufficientPoints. Three cases: empty, one point, two points.
     try std.testing.expectError(
         sphar.InputError.InsufficientPoints,
-        sphar.solve(allocator, &[_][3]f64{}, valid_tol, max_outer, valid_cop),
+        sphar.solve(allocator, &[_][3]f64{}, opts),
     );
     try std.testing.expectError(
         sphar.InputError.InsufficientPoints,
-        sphar.solve(allocator, ok_pts[0..1], valid_tol, max_outer, valid_cop),
+        sphar.solve(allocator, ok_pts[0..1], opts),
     );
     try std.testing.expectError(
         sphar.InputError.InsufficientPoints,
-        sphar.solve(allocator, ok_pts[0..2], valid_tol, max_outer, valid_cop),
+        sphar.solve(allocator, ok_pts[0..2], opts),
     );
 
     // gap_tol: must be finite and positive.
     try std.testing.expectError(
         sphar.InputError.InvalidTolerance,
-        sphar.solve(allocator, ok_pts[0..], -1.0, max_outer, valid_cop),
+        sphar.solve(allocator, ok_pts[0..], .{ .gap_tol = -1.0 }),
     );
     try std.testing.expectError(
         sphar.InputError.InvalidTolerance,
-        sphar.solve(allocator, ok_pts[0..], 0.0, max_outer, valid_cop),
+        sphar.solve(allocator, ok_pts[0..], .{ .gap_tol = 0.0 }),
     );
     try std.testing.expectError(
         sphar.InputError.InvalidTolerance,
-        sphar.solve(allocator, ok_pts[0..], std.math.nan(f64), max_outer, valid_cop),
+        sphar.solve(allocator, ok_pts[0..], .{ .gap_tol = std.math.nan(f64) }),
     );
     try std.testing.expectError(
         sphar.InputError.InvalidTolerance,
-        sphar.solve(allocator, ok_pts[0..], std.math.inf(f64), max_outer, valid_cop),
+        sphar.solve(allocator, ok_pts[0..], .{ .gap_tol = std.math.inf(f64) }),
     );
 
     // coplanarity_tol: NaN is the only flagged value (≤ 0 documented as
     // disable; +inf documented as "reject everything").
     try std.testing.expectError(
         sphar.InputError.InvalidTolerance,
-        sphar.solve(allocator, ok_pts[0..], valid_tol, max_outer, std.math.nan(f64)),
+        sphar.solve(allocator, ok_pts[0..], .{ .coplanarity_tol = std.math.nan(f64) }),
     );
 }

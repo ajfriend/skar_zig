@@ -23,46 +23,56 @@ const std = @import("std");
 // Configuration
 // ----------------------------------------------------------------
 
-const MAX_OUTER: u32 = 100;
-/// Number of (project + FW + b-update) cycles per outer iteration. Only
-/// the final cycle of each outer iteration runs Newton polish + gap
-/// check. FW_PER_NEWTON = 1 is the original behaviour.
-const FW_PER_NEWTON: u32 = 2;
-const DAMP_SHRINK: f64 = 0.5;
-const DAMP_GROW: f64 = 1.2;
-const DAMP_MIN: f64 = 0.05;
-const DAMP_MAX: f64 = 1.0;
-const ACTIVE_THRESH: f64 = 1e-6;
-
-/// Feasibility-cone margin for the backtracking b-update. Each outer
-/// step requires min_i(b_new · xᵢ) ≥ FEAS_MARGIN; α is halved up to
-/// MAX_BACKTRACKS times until the new b satisfies it. See the axis-
-/// update block in `solve` for context.
-const FEAS_MARGIN: f64 = 1e-8;
-const MAX_BACKTRACKS: u32 = 30;
-
-/// Quasi-Newton b-update gate: only precondition the axis step by M⁻¹
-/// when cond(M) exceeds this threshold. For near-isotropic M (hex,
-/// DGGS cells, rotations near coordinate axes) the preconditioner adds
-/// sub-ULP direction noise that interacts badly with damping after
-/// Newton polish; the plain gradient step is used instead.
-const PRECOND_COND_MIN: f64 = 1.2;
-
-/// Skip the quasi-Newton machinery for the first `AXIS_WARMUP` outer
-/// iterations. Easy cases (hex, most DGGS cells) converge in ≤ this,
-/// so they pay zero preconditioner overhead. The active set also tends
-/// to settle in the first few iters, after which the 2D moment `M`
-/// becomes a more meaningful proxy Hessian for the b-update.
-const AXIS_WARMUP: u32 = 2;
-
 /// Structural axial eigenvalue: A·b = SIGMA_0·b, where b is the cone axis.
 /// Derived in `recoverAPerp` via the budget/g_max rescaling: λ_b = √(1 − 2/3).
+/// Not tunable — it's geometry, not a knob.
 const SIGMA_0: f64 = 1.0 / @sqrt(3.0);
 
-/// Numerical tolerances — the "how small is small" guards. Algorithm
-/// parameters (MAX_OUTER, DAMP_*, ACTIVE_THRESH, FEAS_MARGIN, AXIS_WARMUP,
-/// PRECOND_COND_MIN, MAX_BACKTRACKS) are above; they tune behaviour.
+/// Algorithm tuning parameters — internal knobs tuned together for the
+/// solver to converge cleanly. Not exposed to callers because they
+/// interact subtly: changing one without coordinated changes to others
+/// can break convergence. Adjust here if you're working on the algorithm
+/// itself; user-facing tuning is in `SolveOptions`.
+const algo = struct {
+    /// Number of (project + FW + b-update) cycles per outer iteration.
+    /// Only the final cycle of each outer iteration runs Newton polish
+    /// + gap check. FW_PER_NEWTON = 1 is the original behaviour.
+    const FW_PER_NEWTON: u32 = 2;
+
+    /// Damping curve for the b-update: shrink alpha when |c| grew,
+    /// grow when |c| shrank, bounded in [DAMP_MIN, DAMP_MAX].
+    const DAMP_SHRINK: f64 = 0.5;
+    const DAMP_GROW: f64 = 1.2;
+    const DAMP_MIN: f64 = 0.05;
+    const DAMP_MAX: f64 = 1.0;
+
+    /// Certificate active-set cutoff: weights below this are dropped
+    /// from `Info.cert`. Distinct from (and tighter than) the FW inner
+    /// loops' `tol.WEIGHT_ACTIVE`.
+    const ACTIVE_THRESH: f64 = 1e-6;
+
+    /// Feasibility-cone margin for the backtracking b-update. Each
+    /// outer step requires `min_i(b_new · xᵢ) ≥ FEAS_MARGIN`; α is
+    /// halved up to MAX_BACKTRACKS times until the new b satisfies it.
+    const FEAS_MARGIN: f64 = 1e-8;
+    const MAX_BACKTRACKS: u32 = 30;
+
+    /// Quasi-Newton b-update gate: only precondition the axis step by
+    /// M⁻¹ when cond(M) exceeds this. For near-isotropic M (hex, DGGS
+    /// cells, rotations near coordinate axes) the preconditioner adds
+    /// sub-ULP direction noise that interacts badly with damping after
+    /// Newton polish; the plain gradient step is used instead.
+    const PRECOND_COND_MIN: f64 = 1.2;
+
+    /// Skip the quasi-Newton machinery for the first `AXIS_WARMUP`
+    /// outer iterations. Easy cases (hex, most DGGS cells) converge
+    /// in ≤ this, so they pay zero preconditioner overhead.
+    const AXIS_WARMUP: u32 = 2;
+};
+
+/// Numerical tolerances — the "how small is small" guards.
 /// These guard against divide-by-zero, underflow, and spurious convergence.
+/// Tuned to f64 precision; not exposed to callers.
 const tol = struct {
     /// Newton polish inner loop: stop when max-min of gradient components < this.
     const NEWTON_INNER: f64 = 1e-14;
@@ -71,7 +81,7 @@ const tol = struct {
     /// Hard floor for SolveError.NegativeDualityGap (FP noise below, bug above).
     const NEG_GAP: f64 = 1e-10;
     /// FW inner loops: minimum w_i to participate in the pairwise-swap candidate set.
-    /// Distinct from (and looser than) ACTIVE_THRESH, which is the *cert* cutoff.
+    /// Distinct from (and looser than) algo.ACTIVE_THRESH, which is the *cert* cutoff.
     const WEIGHT_ACTIVE: f64 = 1e-14;
     /// Tiny-magnitude zero guard for norms and dot-products (`< tol ⇒ treat as 0`).
     const TINY: f64 = 1e-30;
@@ -670,18 +680,18 @@ inline fn computeMoments(Ps: []const [2]f64, w: []const f64, s_scale: f64) Momen
 }
 
 /// Damping controller for the axis update. Shrinks the step when |c|
-/// grew, grows it when |c| shrank, bounded in [DAMP_MIN, DAMP_MAX].
+/// grew, grows it when |c| shrank, bounded in [algo.DAMP_MIN, algo.DAMP_MAX].
 const DampState = struct {
     alpha: f64 = 1.0,
     prev_c_norm: f64 = 1e30,
 
     inline fn tick(self: *DampState, c_norm: f64) void {
         if (c_norm > self.prev_c_norm) {
-            self.alpha *= DAMP_SHRINK;
-            if (self.alpha < DAMP_MIN) self.alpha = DAMP_MIN;
+            self.alpha *= algo.DAMP_SHRINK;
+            if (self.alpha < algo.DAMP_MIN) self.alpha = algo.DAMP_MIN;
         } else {
-            self.alpha *= DAMP_GROW;
-            if (self.alpha > DAMP_MAX) self.alpha = DAMP_MAX;
+            self.alpha *= algo.DAMP_GROW;
+            if (self.alpha > algo.DAMP_MAX) self.alpha = algo.DAMP_MAX;
         }
         self.prev_c_norm = c_norm;
     }
@@ -694,7 +704,7 @@ const DampState = struct {
 /// damped gradient, and the damping signal (`c_norm`, returned alongside)
 /// is ‖center‖ either way.
 ///
-/// Skip the whole check for the first AXIS_WARMUP iters — easy cases
+/// Skip the whole check for the first algo.AXIS_WARMUP iters — easy cases
 /// converge inside the warmup and pay zero preconditioner cost. See
 /// docs/mvee_derivation.md "Quasi-Newton axis update" appendix for history.
 const AxisStep = struct { u: Vec2, c_norm: f64 };
@@ -702,14 +712,14 @@ const AxisStep = struct { u: Vec2, c_norm: f64 };
 inline fn quasiNewtonAxisDirection(outer: u32, M: Mat2, center: Vec2) AxisStep {
     const c_norm = center.norm();
     var u: Vec2 = center;
-    if (outer >= AXIS_WARMUP and c_norm > tol.TINY) {
+    if (outer >= algo.AXIS_WARMUP and c_norm > tol.TINY) {
         const eigM = eig2(M.m);
         const eig_lo = eigM.vals[0];
         const eig_hi = eigM.vals[1];
-        // cond(M) > PRECOND_COND_MIN  ⟺  eig_hi > PRECOND_COND_MIN · eig_lo,
+        // cond(M) > algo.PRECOND_COND_MIN  ⟺  eig_hi > algo.PRECOND_COND_MIN · eig_lo,
         // division-free and robust to a near-zero eig_lo that we'd
         // otherwise guard separately.
-        if (eig_hi > PRECOND_COND_MIN * eig_lo) {
+        if (eig_hi > algo.PRECOND_COND_MIN * eig_lo) {
             const u_p = M.inverse().apply(center);
             const u_norm_2d = u_p.norm();
             if (u_norm_2d > tol.TINY) {
@@ -745,10 +755,10 @@ fn acceptBUpdate(
     const dQc = Q.apply(u);
     var alpha_try: f64 = alpha0;
     var bt: u32 = 0;
-    while (bt < MAX_BACKTRACKS) : (bt += 1) {
+    while (bt < algo.MAX_BACKTRACKS) : (bt += 1) {
         const b_trial = Vec3.lincomb(1.0, b, alpha_try, dQc).normalize();
         const Q_trial = b_trial.orthoBasis();
-        if (projectGnomonic(Xw, b_trial, Q_trial, P_buf, FEAS_MARGIN)) {
+        if (projectGnomonic(Xw, b_trial, Q_trial, P_buf, algo.FEAS_MARGIN)) {
             const s_scale = rescaleP(P_buf, Ps);
             return .{ .b = b_trial, .Q = Q_trial, .s_scale = s_scale };
         }
@@ -1145,7 +1155,7 @@ fn dualityGapConstructed(
     const za = s.za;
     var k: usize = 0;
     for (w, 0..) |wi, i| {
-        if (wi > ACTIVE_THRESH) {
+        if (wi > algo.ACTIVE_THRESH) {
             active_idx[k] = i;
             k += 1;
         }
@@ -1315,6 +1325,39 @@ pub const InputError = error{
     InvalidTolerance,
 };
 
+/// User-tunable solver options. Pass `.{}` to use defaults; override
+/// individual fields with named-field syntax: `.{ .gap_tol = 1e-9 }`.
+///
+/// These are the knobs a typical caller might legitimately want to
+/// twist (perf-vs-accuracy trade-offs, behavior toggles). Deeper
+/// tuning constants — Frank-Wolfe inner cycles, damping curve,
+/// backtracking, preconditioner gates — are kept internal in `algo`
+/// because they interact subtly with each other.
+pub const SolveOptions = struct {
+    /// Convergence threshold on the duality gap. Must be finite and
+    /// positive. Smaller = tighter solution but more iterations.
+    gap_tol: f64 = 1e-6,
+
+    /// Convex-hull preprocessing threshold. If `X.len > n_hull`,
+    /// reduce input to its 2D hull at the feasible axis before
+    /// iterating. `-1` disables; `0` always hulls. Default 10 is a
+    /// good break-even point on typical inputs.
+    n_hull: i32 = 10,
+
+    /// Coplanarity check threshold (see `Status.coplanar_input`).
+    /// `4·det(C) < tol · trace(C)²` on the centered 2D scatter
+    /// triggers rejection. ≤ 0 disables the check; tighter positive
+    /// values catch only essentially-exact coplanarity; looser
+    /// values also reject near-coplanar inputs the solver would
+    /// otherwise NaN on.
+    coplanarity_tol: f64 = 1e-12,
+
+    /// Outer iteration cap before returning `Status.did_not_converge`.
+    /// Each outer iteration runs `algo.FW_PER_NEWTON` inner cycles +
+    /// one Newton polish + one gap check.
+    max_outer: u32 = 100,
+};
+
 pub const Cert = struct {
     indices: []u32,
     lambdas: []f64,
@@ -1425,7 +1468,7 @@ pub fn checkFeasibility(info: Info, X: []const [3]f64) f64 {
 /// indices. `claimed_gap` holds the Farkas residual ‖Σ λᵢ xᵢ‖.
 fn buildFarkasCert(allocator: std.mem.Allocator, hs: HalfspaceResult) !Cert {
     var k: u32 = 0;
-    for (hs.lam) |l| if (l > ACTIVE_THRESH) {
+    for (hs.lam) |l| if (l > algo.ACTIVE_THRESH) {
         k += 1;
     };
     const indices = try allocator.alloc(u32, k);
@@ -1433,7 +1476,7 @@ fn buildFarkasCert(allocator: std.mem.Allocator, hs: HalfspaceResult) !Cert {
     const lambdas = try allocator.alloc(f64, k);
     var j: u32 = 0;
     for (hs.lam, 0..) |l, i| {
-        if (l > ACTIVE_THRESH) {
+        if (l > algo.ACTIVE_THRESH) {
             indices[j] = @intCast(i);
             lambdas[j] = l;
             j += 1;
@@ -1533,27 +1576,14 @@ fn isCoplanarInput(points: []const Vec3, b: Vec3, threshold: f64) bool {
     return tr <= 0 or 4.0 * det < threshold * tr * tr;
 }
 
-/// Main solver. `n_hull` convex-hull threshold: if n > n_hull, reduce to hull.
-/// Pass -1 to disable, 0 to always hull, 10 for the default.
-///
-/// `coplanarity_tol`: rejects rank-deficient inputs (all points in a 2D
-/// subspace through the origin) with `Status.coplanar_input`. After
-/// projecting to the tangent plane at the feasible axis, the 2×2 centered
-/// scatter C is checked against `4·det(C) < tol · trace(C)²` —
-/// "fraction-of-isotropic" ∈ [0, 1] where 1 is a circular scatter and 0 is
-/// a perfect line. tol = 1e-12 flags inputs whose scatter ellipse is roughly
-/// >10⁶× longer than wide; smaller positive values catch only
-/// essentially-exact coplanarity, larger ones also reject near-coplanar
-/// inputs the solver would otherwise produce NaN on. Pass ≤ 0 to disable
-/// the check entirely (0 is treated as disabled because `4·det < 0` is
-/// unreachable for the PSD scatter — it would be a silent partial-disable
-/// rather than the maximum-strictness it superficially looks like).
+/// Main solver. Returns an `Info` carrying the result `Status`, the
+/// cone's eigendecomposition (when converged), and a certificate.
+/// `opts` controls convergence, preprocessing, and validation knobs —
+/// see `SolveOptions` for per-field docs and defaults.
 pub fn solve(
     allocator: std.mem.Allocator,
     X: []const [3]f64,
-    gap_tol: f64,
-    n_hull: i32,
-    coplanarity_tol: f64,
+    opts: SolveOptions,
 ) !Info {
     var info = Info{
         .status = .did_not_converge,
@@ -1587,8 +1617,8 @@ pub fn solve(
     //    perf cliffs. See the InputError doc-comments above for the
     //    contract on each tolerance.
     if (Xv.len < 3) return InputError.InsufficientPoints;
-    if (!std.math.isFinite(gap_tol) or gap_tol <= 0) return InputError.InvalidTolerance;
-    if (std.math.isNan(coplanarity_tol)) return InputError.InvalidTolerance;
+    if (!std.math.isFinite(opts.gap_tol) or opts.gap_tol <= 0) return InputError.InvalidTolerance;
+    if (std.math.isNan(opts.coplanarity_tol)) return InputError.InvalidTolerance;
 
     // 1) Feasibility via Farkas FW.
     const hs = try halfspaceCheck(scratch_alloc, Xv);
@@ -1604,7 +1634,7 @@ pub fn solve(
     }
 
     // 2) Optional hull preprocessing.
-    const hp = try hullPreprocess(scratch_alloc, Xv, b, n_hull);
+    const hp = try hullPreprocess(scratch_alloc, Xv, b, opts.n_hull);
     const Xw = hp.Xw;
     const work_to_orig = hp.work_to_orig;
     const nw = Xw.len;
@@ -1612,7 +1642,7 @@ pub fn solve(
     // 2.5) Coplanarity check on the hulled subset — an input whose hull is
     //      collinear in the tangent plane drives the SDP to a degenerate
     //      cone (one tangent eigenvalue → 0) and produces NaN downstream.
-    if (coplanarity_tol > 0 and isCoplanarInput(Xw, b, coplanarity_tol)) {
+    if (opts.coplanarity_tol > 0 and isCoplanarInput(Xw, b, opts.coplanarity_tol)) {
         // Allocate empty cert slices on the parent allocator so Info.deinit
         // is uniform across statuses — never frees a static-literal pointer.
         const indices = try allocator.alloc(u32, 0);
@@ -1657,30 +1687,30 @@ pub fn solve(
 
     // Seed P_buf/Ps/s_scale so the loop invariant holds on entry to the
     // first cycle. `halfspaceCheck` guarantees b·xᵢ > 0 strictly (not
-    // necessarily ≥ FEAS_MARGIN), so bypass the feasibility check here.
+    // necessarily ≥ algo.FEAS_MARGIN), so bypass the feasibility check here.
     _ = projectGnomonic(Xw, b, Q, P_buf, -std.math.inf(f64));
     var s_scale: f64 = rescaleP(P_buf, Ps);
 
-    // 4) Hybrid outer loop. Each outer iteration runs FW_PER_NEWTON cycles
+    // 4) Hybrid outer loop. Each outer iteration runs algo.FW_PER_NEWTON cycles
     //    of (FW + b-update); only the last cycle also runs Newton polish +
     //    gap check. Extra cheap cycles buy more b-motion per Newton call.
-    //    At FW_PER_NEWTON = 1 this is the original one-FW-per-Newton
+    //    At algo.FW_PER_NEWTON = 1 this is the original one-FW-per-Newton
     //    schedule; larger values amortise Newton's cost across more b-motion.
     //
     //    Loop invariant: on entry to each cycle, P_buf/Ps/s_scale correspond
     //    to the current (b, Q). The accepted b-update at cycle end also
     //    produces the next cycle's projection in one sweep.
     var outer: u32 = 0;
-    outer_loop: while (outer < MAX_OUTER) : (outer += 1) {
+    outer_loop: while (outer < opts.max_outer) : (outer += 1) {
         outer_count += 1;
         var cycle: u32 = 0;
-        while (cycle < FW_PER_NEWTON) : (cycle += 1) {
-            const is_full = (cycle == FW_PER_NEWTON - 1);
+        while (cycle < algo.FW_PER_NEWTON) : (cycle += 1) {
+            const is_full = (cycle == algo.FW_PER_NEWTON - 1);
 
             mveeFw(Ps, 1, 0.0, Ql, w, true);
 
             if (is_full) {
-                if (!newtonPolish(Ql, w, ACTIVE_THRESH, 20, tol.NEWTON_INNER, &newton_scratch)) {
+                if (!newtonPolish(Ql, w, algo.ACTIVE_THRESH, 20, tol.NEWTON_INNER, &newton_scratch)) {
                     newton_polish_failures += 1;
                 }
             }
@@ -1697,7 +1727,7 @@ pub fn solve(
                 // a near-zero gap (seen on h3_r15_pent: gap = -8.5e-10
                 // with tol = 1e-6). Accept those as converged before the
                 // hard NegGap guard kicks in.
-                if (@abs(last_gap.gap) <= gap_tol) {
+                if (@abs(last_gap.gap) <= opts.gap_tol) {
                     converged = true;
                     break :outer_loop;
                 }

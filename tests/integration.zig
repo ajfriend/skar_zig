@@ -102,7 +102,7 @@ test "converged cases match C baseline AR" {
         const X = try loadCase(allocator, path);
         defer allocator.free(X);
 
-        var info = try sphar.solve(allocator, X, tol, 10, 1e-12);
+        var info = try sphar.solve(allocator, X, .{ .gap_tol = tol, .n_hull = 10, .coplanarity_tol = 1e-12 });
         defer info.deinit();
 
         try std.testing.expectEqual(sphar.Status.converged, info.status);
@@ -136,7 +136,7 @@ test "infeasible cases return Farkas certificate" {
         const X = try loadCase(allocator, path);
         defer allocator.free(X);
 
-        var info = try sphar.solve(allocator, X, 1e-6, 10, 1e-12);
+        var info = try sphar.solve(allocator, X, .{ .gap_tol = 1e-6, .n_hull = 10, .coplanarity_tol = 1e-12 });
         defer info.deinit();
 
         try std.testing.expectEqual(sphar.Status.infeasible, info.status);
@@ -167,7 +167,7 @@ test "did_not_converge case raises DNC status" {
         const X = try loadCase(allocator, path);
         defer allocator.free(X);
 
-        var info = try sphar.solve(allocator, X, 1e-6, 10, 1e-12);
+        var info = try sphar.solve(allocator, X, .{ .gap_tol = 1e-6, .n_hull = 10, .coplanarity_tol = 1e-12 });
         defer info.deinit();
 
         try std.testing.expectEqual(sphar.Status.did_not_converge, info.status);
@@ -179,7 +179,7 @@ test "Shape invariants: Q right-handed orthonormal, sigma paired with columns, A
     const X = try loadCase(allocator, "cases/np100.txt");
     defer allocator.free(X);
 
-    var info = try sphar.solve(allocator, X, 1e-6, 10, 1e-12);
+    var info = try sphar.solve(allocator, X, .{ .gap_tol = 1e-6, .n_hull = 10, .coplanarity_tol = 1e-12 });
     defer info.deinit();
 
     const c0 = info.Q.col(0);
