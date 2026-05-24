@@ -911,6 +911,16 @@ pub fn solve(
         // on zero-length slices regardless of pointer provenance, so the
         // static-literal empty slices in `info.cert` are safe for
         // `Info.deinit` (no allocation needed here).
+        //
+        // FUTURE-REFACTOR CAVEAT: this branch relies on `info.cert`
+        // still holding the initial static-literal value from the
+        // `var info = Info{...}` literal at the top of `solve`. If you
+        // add code between that init and this branch that conditionally
+        // assigns an *allocated* cert to `info.cert`, you must either
+        // free it before falling through here or skip this early-return
+        // and let buildPrimalCert handle the final cert assembly —
+        // otherwise the allocated cert leaks because `info.cert` is
+        // never inspected again on this path.
         info.status = .coplanar_input;
         return info;
     }

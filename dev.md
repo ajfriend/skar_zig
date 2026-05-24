@@ -25,10 +25,18 @@
 ## Coverage
 
 `kcov` runs the test binary as a black box: it instruments the binary
-with traps at each source line and records which lines execute. Output
-is per-file/per-line HTML at `coverage/skar-test/index.html`, plus a
-`coverage.json` summary that `just test` parses with `jq` to enforce
-the threshold.
+with traps at each source line and records which lines execute. It
+writes two directories under `coverage/`:
+
+- `coverage/skar-test/` — the **merged** HTML report; open
+  `coverage/skar-test/index.html` to browse covered lines.
+- `coverage/skar-test.<hash>/` — the **per-binary** report containing
+  the `coverage.json` summary that `just test` parses with `jq` to
+  enforce the threshold.
+
+Both contain the same aggregate percentages today (one binary, one
+run). If you're debugging a gate failure, the JSON is in the
+hash-suffixed sibling, not the merged dir.
 
 The gate enforces **100% line coverage** across both production code
 (`src/*.zig`) and test code (`tests/*.zig`). Test code isn't exempt —

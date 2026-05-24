@@ -7,7 +7,7 @@ test:
     rm -rf coverage
     kcov --include-pattern=src/,tests/ coverage zig-out/bin/skar-test
     @jq -r '"skar coverage: \(.percent_covered)%"' coverage/skar-test.*/coverage.json
-    @jq -e '.percent_covered == "100.00"' coverage/skar-test.*/coverage.json > /dev/null
+    @jq -e '(.percent_covered | tonumber) >= 100' coverage/skar-test.*/coverage.json > /dev/null
 
 # Build the library and CLI / bench binaries (optimized).
 build:
