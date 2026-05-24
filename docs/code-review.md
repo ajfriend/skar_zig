@@ -13,12 +13,20 @@ contract drifts that would manifest under specific caller use.
 
 ---
 
-## 1. `dualityGapConstructed` takes `@sqrt(sigma[0])` without a non-negativity guard
+## 1. `dualityGapConstructed` takes `@sqrt(sigma[0])` without a non-negativity guard — *RESOLVED*
 
 - **Location:** `src/skar.zig` — the L = V·√Λ construction inside
   `dualityGapConstructed` (around the `@sqrt(sigma[0])`,
   `@sqrt(sigma[1])` calls).
 - **Severity:** silent NaN propagation. Critical.
+- **Status:** Resolved with a tolerance-banded guard after `eig2`:
+  ulp-scale negatives are clipped to 0 (sqrt is well-defined; the
+  existing Cholesky-null guard then routes the iteration through
+  gap=1e30 as "no progress"), but meaningfully-negative eigenvalues
+  raise the new `SolveError.NegativeEigenvalue`. Threshold is
+  `tol.PSD_NEG_REL · max(sigma)`, mirroring `tol.NEG_GAP`'s shape.
+  `dualityGapConstructed` now returns `SolveError!GapResult`; the
+  single caller `try`s it.
 
 `eig2(A_perp)` can return a slightly-negative smaller eigenvalue when
 A_perp is near-rank-1 — for example, when Newton polish has
@@ -42,11 +50,15 @@ in the sense that A_perp should be PSD by construction.
 
 ---
 
-## 2. `recoverAPerp` takes `@sqrt(Minv.det())` without a PSD guard
+## 2. `recoverAPerp` takes `@sqrt(Minv.det())` without a PSD guard — *RESOLVED*
 
 - **Location:** `src/skar.zig` — `recoverAPerp`'s `s_det` and `denom`
   computations.
 - **Severity:** silent NaN propagation. Critical.
+- **Status:** Resolved with the same tolerance-banded guard pattern as
+  #1. det(Minv) noise below `tol.PSD_NEG_REL · trace²` is clipped to
+  0; meaningful negatives raise the new `SolveError.SingularMoment`.
+  `recoverAPerp` now returns `SolveError!Mat2`; the caller `try`s it.
 
 `M` (the weighted moment matrix of the 2D projected points) is PSD in
 exact arithmetic, but its inverse `Minv` can have det numerically

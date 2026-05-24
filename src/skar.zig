@@ -83,6 +83,11 @@ const tol = struct {
     const UNDERFLOW: f64 = 1e-300;
     /// eig2: |b|/scale relative threshold for closed-form vs. axis-aligned fallback.
     const EIG2_REL: f64 = 1e-8;
+    /// Relative cutoff for "FP noise" vs. "theorem violation" on values
+    /// that should be ≥ 0 by PSD invariant (eigenvalues of A_perp,
+    /// det of Minv). Below the threshold ⇒ silent clip; above ⇒ loud
+    /// SolveError. Mirrors NEG_GAP's role for the gap.
+    const PSD_NEG_REL: f64 = 1e-12;
 };
 
 // ----------------------------------------------------------------
@@ -839,7 +844,7 @@ fn mveeFw(
 /// A_perp is Minv_half scaled by √(2/(3·g_max)), where g_max = max_i pᵢᵀ·M⁻¹·pᵢ
 /// enforces the budget max_i ‖A_perp·pᵢ‖² = 2/3 that pins the axial eigenvalue
 /// of A to SIGMA_0.
-fn recoverAPerp(P: []const [2]f64, M: Mat2) Mat2 {
+fn recoverAPerp(P: []const [2]f64, M: Mat2) SolveError!Mat2 {
     const Minv = M.inverse();
 
     // Max of pᵀ M⁻¹ p over points (used for scaling).
@@ -853,8 +858,16 @@ fn recoverAPerp(P: []const [2]f64, M: Mat2) Mat2 {
     // Closed-form sqrt of symmetric SPD 2×2 Minv:
     //   sqrt(S) = (S + √det(S)·I) / √(tr(S) + 2√det(S))
     // avoids eigendecomposition when eigenvalues are nearly equal.
-    const s_det = @sqrt(Minv.det());
+    // Minv is PSD by construction (M is PD ⇒ Minv is PD), so det(Minv)
+    // and tr(Minv) are both ≥ 0 in exact arithmetic. Roundoff can push
+    // det negative when M is near-singular; clip ulp-scale noise and
+    // raise SingularMoment beyond that. tr is a sum of squared FMAs,
+    // bounded below by 0 structurally, but we guard it the same way
+    // for completeness.
     const tr = Minv.m[0] + Minv.m[3];
+    const det = Minv.det();
+    if (det < -tol.PSD_NEG_REL * tr * tr) return SolveError.SingularMoment;
+    const s_det = @sqrt(@max(det, 0));
     const denom = @sqrt(tr + 2.0 * s_det);
     const eye2: Mat2 = .{ .m = .{ 1, 0, 0, 1 } };
     const Minv_half = Mat2.lincomb(1.0 / denom, Minv, s_det / denom, eye2);
@@ -1108,12 +1121,21 @@ fn dualityGapConstructed(
     s: *GapScratch,
     cert_active_out: []usize,
     cert_lambdas_out: []f64,
-) GapResult {
+) SolveError!GapResult {
     // A's eigendecomposition: V = [b | v₁ | v₂], Λ = diag(SIGMA_0, σ₁, σ₂).
     // Always valid (depends only on A_perp and Q_ortho); returned in GapResult
     // so `solve`'s finalization reuses it without re-decomposing.
     const eAPerp = eig2(A_perp.m);
-    const sigma: [2]f64 = eAPerp.vals;
+    // A_perp is PSD by construction; eig2 can produce ulp-scale negative
+    // eigenvalues from FP noise. Clip noise to 0 (so the sqrt below is
+    // well-defined and downstream M = LᵀZL routes through the Cholesky
+    // null guard as "no progress"), but raise NegativeEigenvalue when
+    // the negative value is meaningful — that signals Newton polish
+    // landed on a non-PSD iterate or eig2 has a bug.
+    const sigma_raw: [2]f64 = eAPerp.vals;
+    const sigma_neg_thr = tol.PSD_NEG_REL * @max(sigma_raw[1], 1.0);
+    if (sigma_raw[0] < -sigma_neg_thr) return SolveError.NegativeEigenvalue;
+    const sigma: [2]f64 = .{ @max(sigma_raw[0], 0), @max(sigma_raw[1], 0) };
     const v1 = Vec3.lincomb(eAPerp.vecs.m[0], Q_ortho.e1, eAPerp.vecs.m[1], Q_ortho.e2);
     const v2 = Vec3.lincomb(eAPerp.vecs.m[2], Q_ortho.e1, eAPerp.vecs.m[3], Q_ortho.e2);
 
@@ -1201,9 +1223,11 @@ fn dualityGapConstructed(
 //   - Errors (`SolveError || Allocator.Error`, signaled via the `!` in
 //     the return type) mean the call could not produce a meaningful
 //     `Info`. Either the host couldn't cooperate (`OutOfMemory`) or the
-//     library miscomputed something internally (`NegativeDualityGap`).
-//     Neither is recoverable from the caller's side, so `try`
-//     propagation is the right default behavior.
+//     library miscomputed something internally (any `SolveError`
+//     variant — each signals a violation of a PSD or duality theorem
+//     beyond floating-point noise). Neither category is recoverable
+//     from the caller's side, so `try` propagation is the right
+//     default behavior.
 //
 //   - `Info.status` describes what the algorithm *found* on the input.
 //     Callers switch on it to dispatch — use the certificate, ask the
@@ -1243,6 +1267,10 @@ pub const Status = enum {
 /// Internal-correctness errors. Distinct from `Allocator.Error` (the
 /// host couldn't allocate) — these mean the library produced a result
 /// that violates a theorem and the bug needs to be surfaced loudly.
+/// All three variants share the same tolerance-band shape: ulp-level
+/// negatives on PSD-invariant values are float noise and silently
+/// clipped; anything beyond `tol.NEG_GAP` / `tol.PSD_NEG_REL`
+/// propagates as a typed error.
 pub const SolveError = error{
     /// The duality-gap computation produced a meaningfully negative
     /// value — either the dual certificate is not actually feasible,
@@ -1251,6 +1279,21 @@ pub const SolveError = error{
     /// ulp-level negatives are float noise and silently ignored;
     /// anything beyond that propagates as this error.
     NegativeDualityGap,
+    /// `eig2(A_perp)` produced a smaller eigenvalue below the
+    /// PSD-noise threshold. A_perp is PSD by construction (it's the
+    /// perpendicular block of the dual ellipsoid), so a meaningfully
+    /// negative eigenvalue means either Newton polish landed on an
+    /// infeasible iterate or `eig2` has a bug. ulp-level negatives
+    /// are clipped to 0; anything beyond `tol.PSD_NEG_REL · max_eig`
+    /// propagates as this error.
+    NegativeEigenvalue,
+    /// `recoverAPerp` saw `det(Minv) < 0` beyond float noise. M is
+    /// PSD by construction (weighted sum of outer products with
+    /// non-negative weights), so its inverse should also be PSD and
+    /// its determinant non-negative. A meaningfully negative det
+    /// signals that M is numerically singular and `recoverAPerp`
+    /// can't proceed.
+    SingularMoment,
 };
 
 pub const Cert = struct {
@@ -1606,8 +1649,8 @@ pub fn solve(
             const m = computeMoments(Ps, w, s_scale);
 
             if (is_full) {
-                const A_perp = recoverAPerp(P_buf, m.M);
-                last_gap = dualityGapConstructed(w, b, Xw, A_perp, Q, &gap_scratch, cert_active, cert_lambdas);
+                const A_perp = try recoverAPerp(P_buf, m.M);
+                last_gap = try dualityGapConstructed(w, b, Xw, A_perp, Q, &gap_scratch, cert_active, cert_lambdas);
                 final_gap = last_gap.gap;
                 cert_n = last_gap.cert_n;
                 // Convergence: |gap| ≤ tol. FP noise can push the gap
