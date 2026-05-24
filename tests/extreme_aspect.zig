@@ -291,3 +291,54 @@ test "coplanarity check flags great-circle inputs" {
     defer unchecked.deinit();
     try std.testing.expect(unchecked.status != sphar.Status.coplanar_input);
 }
+
+test "solve rejects malformed inputs with typed errors" {
+    const allocator = std.testing.allocator;
+    const max_outer: u32 = 10;
+    const valid_tol: f64 = 1e-6;
+    const valid_cop: f64 = 1e-12;
+    const ok_pts = [_][3]f64{
+        .{ 1, 0, 0 },
+        .{ 0, 1, 0 },
+        .{ 0, 0, 1 },
+    };
+
+    // n < 3 → InsufficientPoints. Three cases: empty, one point, two points.
+    try std.testing.expectError(
+        sphar.InputError.InsufficientPoints,
+        sphar.solve(allocator, &[_][3]f64{}, valid_tol, max_outer, valid_cop),
+    );
+    try std.testing.expectError(
+        sphar.InputError.InsufficientPoints,
+        sphar.solve(allocator, ok_pts[0..1], valid_tol, max_outer, valid_cop),
+    );
+    try std.testing.expectError(
+        sphar.InputError.InsufficientPoints,
+        sphar.solve(allocator, ok_pts[0..2], valid_tol, max_outer, valid_cop),
+    );
+
+    // gap_tol: must be finite and positive.
+    try std.testing.expectError(
+        sphar.InputError.InvalidTolerance,
+        sphar.solve(allocator, ok_pts[0..], -1.0, max_outer, valid_cop),
+    );
+    try std.testing.expectError(
+        sphar.InputError.InvalidTolerance,
+        sphar.solve(allocator, ok_pts[0..], 0.0, max_outer, valid_cop),
+    );
+    try std.testing.expectError(
+        sphar.InputError.InvalidTolerance,
+        sphar.solve(allocator, ok_pts[0..], std.math.nan(f64), max_outer, valid_cop),
+    );
+    try std.testing.expectError(
+        sphar.InputError.InvalidTolerance,
+        sphar.solve(allocator, ok_pts[0..], std.math.inf(f64), max_outer, valid_cop),
+    );
+
+    // coplanarity_tol: NaN is the only flagged value (≤ 0 documented as
+    // disable; +inf documented as "reject everything").
+    try std.testing.expectError(
+        sphar.InputError.InvalidTolerance,
+        sphar.solve(allocator, ok_pts[0..], valid_tol, max_outer, std.math.nan(f64)),
+    );
+}

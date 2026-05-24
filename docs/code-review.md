@@ -124,11 +124,15 @@ after the `var last_info = null;` declaration. One-line move per file.
 
 ---
 
-## 4. `halfspaceCheck` on empty input divides by zero, returns `.infeasible` with NaN cert
+## 4. `halfspaceCheck` on empty input divides by zero, returns `.infeasible` with NaN cert — *RESOLVED*
 
 - **Location:** `src/skar.zig` — `halfspaceCheck`'s opening
   `z = z.scale(1.0 / n)` line.
 - **Severity:** wrong status on a precondition-violating input.
+- **Status:** Resolved by adding `if (Xv.len < 3) return
+  InputError.InsufficientPoints;` at the top of `solve`, so empty
+  (and n=1, n=2) inputs are rejected at the boundary as typed
+  errors rather than slipping into halfspaceCheck. Subsumes #7.
 
 With `n=0`, `z.scale(1.0/0.0)` makes `z = (NaN, NaN, NaN)`. The FW
 loop body is empty, `all_positive` stays vacuously true, `nz = NaN
@@ -209,10 +213,16 @@ halfspace-axis distinction.
 
 ---
 
-## 7. `isCoplanarInput` flags n=1 and n=2 as `coplanar_input`, conflating two failure modes
+## 7. `isCoplanarInput` flags n=1 and n=2 as `coplanar_input`, conflating two failure modes — *RESOLVED*
 
 - **Location:** `src/skar.zig` — `isCoplanarInput`'s `tr <= 0` guard.
 - **Severity:** misleading status; caller can't distinguish.
+- **Status:** Resolved alongside #4 by the input-validation pass at
+  the top of `solve`. n < 3 now returns
+  `InputError.InsufficientPoints` before any algorithm code runs;
+  `isCoplanarInput` is never called with n < 3. Its defensive
+  `tr <= 0` guard stays — it still catches all-coincident-points
+  cases at n ≥ 3.
 
 For `n=1`, the centered scatter is identically zero (the single point
 equals its own mean), `tr = 0`, the guard returns true → `solve`
@@ -270,11 +280,17 @@ distinct status.
 
 ---
 
-## 9. `coplanarity_tol = NaN` silently disables the check; `+inf` rejects everything
+## 9. `coplanarity_tol = NaN` silently disables the check; `+inf` rejects everything — *RESOLVED*
 
 - **Location:** `src/skar.zig` — the `if (coplanarity_tol > 0 ...)`
   gate, plus the `4·det < tol·tr²` trigger.
 - **Severity:** input validation gap; silent misbehavior.
+- **Status:** Resolved by validating tolerances at the top of
+  `solve`: NaN `coplanarity_tol` and non-finite-or-non-positive
+  `gap_tol` now return `InputError.InvalidTolerance`. `+inf`
+  `coplanarity_tol` is left as a documented opt-in ("reject
+  everything"); negative `coplanarity_tol` is the documented disable
+  knob.
 
 `NaN > 0` is false, so passing NaN silently disables the check —
 undocumented behavior. The doc says "Pass ≤ 0 to disable" but doesn't

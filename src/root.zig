@@ -18,6 +18,7 @@ pub const Status = skar.Status;
 pub const Cert = skar.Cert;
 pub const Info = skar.Info;
 pub const SolveError = skar.SolveError;
+pub const InputError = skar.InputError;
 
 pub const eig2 = skar.eig2;
 pub const checkFeasibility = skar.checkFeasibility;

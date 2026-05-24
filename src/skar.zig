@@ -1220,14 +1220,16 @@ fn dualityGapConstructed(
 //
 // Two-axis result model for `solve`:
 //
-//   - Errors (`SolveError || Allocator.Error`, signaled via the `!` in
-//     the return type) mean the call could not produce a meaningful
-//     `Info`. Either the host couldn't cooperate (`OutOfMemory`) or the
-//     library miscomputed something internally (any `SolveError`
-//     variant — each signals a violation of a PSD or duality theorem
-//     beyond floating-point noise). Neither category is recoverable
-//     from the caller's side, so `try` propagation is the right
-//     default behavior.
+//   - Errors (signaled via the `!` in the return type, an inferred
+//     union over `SolveError || InputError || Allocator.Error`) mean
+//     the call could not produce a meaningful `Info`. Three sources:
+//     the host couldn't cooperate (`OutOfMemory`); the caller passed
+//     invalid arguments (`InputError`); or the library miscomputed
+//     something internally (`SolveError`, each variant signalling a
+//     PSD or duality theorem violation beyond floating-point noise).
+//     `try` propagation is the right default for all three — the
+//     caller cooperates with allocation / fixes their input / files a
+//     bug against the library, respectively.
 //
 //   - `Info.status` describes what the algorithm *found* on the input.
 //     Callers switch on it to dispatch — use the certificate, ask the
@@ -1294,6 +1296,23 @@ pub const SolveError = error{
     /// signals that M is numerically singular and `recoverAPerp`
     /// can't proceed.
     SingularMoment,
+};
+
+/// Errors signalling the caller passed invalid arguments to `solve`.
+/// Distinct from `SolveError` (which signals internal-correctness
+/// bugs) — these are recoverable from the caller's side by passing
+/// better input.
+pub const InputError = error{
+    /// `X.len < 3`. The SDP is structurally degenerate for fewer
+    /// than 3 input points (the algorithm needs at least one point
+    /// per tangent dimension to define a non-degenerate cone).
+    /// Caller should aggregate / dedupe upstream or fall back to a
+    /// trivial bounding-cone routine.
+    InsufficientPoints,
+    /// A tolerance argument (`gap_tol` or `coplanarity_tol`) was not
+    /// finite, or had an invalid sign. See the parameter docs on
+    /// `solve` for the contract on each.
+    InvalidTolerance,
 };
 
 pub const Cert = struct {
@@ -1550,6 +1569,15 @@ pub fn solve(
     // Cast once: Vec3 is an extern struct over [3]f64, so layout is shared.
     // All internal routines work in []const Vec3.
     const Xv: []const Vec3 = @ptrCast(X);
+
+    // 0) Input validation. Catch malformed caller inputs at the boundary
+    //    so they propagate as typed errors instead of slipping into the
+    //    algorithm where they manifest as NaN-tainted statuses or silent
+    //    perf cliffs. See the InputError doc-comments above for the
+    //    contract on each tolerance.
+    if (Xv.len < 3) return InputError.InsufficientPoints;
+    if (!std.math.isFinite(gap_tol) or gap_tol <= 0) return InputError.InvalidTolerance;
+    if (std.math.isNan(coplanarity_tol)) return InputError.InvalidTolerance;
 
     // 1) Feasibility via Farkas FW.
     const hs = try halfspaceCheck(scratch_alloc, Xv);
