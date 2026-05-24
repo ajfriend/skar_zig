@@ -186,14 +186,8 @@ fn mveeFw(
     inner_tol: f64,
     Ql: []Vec3,
     w: []f64,
-    warm: bool,
 ) void {
-    const n = P.len;
     for (P, 0..) |p, i| Ql[i] = .{ .m = .{ p[0], p[1], 1.0 } };
-    if (!warm) {
-        const inv_n = 1.0 / @as(f64, @floatFromInt(n));
-        for (w) |*wi| wi.* = inv_n;
-    }
 
     var it: u32 = 0;
     while (it < max_iter) : (it += 1) {
@@ -913,12 +907,10 @@ pub fn solve(
     //      collinear in the tangent plane drives the SDP to a degenerate
     //      cone (one tangent eigenvalue → 0) and produces NaN downstream.
     if (opts.coplanarity_tol > 0 and isCoplanarInput(Xw, b, opts.coplanarity_tol)) {
-        // Allocate empty cert slices on the parent allocator so Info.deinit
-        // is uniform across statuses — never frees a static-literal pointer.
-        const indices = try allocator.alloc(u32, 0);
-        errdefer allocator.free(indices);
-        const lambdas = try allocator.alloc(f64, 0);
-        info.cert = .{ .indices = indices, .lambdas = lambdas, .claimed_gap = 0 };
+        // No certificate to emit. `std.mem.Allocator.free` short-circuits
+        // on zero-length slices regardless of pointer provenance, so the
+        // static-literal empty slices in `info.cert` are safe for
+        // `Info.deinit` (no allocation needed here).
         info.status = .coplanar_input;
         return info;
     }
@@ -968,7 +960,7 @@ pub fn solve(
         while (cycle < algo.FW_PER_NEWTON) : (cycle += 1) {
             const is_full = (cycle == algo.FW_PER_NEWTON - 1);
 
-            mveeFw(wb.Ps, 1, 0.0, wb.Ql, wb.w, true);
+            mveeFw(wb.Ps, 1, 0.0, wb.Ql, wb.w);
 
             if (is_full) {
                 if (!newtonPolish(wb.Ql, wb.w, algo.ACTIVE_THRESH, 20, tol.NEWTON_INNER, &wb.newton_scratch)) {

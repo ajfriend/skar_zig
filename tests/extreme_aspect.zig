@@ -193,19 +193,12 @@ test "extreme aspect ratio: three geometries, rotation-invariant" {
             var rot_info = try sphar.solve(allocator, rot_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = 1e-12, .max_outer = max_outer });
             defer rot_info.deinit();
 
-            const ar_delta = @abs(rot_info.aspectRatio() - canon_ar);
-            const ar_tol_abs = ar_rel_tol * canon_ar;
-            const status_ok = rot_info.status == sphar.Status.converged;
-            const gap_ok = @abs(rot_info.cert.claimed_gap) < tol;
-            const ar_ok = ar_delta < ar_tol_abs;
-
-            if (!status_ok or !gap_ok or !ar_ok) {
-                std.debug.print(
-                    "FAIL case={s} k={d} status={any} gap={e} canon_ar={d:.6} rot_ar={d:.6} ar_delta={e}\n",
-                    .{ case.name, k, rot_info.status, rot_info.cert.claimed_gap, canon_ar, rot_info.aspectRatio(), ar_delta },
-                );
-                return error.RotationInvarianceFailure;
-            }
+            // Status + gap + AR all checked via std.testing helpers so
+            // failures get diagnostics for free (and we don't carry dead
+            // hand-rolled-print branches under coverage).
+            try std.testing.expectEqual(sphar.Status.converged, rot_info.status);
+            try std.testing.expect(@abs(rot_info.cert.claimed_gap) < tol);
+            try std.testing.expectApproxEqAbs(canon_ar, rot_info.aspectRatio(), ar_rel_tol * canon_ar);
         }
     }
 }
@@ -348,3 +341,71 @@ test "solve rejects malformed inputs with typed errors" {
         sphar.solve(allocator, ok_pts[0..], .{ .coplanarity_tol = std.math.nan(f64) }),
     );
 }
+
+test "convexHull2d tie-break sort: points sharing an x-coordinate" {
+    // Four hull corners plus five points sharing x = 0; cross-product
+    // collapse leaves the hull at 4. The five tied-on-x points
+    // exercise the y-fallback branch in halfspace.HullCtx.lessThan.
+    const allocator = std.testing.allocator;
+    const convexHull2d = sphar._internal.halfspace.convexHull2d;
+    const P = [_][2]f64{
+        .{ -1, -1 }, .{ 1, -1 }, .{ 1, 1 }, .{ -1, 1 },
+        .{ 0, -0.5 }, .{ 0, 0.5 }, .{ 0, 0 }, .{ 0, -0.25 }, .{ 0, 0.25 },
+    };
+    const hull_idx = try allocator.alloc(u32, P.len);
+    defer allocator.free(hull_idx);
+    const nh = try convexHull2d(allocator, &P, hull_idx);
+    try std.testing.expectEqual(@as(u32, 4), nh);
+}
+
+// FailingAllocator-based tests targeting the errdefer cleanup paths
+// in solve's three cert-allocation sites. fail_index is the count of
+// allocator calls (counted from 0) at which OutOfMemory is returned;
+// we tune it to fire AFTER the first cert alloc succeeds (so the
+// errdefer on `indices` is hit) but on the second.
+
+fn runWithFailIndex(fail_index: usize, X: []const [3]f64, opts: sphar.SolveOptions) !sphar.Info {
+    var fa = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = fail_index });
+    return sphar.solve(fa.allocator(), X, opts);
+}
+
+test "OOM partway through buildPrimalCert hits the indices errdefer" {
+    // Small 3-point input — converged path runs buildPrimalCert at
+    // the end. Per a one-time probe, this case uses 5 parent-allocator
+    // calls total: arena init + 2 scratch page pulls + cert.indices +
+    // cert.lambdas. fail_index = 4 fails the lambdas alloc, leaving
+    // indices allocated → errdefer cleans up.
+    const half = std.math.pi / 4.0;
+    var pts: [3][3]f64 = .{
+        .{ @cos(-half), @sin(-half), 0.1 },
+        .{ 1.0, 0.0, -0.1 },
+        .{ @cos(half), @sin(half), 0.1 },
+    };
+    for (&pts) |*p| {
+        const n = @sqrt(p.*[0] * p.*[0] + p.*[1] * p.*[1] + p.*[2] * p.*[2]);
+        p.*[0] /= n;
+        p.*[1] /= n;
+        p.*[2] /= n;
+    }
+    try std.testing.expectError(error.OutOfMemory, runWithFailIndex(4, pts[0..], .{}));
+}
+
+test "OOM partway through buildFarkasCert hits the indices errdefer" {
+    // Three equiangular equatorial points (120° apart) — the convex
+    // hull contains the origin, so no hemisphere fits all three;
+    // solve takes the .infeasible branch and calls buildFarkasCert.
+    // Same fail_index = 2 logic.
+    const c120 = -0.5;
+    const s120 = @sqrt(3.0) / 2.0;
+    const pts = [_][3]f64{
+        .{ 1.0, 0.0, 0.0 },
+        .{ c120, s120, 0.0 },
+        .{ c120, -s120, 0.0 },
+    };
+    try std.testing.expectError(
+        error.OutOfMemory,
+        runWithFailIndex(2, &pts, .{ .coplanarity_tol = -1 }),
+    );
+}
+
+

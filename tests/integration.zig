@@ -93,12 +93,10 @@ test "converged cases match C baseline AR" {
         // AR agrees with C baseline to within solve tolerance. Zig and C
         // are independent numerical algorithms; the certified duality gap
         // is the source of truth for correctness, not cross-implementation
-        // AR equality.
-        const delta = @abs(info.aspectRatio() - exp.ar);
-        if (delta > tol) {
-            std.debug.print("case={s} zig_ar={d:.17} c_ar={d:.17} delta={e:.3}\n", .{ exp.name, info.aspectRatio(), exp.ar, delta });
-            return error.AspectRatioMismatch;
-        }
+        // AR equality. expectApproxEqAbs prints both values + delta on
+        // failure; the case index in the EXPECTED slice identifies which
+        // input tripped it.
+        try std.testing.expectApproxEqAbs(exp.ar, info.aspectRatio(), tol);
 
         // Feasibility: ‖Ax_i‖ ≤ b·x_i for all i (tol includes numerics buffer).
         const viol = sphar.checkFeasibility(info, X);

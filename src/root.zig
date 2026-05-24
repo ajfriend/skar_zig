@@ -27,3 +27,14 @@ pub const SolveOptions = skar.SolveOptions;
 
 pub const checkFeasibility = skar.checkFeasibility;
 pub const solve = skar.solve;
+
+/// Internal modules surfaced for in-tree tests only. Not for external
+/// callers — these aren't covered by the public-API stability promise
+/// and may be renamed or removed without notice. Used to exercise
+/// internal helpers (e.g. `convexHull2d` tie-break, `halfspaceCheck`
+/// early-exits) that aren't reachable through `solve` for all inputs.
+pub const _internal = struct {
+    pub const halfspace = @import("halfspace.zig");
+    pub const newton = @import("newton.zig");
+    pub const config = @import("config.zig");
+};
