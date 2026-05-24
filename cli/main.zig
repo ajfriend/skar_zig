@@ -137,6 +137,7 @@ pub fn main() !void {
     defer allocator.free(times);
 
     var last_info: ?sphar.Info = null;
+    defer if (last_info) |*li| li.deinit();
     for (0..n_runs) |r| {
         const t0 = std.time.nanoTimestamp();
         const info = try sphar.solve(allocator, X, args.tol, N_HULL, 1e-12);
@@ -145,7 +146,6 @@ pub fn main() !void {
         if (last_info) |*li| li.deinit();
         last_info = info;
     }
-    defer if (last_info) |*li| li.deinit();
 
     var sum: f64 = 0;
     for (times) |t| sum += t;

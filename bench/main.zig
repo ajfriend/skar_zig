@@ -53,6 +53,7 @@ pub fn main() !void {
         defer allocator.free(times);
 
         var last_info: ?sphar.Info = null;
+        defer if (last_info) |*li| li.deinit();
         for (0..N_RUNS) |r| {
             const t0 = std.time.nanoTimestamp();
             const info = try sphar.solve(allocator, X, TOL, 10, 1e-12);
@@ -61,7 +62,6 @@ pub fn main() !void {
             if (last_info) |*li| li.deinit();
             last_info = info;
         }
-        defer if (last_info) |*li| li.deinit();
 
         std.mem.sort(f64, times, {}, cmpF64);
         const t_min = times[0];

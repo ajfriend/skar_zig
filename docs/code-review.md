@@ -85,11 +85,15 @@ finding #1.
 
 ---
 
-## 3. `defer if (last_info) |*li| li.deinit();` registered after the loop
+## 3. `defer if (last_info) |*li| li.deinit();` registered after the loop — *RESOLVED*
 
 - **Location:** `cli/main.zig` (the warmup + timed loops) and
   `bench/main.zig` (the timed loop).
 - **Severity:** real leak under mid-loop error paths.
+- **Status:** Resolved by moving the `defer` to immediately after the
+  `var last_info` declaration in both files. Warmup loops use
+  `catch continue` + a local `info.deinit()` and were already
+  leak-free. Mechanical one-line move per file.
 
 In both files the pattern is:
 
