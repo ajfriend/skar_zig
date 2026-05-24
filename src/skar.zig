@@ -1323,6 +1323,105 @@ pub fn checkFeasibility(info: Info, X: []const [3]f64) f64 {
     return max_viol;
 }
 
+// ----------------------------------------------------------------
+// Preprocessing helpers used by `solve`
+// ----------------------------------------------------------------
+
+/// Build a Farkas infeasibility certificate from the halfspace result.
+/// Keeps only the nonzero (above-threshold) λ entries with their original
+/// indices. `claimed_gap` holds the Farkas residual ‖Σ λᵢ xᵢ‖.
+fn buildFarkasCert(allocator: std.mem.Allocator, hs: HalfspaceResult) !Cert {
+    var k: u32 = 0;
+    for (hs.lam) |l| if (l > ACTIVE_THRESH) {
+        k += 1;
+    };
+    const indices = try allocator.alloc(u32, k);
+    const lambdas = try allocator.alloc(f64, k);
+    var j: u32 = 0;
+    for (hs.lam, 0..) |l, i| {
+        if (l > ACTIVE_THRESH) {
+            indices[j] = @intCast(i);
+            lambdas[j] = l;
+            j += 1;
+        }
+    }
+    return .{ .indices = indices, .lambdas = lambdas, .claimed_gap = hs.residual };
+}
+
+const HullResult = struct {
+    /// The working point set the solver should iterate on. Either the hull
+    /// subset (when reduction fired) or the original input (when disabled,
+    /// skipped, or the hull collapsed to < 3 vertices).
+    Xw: []const Vec3,
+    /// Indices into the original X[] for each point in Xw. `null` when no
+    /// reduction was performed (Xw == Xv); the solver uses the identity
+    /// mapping in that case.
+    work_to_orig: ?[]const u32,
+};
+
+/// Optional convex-hull preprocessing. If `n_hull >= 0` and there are more
+/// than `n_hull` points, project to the tangent plane at b, run Andrew's
+/// monotone chain, and keep only the hull vertices. Falls back to the
+/// original input on disable, small n, or hull-collapse (< 3 vertices).
+fn hullPreprocess(
+    scratch: std.mem.Allocator,
+    Xv: []const Vec3,
+    b: Vec3,
+    n_hull: i32,
+) !HullResult {
+    var result = HullResult{ .Xw = Xv, .work_to_orig = null };
+    if (n_hull < 0 or Xv.len <= @as(usize, @intCast(n_hull))) return result;
+
+    const Qh = b.orthoBasis();
+    const P2 = try scratch.alloc([2]f64, Xv.len);
+    for (Xv, 0..) |xi, i| {
+        P2[i] = Qh.applyT(xi).m;
+    }
+    const hull_idx = try scratch.alloc(u32, Xv.len);
+    const nh = try convexHull2d(scratch, P2, hull_idx);
+    if (nh >= 3) {
+        const Xhull = try scratch.alloc(Vec3, nh);
+        for (0..nh) |i| Xhull[i] = Xv[hull_idx[i]];
+        result.Xw = Xhull;
+        result.work_to_orig = hull_idx[0..nh];
+    }
+    return result;
+}
+
+/// True iff the points lie (approximately) in a 2D subspace through the
+/// origin — i.e., on a single great circle. Projects to the tangent plane
+/// at b and tests the 2×2 centered scatter via `4·det(C) < tol · trace(C)²`.
+/// That's the cancellation-safe form of `λ_min/λ_max` for ill-conditioned C
+/// (the literal `(T − √(T² − 4D))/2` form loses precision exactly where the
+/// check needs to fire). Scale-invariant "fraction of isotropic" ∈ [0, 1]:
+/// 1 for a circular scatter, → 0 for a perfect line. Tight clusters on the
+/// sphere (e.g. H3 res-15) have full-rank 2D scatter regardless of absolute
+/// scale, so this correctly distinguishes them from genuinely rank-deficient
+/// input.
+fn isCoplanarInput(points: []const Vec3, b: Vec3, threshold: f64) bool {
+    const Qh = b.orthoBasis();
+    var ps0: f64 = 0;
+    var ps1: f64 = 0;
+    var s00: f64 = 0;
+    var s01: f64 = 0;
+    var s11: f64 = 0;
+    for (points) |xi| {
+        const p = Qh.applyT(xi);
+        ps0 += p.m[0];
+        ps1 += p.m[1];
+        s00 += p.m[0] * p.m[0];
+        s01 += p.m[0] * p.m[1];
+        s11 += p.m[1] * p.m[1];
+    }
+    const inv_n = 1.0 / @as(f64, @floatFromInt(points.len));
+    const c00 = s00 - ps0 * ps0 * inv_n;
+    const c01 = s01 - ps0 * ps1 * inv_n;
+    const c11 = s11 - ps1 * ps1 * inv_n;
+    const tr = c00 + c11;
+    const det = c00 * c11 - c01 * c01;
+    return tr <= 0 or 4.0 * det < threshold * tr * tr;
+}
+
 /// Main solver. `n_hull` convex-hull threshold: if n > n_hull, reduce to hull.
 /// Pass -1 to disable, 0 to always hull, 10 for the default.
 ///
@@ -1374,93 +1473,25 @@ pub fn solve(
     if (hs.b) |bb| {
         b = bb;
     } else {
-        // Infeasible: populate Farkas cert from hs.lam. Allocate on the
-        // parent allocator since it's returned to the caller.
-        var k: u32 = 0;
-        for (hs.lam) |l| if (l > ACTIVE_THRESH) {
-            k += 1;
-        };
-        const indices = try allocator.alloc(u32, k);
-        const lambdas = try allocator.alloc(f64, k);
-        var j: u32 = 0;
-        for (hs.lam, 0..) |l, i| {
-            if (l > ACTIVE_THRESH) {
-                indices[j] = @intCast(i);
-                lambdas[j] = l;
-                j += 1;
-            }
-        }
+        // Infeasible: Farkas cert lives on the parent allocator since it's
+        // returned to the caller.
         info.status = .infeasible;
-        info.cert = .{ .indices = indices, .lambdas = lambdas, .claimed_gap = hs.residual };
+        info.cert = try buildFarkasCert(allocator, hs);
         return info;
     }
 
     // 2) Optional hull preprocessing.
-    var Xw_storage: []const Vec3 = Xv;
-    var work_to_orig: ?[]const u32 = null;
-
-    if (n_hull >= 0 and X.len > @as(usize, @intCast(n_hull))) {
-        const n = X.len;
-        const Qh = b.orthoBasis();
-        const P2 = try scratch_alloc.alloc([2]f64, n);
-        for (Xv, 0..) |xi, i| {
-            P2[i] = Qh.applyT(xi).m;
-        }
-        const hull_idx = try scratch_alloc.alloc(u32, n);
-        const nh = try convexHull2d(scratch_alloc, P2, hull_idx);
-        if (nh >= 3) {
-            const Xhull = try scratch_alloc.alloc(Vec3, nh);
-            for (0..nh) |i| Xhull[i] = Xv[hull_idx[i]];
-            Xw_storage = Xhull;
-            work_to_orig = hull_idx[0..nh];
-        }
-    }
-
-    const Xw = Xw_storage;
+    const hp = try hullPreprocess(scratch_alloc, Xv, b, n_hull);
+    const Xw = hp.Xw;
+    const work_to_orig = hp.work_to_orig;
     const nw = Xw.len;
 
-    // 2.5) Coplanarity check. Reject inputs where the working set lies in a
-    //      2D subspace through the origin (i.e., on a single great circle).
-    //      Such inputs drive the optimum to a degenerate cone (one tangent
-    //      eigenvalue → 0) and produce NaN downstream. Projecting to the
-    //      tangent plane at b reduces this to a 2D rank check: the
-    //      projected points are collinear iff the 3D points are coplanar
-    //      with the origin. Scale-invariant "fraction of isotropic" via
-    //      4·det / trace² ∈ [0, 1] on the 2×2 centered scatter C — 1 for
-    //      isotropic (circular), → 0 for collinear. Equivalent to the
-    //      cancellation-safe form of λ_min/λ_max for ill-conditioned C
-    //      (where (T − √(T² − 4D))/2 loses precision). Tight clusters on
-    //      the sphere (e.g. H3 res-15) have full-rank 2D scatter
-    //      regardless of absolute scale, so this correctly distinguishes
-    //      them from genuinely rank-deficient input. Runs on Xw (the
-    //      hulled subset when hull preprocessing fired) so an input
-    //      whose hull is collinear gets caught even if the full cloud
-    //      jitter looked full-rank. Disabled by coplanarity_tol < 0.
-    if (coplanarity_tol >= 0) {
-        const Qh = b.orthoBasis();
-        var ps0: f64 = 0;
-        var ps1: f64 = 0;
-        var s00: f64 = 0;
-        var s01: f64 = 0;
-        var s11: f64 = 0;
-        for (Xw) |xi| {
-            const p = Qh.applyT(xi);
-            ps0 += p.m[0];
-            ps1 += p.m[1];
-            s00 += p.m[0] * p.m[0];
-            s01 += p.m[0] * p.m[1];
-            s11 += p.m[1] * p.m[1];
-        }
-        const inv_n = 1.0 / @as(f64, @floatFromInt(nw));
-        const c00 = s00 - ps0 * ps0 * inv_n;
-        const c01 = s01 - ps0 * ps1 * inv_n;
-        const c11 = s11 - ps1 * ps1 * inv_n;
-        const tr = c00 + c11;
-        const det = c00 * c11 - c01 * c01;
-        if (tr <= 0 or 4.0 * det < coplanarity_tol * tr * tr) {
-            info.status = .coplanar_input;
-            return info;
-        }
+    // 2.5) Coplanarity check on the hulled subset — an input whose hull is
+    //      collinear in the tangent plane drives the SDP to a degenerate
+    //      cone (one tangent eigenvalue → 0) and produces NaN downstream.
+    if (coplanarity_tol >= 0 and isCoplanarInput(Xw, b, coplanarity_tol)) {
+        info.status = .coplanar_input;
+        return info;
     }
 
     // 3) Working buffers (all in the arena).
