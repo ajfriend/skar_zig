@@ -1226,11 +1226,17 @@ pub const Status = enum {
     /// `Info.sigma` reflect the last iterate (near-feasible but
     /// uncertified).
     did_not_converge,
-    /// Coplanarity check rejected the input before iteration: all
-    /// points lie in a 2D subspace through the origin, so the SDP is
-    /// degenerate (one tangent eigenvalue → 0). `Info` is otherwise
-    /// empty. Disable the check by passing `coplanarity_tol < 0` to
-    /// `solve` if you want to handle this case yourself.
+    /// Coplanarity check rejected the input before iteration: the
+    /// points' tangent-plane projections at the feasible axis form a
+    /// near-collinear 2D scatter, so the SDP would be degenerate
+    /// (one tangent eigenvalue → 0). The literal "coplanar with the
+    /// origin" case (all points on a great circle) is the dominant
+    /// instance, but the check is slightly broader — short arcs on
+    /// non-equatorial latitude circles can also project to a near-line
+    /// in the tangent plane and trigger this. Either way the solver
+    /// can't produce a meaningful cone. `Info` is otherwise empty.
+    /// Disable the check by passing `coplanarity_tol ≤ 0` to `solve`
+    /// if you want to handle this case yourself.
     coplanar_input,
 };
 

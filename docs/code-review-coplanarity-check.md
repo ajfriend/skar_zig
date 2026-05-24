@@ -229,10 +229,15 @@ get flagged as coplanar_input" — i.e., use `if (sphar.solve(...))
 
 ---
 
-## 8. Name vs behavior — `coplanar_input` actually detects "near-collinear in tangent plane"
+## 8. Name vs behavior — `coplanar_input` actually detects "near-collinear in tangent plane" — *RESOLVED (doc only)*
 
 - **Location:** `src/skar.zig` — the geometric meaning of the status.
 - **Severity:** semantic / naming.
+- **Status:** Resolved with a docstring tweak rather than a rename
+  (renaming churns the public API). The `Status.coplanar_input` doc
+  now spells out that the detection is slightly broader than the
+  literal name — short arcs on non-equatorial latitude circles can
+  also trip it via near-collinear tangent-plane projections.
 
 The status name and docstring frame this as "points coplanar with the
 origin." Operationally the check measures "2D scatter rank after
