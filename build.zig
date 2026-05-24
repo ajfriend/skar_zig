@@ -56,11 +56,18 @@ pub fn build(b: *std.Build) void {
     });
     tests_mod.addImport("skar", skar_mod);
     tests_mod.addImport("cases", cases_mod);
-    const tests = b.addTest(.{ .root_module = tests_mod });
+    const tests = b.addTest(.{ .name = "skar-test", .root_module = tests_mod });
     const run_tests = b.addRunArtifact(tests);
     run_tests.setCwd(b.path(""));
     const test_step = b.step("test", "Run skar tests");
     test_step.dependOn(&run_tests.step);
+
+    // `zig build install-test` produces `zig-out/bin/skar-test`, the
+    // test binary built without running. Used by the kcov-based
+    // coverage recipe in the justfile.
+    const install_test = b.addInstallArtifact(tests, .{});
+    const install_test_step = b.step("install-test", "Install the test binary at zig-out/bin/skar-test");
+    install_test_step.dependOn(&install_test.step);
 
     const run_bench = b.addRunArtifact(bench_exe);
     run_bench.setCwd(b.path(""));

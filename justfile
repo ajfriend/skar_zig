@@ -1,14 +1,26 @@
 _:
     just --list
 
+# Build, run tests under kcov, fail if line coverage isn't 100%.
+test:
+    zig build install-test
+    rm -rf coverage
+    kcov --include-pattern=src/,tests/ coverage zig-out/bin/skar-test
+    @jq -r '"skar coverage: \(.percent_covered)%"' coverage/skar-test.*/coverage.json
+    @jq -e '.percent_covered == "100.00"' coverage/skar-test.*/coverage.json > /dev/null
+
+# Build the library and CLI / bench binaries (optimized).
 build:
     zig build -Doptimize=ReleaseFast
 
-test:
-    zig build test --summary all
+# Run `just test` and print where the HTML coverage report landed.
+coverage: test
+    @echo "open coverage/skar-test/index.html"
 
+# Run the benchmark suite (uses the release-built binary from `just build`).
 bench: build
     ./zig-out/bin/skar-bench
 
+# Remove build artifacts and coverage output.
 clean:
-    rm -rf zig-out .zig-cache
+    rm -rf zig-out .zig-cache coverage
