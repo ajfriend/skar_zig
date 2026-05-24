@@ -83,8 +83,6 @@ const tol = struct {
     const UNDERFLOW: f64 = 1e-300;
     /// eig2: |b|/scale relative threshold for closed-form vs. axis-aligned fallback.
     const EIG2_REL: f64 = 1e-8;
-    /// dualityGapConstructed: relative PSD slack on Z eigenvalues (broken-cert cutoff).
-    const CS_PSD_REL: f64 = 1e-3;
 };
 
 // ----------------------------------------------------------------
@@ -402,38 +400,6 @@ pub const Mat3 = struct {
     /// Symmetrize: returns (self + selfᵀ) / 2.
     pub inline fn symmetrize(self: Mat3) Mat3 {
         return Mat3.lincomb(0.5, self, 0.5, self.transpose());
-    }
-
-    /// Three eigenvalues of a symmetric 3×3, sorted ascending. Caller must
-    /// ensure self is symmetric (upper == lower). Uses the closed-form
-    /// trigonometric formula for cubic roots — stable and branch-light.
-    pub fn symEigvals(self: Mat3) [3]f64 {
-        const m = self.m;
-        const p1 = m[1] * m[1] + m[2] * m[2] + m[5] * m[5];
-        if (p1 == 0) {
-            var e: [3]f64 = .{ m[0], m[4], m[8] };
-            std.mem.sort(f64, &e, {}, std.sort.asc(f64));
-            return e;
-        }
-        const q = (m[0] + m[4] + m[8]) / 3.0;
-        const p2 = (m[0] - q) * (m[0] - q) + (m[4] - q) * (m[4] - q) + (m[8] - q) * (m[8] - q) + 2.0 * p1;
-        const p = @sqrt(p2 / 6.0);
-        const B: Mat3 = .{ .m = .{
-            (m[0] - q) / p, m[1] / p, m[2] / p,
-            m[1] / p, (m[4] - q) / p, m[5] / p,
-            m[2] / p, m[5] / p, (m[8] - q) / p,
-        } };
-        var r = B.det() / 2.0;
-        if (r > 1.0) r = 1.0;
-        if (r < -1.0) r = -1.0;
-        const phi = std.math.acos(r) / 3.0;
-        var e1 = q + 2.0 * p * @cos(phi);
-        var e3 = q + 2.0 * p * @cos(phi + 2.0 * std.math.pi / 3.0);
-        var e2 = 3.0 * q - e1 - e3;
-        if (e1 > e2) std.mem.swap(f64, &e1, &e2);
-        if (e2 > e3) std.mem.swap(f64, &e2, &e3);
-        if (e1 > e2) std.mem.swap(f64, &e1, &e2);
-        return .{ e1, e2, e3 };
     }
 
     /// Cholesky: returns L (lower-triangular, upper zeroed) such that
@@ -1192,14 +1158,12 @@ fn dualityGapConstructed(
         L0.m[2], L1.m[2], L2.m[2],
     } };
 
-    // M = Lᵀ · Z · L. eig(M) = eig(A·Z); eigenvalues
-    // cluster near 1 at convergence, so closed-form eig on it is stable.
+    // M = Lᵀ · Z · L. eig(M) = eig(A·Z); eigenvalues cluster near 1 at
+    // convergence, so Cholesky on M is well-conditioned. A failed pivot
+    // is the indefinite-dual guard — Z not PSD enough for log det.
     const M = L.transpose().mul(Z).mul(L).symmetrize();
-    const m_eigs = M.symEigvals();
-
-    // Indefinite-dual guard: Z must be PSD for log det to be defined.
-    const neg_tol = tol.CS_PSD_REL * @max(m_eigs[2], 1.0);
-    if (m_eigs[0] < -neg_tol) return .{ .gap = 1e30, .cert_n = 0, .v1 = v1, .v2 = v2, .sigma = sigma };
+    const Lm = M.cholesky() orelse
+        return .{ .gap = 1e30, .cert_n = 0, .v1 = v1, .v2 = v2, .sigma = sigma };
 
     var w_sum = Vec3.zero;
     for (0..k) |i| {
@@ -1217,8 +1181,7 @@ fn dualityGapConstructed(
     // Routing through M (eigenvalues near 1 at convergence) avoids the
     // ~1e-3 error that sum-of-logs on Z's own ill-conditioned eigenvalues
     // would suffer (hex-degenerate cases, κ(Z) ~ 1e7).
-    var log_det_M: f64 = 0;
-    for (m_eigs) |e| log_det_M += @log(@max(e, tol.UNDERFLOW));
+    const log_det_M = 2.0 * (@log(Lm.m[0]) + @log(Lm.m[4]) + @log(Lm.m[8]));
     const gap = w_sum.norm() - 3.0 - log_det_M;
     return .{
         .gap = gap,
