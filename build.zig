@@ -11,7 +11,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const cases_mod = b.addModule("cases", .{
-        .root_source_file = b.path("src/cases.zig"),
+        .root_source_file = b.path("tests/cases.zig"),
         .target = target,
         .optimize = optimize,
     });

@@ -6,33 +6,12 @@
 
 const std = @import("std");
 const sphar = @import("skar");
+const cases = @import("cases");
 const Vec3 = sphar.Vec3;
+const loadCase = cases.loadCase;
 
 comptime {
     _ = @import("extreme_aspect.zig");
-}
-
-fn loadCase(allocator: std.mem.Allocator, path: []const u8) ![][3]f64 {
-    const content = try std.fs.cwd().readFileAlloc(allocator, path, 10 * 1024 * 1024);
-    defer allocator.free(content);
-
-    var pts = std.ArrayList([3]f64){};
-    defer pts.deinit(allocator);
-
-    var line_it = std.mem.tokenizeScalar(u8, content, '\n');
-    while (line_it.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t\r");
-        if (trimmed.len == 0 or trimmed[0] == '#') continue;
-        var tok_it = std.mem.tokenizeAny(u8, trimmed, " \t");
-        var xyz: [3]f64 = undefined;
-        var i: usize = 0;
-        while (tok_it.next()) |tok| : (i += 1) {
-            if (i >= 3) break;
-            xyz[i] = try std.fmt.parseFloat(f64, tok);
-        }
-        if (i == 3) try pts.append(allocator, xyz);
-    }
-    return pts.toOwnedSlice(allocator);
 }
 
 const ExpectedAr = struct { name: []const u8, ar: f64 };
