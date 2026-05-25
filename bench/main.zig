@@ -73,7 +73,7 @@ pub fn main() !void {
                 .infeasible => "infeas",
                 .did_not_converge => "DNC",
             };
-            // Per-variant: only Converged/PartialInfo carry iteration
+            // Per-variant: only Converged/DidNotConverge carry iteration
             // counters; Infeasible bails in halfspaceCheck before iterating.
             // Aspect ratio is only meaningful on Converged.
             var outer_iters: u32 = 0;
@@ -89,7 +89,7 @@ pub fn main() !void {
                     outer_iters = p.outer_iters;
                     newton_polish_failures = p.newton_polish_failures;
                     // Uncertified ratio from the last iterate — useful when
-                    // chasing a DNC regression. `PartialInfo` intentionally
+                    // chasing a DNC regression. `DidNotConverge` intentionally
                     // omits an `aspectRatio()` method since the value isn't
                     // certified; compute it inline here.
                     aspect_ratio = p.sigma[2] / p.sigma[1];

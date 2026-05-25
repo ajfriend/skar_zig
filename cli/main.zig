@@ -88,7 +88,7 @@ fn writeRecord(w: anytype, args: Args, outcome: sphar.Outcome, time_s: f64) !voi
     try w.print("\"time_s\":{d}", .{time_s});
 
     // Iteration counters are 0 on Infeasible (bails in halfspaceCheck
-    // before iterating). Only Converged and PartialInfo carry them.
+    // before iterating). Only Converged and DidNotConverge carry them.
     var outer_iters: u32 = 0;
     var newton_polish_failures: u32 = 0;
 
@@ -104,7 +104,7 @@ fn writeRecord(w: anytype, args: Args, outcome: sphar.Outcome, time_s: f64) !voi
             try w.print("],\"sigma\":[{d},{d},{d}],", .{ c.sigma[0], c.sigma[1], c.sigma[2] });
             try w.writeAll("\"lambdas\":");
             try writeLambdas(w, c.cert.indices, c.cert.lambdas);
-            try w.print(",\"claimed_gap\":{d}", .{c.cert.claimed_gap});
+            try w.print(",\"gap\":{d}", .{c.gap});
             outer_iters = c.outer_iters;
             newton_polish_failures = c.newton_polish_failures;
         },

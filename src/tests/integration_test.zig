@@ -109,7 +109,7 @@ test "converged cases match C baseline AR" {
         try std.testing.expect(c.aspectRatio() >= 1.0 - 1e-10);
         // Gap: nonneg by weak duality (solver raises on meaningfully-negative
         // gap; ulp-level negatives can slip through here, hence |gap|).
-        try std.testing.expect(@abs(c.cert.claimed_gap) < tol);
+        try std.testing.expect(@abs(c.gap) < tol);
 
         // AR agrees with C baseline to within solve tolerance. Zig and C
         // are independent numerical algorithms; the certified duality gap

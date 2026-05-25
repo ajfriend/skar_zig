@@ -42,7 +42,7 @@
 //!
 //! Invariants asserted per (case, rotation):
 //!   - status == converged within max_outer iterations
-//!   - |claimed_gap| < tol (the converged certificate is valid)
+//!   - |gap| < tol (the converged certificate is valid)
 //!   - aspect ratio matches the canonical (unrotated) AR to within
 //!     `ar_rel_tol · canon_ar` (relative tolerance: ulp-level rotation
 //!     noise gets amplified by the optimum's ill-conditioning, so an
@@ -178,7 +178,7 @@ fn checkRotationInvariance(
             return error.RotationNotConverged;
         },
     };
-    const gap_abs = @abs(c.cert.claimed_gap);
+    const gap_abs = @abs(c.gap);
     if (gap_abs >= tol) {
         std.debug.print(
             "rotation gap exceeds tol case={s} k={d}: |gap|={e:.3} tol={e:.3}\n",
@@ -213,9 +213,10 @@ test "checkRotationInvariance: gap branch prints case+k label" {
     const fake: sphar.Outcome = .{ .converged = .{
         .Q = sphar.Mat3.zero,
         .sigma = .{ 0, 1, 1 },
+        .gap = 1.0,
         .outer_iters = 0,
         .newton_polish_failures = 0,
-        .cert = .{ .indices = &[_]u32{}, .lambdas = &[_]f64{}, .claimed_gap = 1.0 },
+        .cert = .{ .indices = &[_]u32{}, .lambdas = &[_]f64{} },
         .allocator = std.testing.allocator,
     } };
     try std.testing.expectError(
@@ -230,9 +231,10 @@ test "checkRotationInvariance: AR branch prints case+k label" {
     const fake: sphar.Outcome = .{ .converged = .{
         .Q = sphar.Mat3.zero,
         .sigma = .{ 0, 1, 2 },
+        .gap = 0,
         .outer_iters = 0,
         .newton_polish_failures = 0,
-        .cert = .{ .indices = &[_]u32{}, .lambdas = &[_]f64{}, .claimed_gap = 0 },
+        .cert = .{ .indices = &[_]u32{}, .lambdas = &[_]f64{} },
         .allocator = std.testing.allocator,
     } };
     try std.testing.expectError(
@@ -269,7 +271,7 @@ test "extreme aspect ratio: three geometries, rotation-invariant" {
 
         try std.testing.expect(std.meta.activeTag(canon_outcome) == .converged);
         const canon_c = canon_outcome.converged;
-        try std.testing.expect(@abs(canon_c.cert.claimed_gap) < tol);
+        try std.testing.expect(@abs(canon_c.gap) < tol);
         const canon_ar = canon_c.aspectRatio();
         // Each case here has AR far above the existing-suite max of 1.09.
         try std.testing.expect(canon_ar > 50.0);

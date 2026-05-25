@@ -46,7 +46,7 @@ pub fn main() !void {
             const aspect = c.aspectRatio();
             std.debug.print("converged: aspect ratio = {d:.6}\n", .{aspect});
             std.debug.print("  cone axis     b = ({d:.4}, {d:.4}, {d:.4})\n", .{ b.m[0], b.m[1], b.m[2] });
-            std.debug.print("  duality gap     = {e:.3}\n", .{c.cert.claimed_gap});
+            std.debug.print("  duality gap     = {e:.3}\n", .{c.gap});
             std.debug.print("  outer iters     = {d}\n", .{c.outer_iters});
             std.debug.print("  active in cert  = {d} of {d} input points\n", .{ c.cert.indices.len, points.len });
         },
@@ -60,9 +60,9 @@ pub fn main() !void {
         .did_not_converge => |p| {
             // Solver hit `max_outer` without closing the gap. The
             // last iterate is in p.Q / p.sigma but isn't a verified
-            // certificate; p.cert.claimed_gap holds the last computed gap.
+            // certificate; p.last_gap holds the last computed gap.
             std.debug.print("did_not_converge: hit max iterations ({d})\n", .{p.outer_iters});
-            std.debug.print("  last gap = {e:.3}\n", .{p.cert.claimed_gap});
+            std.debug.print("  last gap = {e:.3}\n", .{p.last_gap});
         },
     }
 }

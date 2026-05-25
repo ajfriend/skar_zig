@@ -585,34 +585,21 @@ pub const SolveOptions = struct {
 };
 
 /// Primal certificate for a converged or last-iterate solve.
-/// `indices` / `lambdas` are paired arrays giving the active set's
-/// indices into the caller's `X[]` and their dual weights (λ ≥ 0,
-/// ∑λ = 1).
-pub const PrimalCert = struct {
-    indices: []u32,
-    lambdas: []f64,
-    /// On `Converged`: the certified duality gap |primal − dual| (≤ `gap_tol`).
-    /// On `PartialInfo`: the last computed gap from the final outer
-    /// iteration. May be near zero (almost converged) or large (the
-    /// solver gave up far from optimal); inspect alongside `outer_iters`
-    /// rather than as a uniform quality metric.
-    claimed_gap: f64,
-};
-
-/// Farkas infeasibility certificate. `indices` / `lambdas` are the
-/// non-zero entries of a vector λ ≥ 0 with ∑λ = 1 such that
-/// ‖∑ λᵢ xᵢ‖ is small (the Farkas residual lives on the enclosing
-/// `Infeasible` variant as `residual`).
-pub const FarkasCert = struct {
+/// Active-set certificate. `indices` / `lambdas` are paired arrays:
+/// the indices into the caller's `X[]` of the active input points and
+/// their dual weights (λ ≥ 0, ∑λ = 1). Shared across all three
+/// outcome variants; the per-variant scalar (gap / residual) lives on
+/// the variant itself.
+pub const Cert = struct {
     indices: []u32,
     lambdas: []f64,
 };
 
-/// Successful solve. Carries the full eigendecomposition of A and a
-/// primal certificate. Methods (`aspectRatio`, `b`, `A`) are defined
-/// here, not on `Outcome`, so a caller must switch on the union tag
-/// first — by construction they can't accidentally read these on a
-/// non-converged outcome.
+/// Successful solve. Carries the full eigendecomposition of A, the
+/// certified duality gap, and the active-set certificate. Methods
+/// (`aspectRatio`, `b`, `A`) are defined here, not on `Outcome`, so a
+/// caller must switch on the union tag first — by construction they
+/// can't accidentally read these on a non-converged outcome.
 pub const Converged = struct {
     /// Full eigenbasis of A as columns of a 3×3 orthonormal matrix:
     ///   Q[:,0] = b (cone axis, structural eigenvalue λ_b = 1/√3)
@@ -624,10 +611,12 @@ pub const Converged = struct {
     ///   sigma[1] ≤ sigma[2]: tangent-plane eigenvalues
     /// Aspect ratio of the cone cross-section = sigma[2] / sigma[1].
     sigma: [3]f64,
+    /// Certified duality gap |primal − dual| (≤ `gap_tol`).
+    gap: f64,
     outer_iters: u32,
     /// Count of outer iterations where Newton polish bailed and FW weights were used.
     newton_polish_failures: u32,
-    cert: PrimalCert,
+    cert: Cert,
     allocator: std.mem.Allocator,
 
     pub fn deinit(self: *Converged) void {
@@ -657,11 +646,12 @@ pub const Converged = struct {
     }
 };
 
-/// Proven-infeasible outcome. Carries the Farkas certificate and the
-/// witness magnitude ‖∑ λᵢ xᵢ‖.
+/// Proven-infeasible outcome. Carries the active-set certificate
+/// (the λ on the inputs whose convex combination is near zero) and
+/// the witness magnitude.
 pub const Infeasible = struct {
-    cert: FarkasCert,
-    /// Farkas residual: ‖∑ λᵢ xᵢ‖. Near zero by construction.
+    cert: Cert,
+    /// Witness magnitude: ‖∑ λᵢ xᵢ‖. Near zero by construction.
     residual: f64,
     allocator: std.mem.Allocator,
 
@@ -673,19 +663,24 @@ pub const Infeasible = struct {
 
 /// Solver hit `max_outer` without closing the gap. Last iterate is
 /// available for warm-start / inspection; not a certified cone, so no
-/// `aspectRatio`/`b`/`A` methods. Raw `Q`, `sigma`, `cert.claimed_gap`,
-/// and iteration counters are exposed for diagnostics.
-pub const PartialInfo = struct {
+/// `aspectRatio`/`b`/`A` methods. Raw `Q`, `sigma`, `last_gap`, and
+/// iteration counters are exposed for diagnostics.
+pub const DidNotConverge = struct {
     Q: Mat3,
     sigma: [3]f64,
+    /// Last computed gap from the final outer iteration. May be near
+    /// zero (almost converged) or large (the solver gave up far from
+    /// optimal); inspect alongside `outer_iters` rather than as a
+    /// uniform quality metric.
+    last_gap: f64,
     outer_iters: u32,
     newton_polish_failures: u32,
-    /// Last-iterate primal cert (uncertified — solver did not close the
-    /// gap). `cert.claimed_gap` holds the last computed gap.
-    cert: PrimalCert,
+    /// Active-set cert from the last iterate (uncertified — solver
+    /// did not close the gap).
+    cert: Cert,
     allocator: std.mem.Allocator,
 
-    pub fn deinit(self: *PartialInfo) void {
+    pub fn deinit(self: *DidNotConverge) void {
         self.allocator.free(self.cert.indices);
         self.allocator.free(self.cert.lambdas);
     }
@@ -704,7 +699,7 @@ pub const Outcome = union(enum) {
     infeasible: Infeasible,
     /// Solver hit `max_outer` without closing the gap. Last iterate
     /// is available for inspection; no certified cone.
-    did_not_converge: PartialInfo,
+    did_not_converge: DidNotConverge,
 
     pub fn deinit(self: *Outcome) void {
         switch (self.*) {
@@ -749,11 +744,11 @@ pub fn checkFeasibility(c: Converged, X: []const [3]f64) f64 {
 // Preprocessing helpers used by `solve`
 // ----------------------------------------------------------------
 
-/// Build a Farkas infeasibility certificate from the halfspace result.
-/// Keeps only the nonzero (above-threshold) λ entries with their original
-/// indices. The Farkas residual ‖Σ λᵢ xᵢ‖ lives on the enclosing
-/// `Infeasible` variant as `residual`, not on the cert.
-fn buildFarkasCert(allocator: std.mem.Allocator, hs: HalfspaceResult) !FarkasCert {
+/// Build the infeasibility certificate from the halfspace result.
+/// Keeps only the nonzero (above-threshold) λ entries with their
+/// original indices. The witness magnitude ‖Σ λᵢ xᵢ‖ lives on the
+/// enclosing `Infeasible` variant as `residual`, not on the cert.
+fn buildFarkasCert(allocator: std.mem.Allocator, hs: HalfspaceResult) !Cert {
     var k: u32 = 0;
     for (hs.lam) |l| if (l > algo.ACTIVE_THRESH) {
         k += 1;
@@ -772,17 +767,18 @@ fn buildFarkasCert(allocator: std.mem.Allocator, hs: HalfspaceResult) !FarkasCer
     return .{ .indices = indices, .lambdas = lambdas };
 }
 
-/// Build the primal certificate for a converged (or DNC-best-effort) solve.
-/// Translates work-set indices back to the caller's original `X[]` indexing
-/// via `work_to_orig` (`null` when no hull reduction happened).
+/// Build the active-set certificate for a converged (or DNC-best-effort)
+/// solve. Translates work-set indices back to the caller's original
+/// `X[]` indexing via `work_to_orig` (`null` when no hull reduction
+/// happened). The scalar quality measurement (gap / last_gap) lives on
+/// the enclosing variant.
 fn buildPrimalCert(
     allocator: std.mem.Allocator,
     cert_active: []const usize,
     cert_lambdas: []const f64,
     cert_n: usize,
     work_to_orig: ?[]const u32,
-    claimed_gap: f64,
-) !PrimalCert {
+) !Cert {
     const indices = try allocator.alloc(u32, cert_n);
     errdefer allocator.free(indices);
     const lambdas = try allocator.alloc(f64, cert_n);
@@ -791,7 +787,7 @@ fn buildPrimalCert(
         indices[i] = if (work_to_orig) |wto| wto[idx_in_work] else @intCast(idx_in_work);
         lambdas[i] = cert_lambdas[i];
     }
-    return .{ .indices = indices, .lambdas = lambdas, .claimed_gap = claimed_gap };
+    return .{ .indices = indices, .lambdas = lambdas };
 }
 
 const HullResult = struct {
@@ -901,7 +897,7 @@ pub fn solve(
     // Arena for all transient scratch allocations in this solve call.
     // Single backing alloc (bumped) + single free-all on deinit — vastly
     // cheaper than per-buffer alloc/free. The returned cert (for the
-    // Converged / Infeasible / PartialInfo variants) lives on the
+    // Converged / Infeasible / DidNotConverge variants) lives on the
     // parent `allocator` so it outlives the arena.
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -1034,7 +1030,7 @@ pub fn solve(
     }
 
     // 5) Build final cert (translate work indices back to original X indices).
-    const cert = try buildPrimalCert(allocator, wb.cert_active, wb.cert_lambdas, cert_n, work_to_orig, final_gap);
+    const cert = try buildPrimalCert(allocator, wb.cert_active, wb.cert_lambdas, cert_n, work_to_orig);
 
     // Bundle the full eigendecomposition: Q's columns are (b, v1, v2) with
     // eigenvalues (SIGMA_0, sigma[0], sigma[1]). Flip v2 if needed so (b, v1, v2) is
@@ -1049,6 +1045,7 @@ pub fn solve(
         return .{ .converged = .{
             .Q = Qmat,
             .sigma = sigma,
+            .gap = final_gap,
             .outer_iters = outer_count,
             .newton_polish_failures = newton_polish_failures,
             .cert = cert,
@@ -1058,6 +1055,7 @@ pub fn solve(
         return .{ .did_not_converge = .{
             .Q = Qmat,
             .sigma = sigma,
+            .last_gap = final_gap,
             .outer_iters = outer_count,
             .newton_polish_failures = newton_polish_failures,
             .cert = cert,
