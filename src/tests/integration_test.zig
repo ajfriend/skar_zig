@@ -5,14 +5,10 @@
 //! Run via `zig build test` from the package root.
 
 const std = @import("std");
-const sphar = @import("skar");
+const sphar = @import("../root.zig");
 const cases = @import("cases");
 const Vec3 = sphar.Vec3;
 const loadCase = cases.loadCase;
-
-comptime {
-    _ = @import("extreme_aspect.zig");
-}
 
 /// Labeled approx-equal check on aspect ratios. On failure prints
 /// the case label and full-precision expected/actual/delta — the

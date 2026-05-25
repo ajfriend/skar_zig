@@ -39,8 +39,9 @@ run). If you're debugging a gate failure, the JSON is in the
 hash-suffixed sibling, not the merged dir.
 
 The gate enforces **100% line coverage** across both production code
-(`src/*.zig`) and test code (`tests/*.zig`). Test code isn't exempt —
-dead test helpers are dead code too.
+(`src/*.zig`, `src/tests/*.zig`) and the case-loader helper
+(`tests/cases.zig`). Test code isn't exempt — dead test helpers are
+dead code too.
 
 What "100% line coverage" buys you:
 
@@ -82,15 +83,24 @@ should be test- or diagnostic-specific.
 
 ## Test layout
 
+Test files live **inside** `src/tests/` so they're in the same Zig
+module path as the library sources — internals are reached via
+filesystem `@import("../halfspace.zig")` etc., without needing a
+"test-only" namespace in the public API. `zig build test` uses
+`src/root.zig` as the test root; the `test {}` block at the bottom
+of `root.zig` pulls in `src/tests/all.zig`, which `comptime`-imports
+each `*_test.zig` file.
+
 | File | Role |
 | --- | --- |
-| `tests/integration.zig` | Root of `zig build test`. Loads fixtures from `cases/*.txt`, validates convergence + certificates against the C baseline. Pulls in sibling test files via a `comptime { _ = @import(...); }` block. |
-| `tests/extreme_aspect.zig` | Rotation-invariance and coplanarity tests on synthesized extreme-aspect-ratio inputs. |
-| `tests/cases.zig` | Shared `cases/*.txt` fixture loader. Imported by `tests/`, `bench/`, and `cli/` via the `cases` build module. |
+| `src/tests/all.zig` | Aggregator: `comptime { _ = @import(...); }` for each `*_test.zig`. Pulled in by `root.zig`'s `test {}` block. |
+| `src/tests/integration_test.zig` | Loads fixtures from `cases/*.txt`, validates convergence + certificates against the C baseline. |
+| `src/tests/extreme_aspect_test.zig` | Rotation-invariance, coplanarity, near-degenerate edge-case tests on synthesized inputs. Also hits internal helpers (`acceptBUpdate`, `convexHull2d`) via filesystem imports for branches not reachable through `solve` for all inputs. |
+| `tests/cases.zig` | Shared `cases/*.txt` fixture loader. Lives outside `src/` so its module path doesn't conflict with the skar module; exposed as the `cases` build module and imported by tests / cli / bench. |
 
-To add a new test file: create `tests/<name>.zig`, add
-`_ = @import("<name>.zig");` to the `comptime` block at the top of
-`tests/integration.zig`. The test binary picks it up automatically.
+To add a new test file: create `src/tests/<name>_test.zig`, then add
+`_ = @import("<name>_test.zig");` to `src/tests/all.zig`. The test
+binary picks it up automatically.
 
 ## CLI and bench
 

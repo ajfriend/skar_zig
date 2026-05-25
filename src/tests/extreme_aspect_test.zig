@@ -64,7 +64,12 @@
 //!    drift doesn't make the test flaky.
 
 const std = @import("std");
-const sphar = @import("skar");
+const sphar = @import("../root.zig");
+// Internals reached by filesystem path — these aren't part of the
+// public API exposed via root.zig, but tests inside src/ have direct
+// access to sibling files.
+const halfspace = @import("../halfspace.zig");
+const skar = @import("../skar.zig");
 
 fn deg(d: f64) f64 {
     return d * std.math.pi / 180.0;
@@ -434,7 +439,7 @@ test "convexHull2d tie-break sort: points sharing an x-coordinate" {
     // collapse leaves the hull at 4. The five tied-on-x points
     // exercise the y-fallback branch in halfspace.HullCtx.lessThan.
     const allocator = std.testing.allocator;
-    const convexHull2d = sphar._internal_for_tests.halfspace.convexHull2d;
+    const convexHull2d = halfspace.convexHull2d;
     const P = [_][2]f64{
         .{ -1, -1 }, .{ 1, -1 }, .{ 1, 1 }, .{ -1, 1 },
         .{ 0, -0.5 }, .{ 0, 0.5 }, .{ 0, 0 }, .{ 0, -0.25 }, .{ 0, 0.25 },
@@ -514,7 +519,7 @@ test "acceptBUpdate fallback: all backtracks fail when a point sits below FEAS_M
     // check and acceptBUpdate falls through to the "keep (b, Q)
     // unchanged + re-project" tail. This test crafts that exact
     // setup directly to hit lines 174-176 of src/skar.zig.
-    const acceptBUpdate = sphar._internal_for_tests.acceptBUpdate;
+    const acceptBUpdate = skar.acceptBUpdate;
     const b = sphar.Vec3{ .m = .{ 1, 0, 0 } };
     const Q = b.orthoBasis();
     // x dotted with b equals 1e-9 — below FEAS_MARGIN = 1e-8.

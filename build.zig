@@ -10,11 +10,15 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // Test fixture loader. Lives outside `src/` so its module path
+    // doesn't conflict with the skar module path. Wired into skar_mod
+    // as well so tests inside `src/tests/` can `@import("cases")`.
     const cases_mod = b.addModule("cases", .{
         .root_source_file = b.path("tests/cases.zig"),
         .target = target,
         .optimize = optimize,
     });
+    skar_mod.addImport("cases", cases_mod);
 
     const lib = b.addLibrary(.{
         .name = "skar",
@@ -49,14 +53,13 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(bench_exe);
 
-    const tests_mod = b.createModule(.{
-        .root_source_file = b.path("tests/integration.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    tests_mod.addImport("skar", skar_mod);
-    tests_mod.addImport("cases", cases_mod);
-    const tests = b.addTest(.{ .name = "skar-test", .root_module = tests_mod });
+    // Test runner roots at the library module — `root.zig`'s `test {}`
+    // block pulls in `src/tests/all.zig` which aggregates every
+    // `*_test.zig`. Tests live in the same module path as the
+    // library sources, so they can reach internals via filesystem
+    // `@import("../halfspace.zig")` etc. without the `_internal`
+    // namespace dance.
+    const tests = b.addTest(.{ .name = "skar-test", .root_module = skar_mod });
     const run_tests = b.addRunArtifact(tests);
     run_tests.setCwd(b.path(""));
     const test_step = b.step("test", "Run skar tests");
