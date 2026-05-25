@@ -23,6 +23,10 @@ coverage: test
 example:
     zig build example
 
+# Run the full status-handling example (examples/status.zig).
+example-status:
+    zig build example-status
+
 # Run the benchmark suite (uses the release-built binary from `just build`).
 bench: build
     ./zig-out/bin/skar-bench

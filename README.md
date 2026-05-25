@@ -11,12 +11,14 @@ standalone, std-only Zig package.
 ## Quick start
 
 ```sh
-zig build example      # runs examples/basic.zig
+zig build example          # runs examples/basic.zig — happy-path only
+zig build example-status   # runs examples/status.zig — every Status branch
 ```
 
-See [`examples/basic.zig`](examples/basic.zig) — a ~60-line demo
-covering the canonical happy-path call and how to branch on each
-`Status` outcome.
+[`examples/basic.zig`](examples/basic.zig) is the minimum call:
+define points, call `solve`, print the aspect ratio and axis.
+[`examples/status.zig`](examples/status.zig) adds the canonical
+switch on `Info.status` showing what to inspect on each outcome.
 
 In a Zig package, depend on `skar` and call into the public API:
 
@@ -46,7 +48,7 @@ switch (info.status) {
 - `cases/*.txt` — fixture point sets
 - `cli/main.zig` — `skar-cli`: solve a single case file, emit one JSONL line
 - `bench/main.zig` — `skar-bench`: per-case timing across the bundled set
-- `examples/basic.zig` — minimal end-user usage demo
+- `examples/basic.zig`, `examples/status.zig` — end-user usage demos
 - `dev.md` — developer-workflow guide (coverage, layout, conventions)
 
 ## Build

@@ -1,15 +1,12 @@
-//! Minimal example: solve for the tightest enclosing cone of a small
-//! point set on the unit sphere.
+//! Minimal example: solve for the tightest enclosing cone of a
+//! 3-point set on the unit sphere.
 //!
 //! Run with:
 //!   zig build example
 //!
-//! Demonstrates the canonical happy-path call shape, how to read
-//! `Info` for each status, and how to clean up via `defer
-//! info.deinit()`. Error handling uses `try` — `solve` can also
-//! return `InputError` (caller-bad-input) or `SolveError`
-//! (internal-correctness violation) on top of `OutOfMemory`; both
-//! propagate via `try` and `main` returns them.
+//! Just the happy-path call: pass points, get the cone axis and
+//! aspect ratio. See `examples/status.zig` for the full pattern
+//! showing every Status outcome.
 
 const std = @import("std");
 const skar = @import("skar");
@@ -21,7 +18,7 @@ pub fn main() !void {
 
     // Three unit vectors at the standard basis directions — the
     // vertices of one octant of the unit sphere. By 3-fold symmetry
-    // around (1,1,1)/√3, the optimal enclosing cone is circular
+    // around (1,1,1)/√3 the optimal enclosing cone is circular
     // (aspect ratio = 1).
     const points = [_][3]f64{
         .{ 1, 0, 0 },
@@ -29,43 +26,10 @@ pub fn main() !void {
         .{ 0, 0, 1 },
     };
 
-    // Solve with default options. Pass `.{}` for sensible defaults;
-    // override individual fields with named-field syntax to taste:
-    //   .{ .gap_tol = 1e-9 }
-    //   .{ .coplanarity_tol = -1 }   // disable the coplanarity check
-    //   .{ .max_outer = 500 }
     var info = try skar.solve(allocator, &points, .{});
     defer info.deinit();
 
-    switch (info.status) {
-        .converged => {
-            const b = info.b(); // Vec3 — cone axis
-            const aspect = info.aspectRatio();
-            std.debug.print("converged: aspect ratio = {d:.6}\n", .{aspect});
-            std.debug.print("  cone axis     b = ({d:.4}, {d:.4}, {d:.4})\n", .{ b.m[0], b.m[1], b.m[2] });
-            std.debug.print("  duality gap     = {e:.3}\n", .{info.cert.claimed_gap});
-            std.debug.print("  outer iters     = {d}\n", .{info.outer_iters});
-            std.debug.print("  active in cert  = {d} of {d} input points\n", .{ info.cert.indices.len, points.len });
-        },
-        .infeasible => {
-            // No hemisphere contains all input points. `info.cert`
-            // holds the Farkas certificate (λ ≥ 0, Σλ = 1, with
-            // ‖Σ λᵢ xᵢ‖ near zero — the residual is `claimed_gap`).
-            std.debug.print("infeasible: no hemisphere fits all points\n", .{});
-            std.debug.print("  Farkas residual = {e:.3}\n", .{info.cert.claimed_gap});
-        },
-        .did_not_converge => {
-            // Solver hit `max_outer` without closing the gap. The
-            // last iterate is in info.Q/info.sigma but isn't a
-            // verified certificate.
-            std.debug.print("did_not_converge: hit max iterations ({d})\n", .{info.outer_iters});
-            std.debug.print("  last gap = {e:.3}\n", .{info.cert.claimed_gap});
-        },
-        .coplanar_input => {
-            // Input is rank-deficient (all points on a single great
-            // circle). The SDP is structurally degenerate; the
-            // solver bails before iterating.
-            std.debug.print("coplanar_input: rank-deficient input\n", .{});
-        },
-    }
+    const b = info.b();
+    std.debug.print("aspect ratio: {d:.6}\n", .{info.aspectRatio()});
+    std.debug.print("cone axis:    ({d:.4}, {d:.4}, {d:.4})\n", .{ b.m[0], b.m[1], b.m[2] });
 }
