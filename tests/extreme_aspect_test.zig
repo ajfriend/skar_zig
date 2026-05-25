@@ -113,41 +113,14 @@ fn normalizeAll(pts: *[3][3]f64) void {
     }
 }
 
-/// Tiny LCG returning f64 in [0, 1). Hand-rolled rather than std.Random
-/// only so the seed/sequence is stable across Zig versions; we just
-/// need reproducibility, not statistical guarantees.
-fn nextU01(state: *u64) f64 {
-    state.* = state.* *% 6364136223846793005 +% 1442695040888963407;
-    const x: u32 = @truncate(state.* >> 32);
-    return @as(f64, @floatFromInt(x)) / 4294967296.0;
-}
-
-/// Uniform random rotation matrix (row-major 3×3) via Shoemake's
-/// three-uniform unit-quaternion construction.
-fn randomRotation(state: *u64) [9]f64 {
-    const r1 = nextU01(state);
-    const r2 = nextU01(state);
-    const r3 = nextU01(state);
-    const sq1 = @sqrt(1.0 - r1);
-    const sqr = @sqrt(r1);
-    const two_pi = 2.0 * std.math.pi;
-    const x = sq1 * std.math.sin(two_pi * r2);
-    const y = sq1 * std.math.cos(two_pi * r2);
-    const z = sqr * std.math.sin(two_pi * r3);
-    const w = sqr * std.math.cos(two_pi * r3);
-    return .{
-        1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - w * z),       2.0 * (x * z + w * y),
-        2.0 * (x * y + w * z),       1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - w * x),
-        2.0 * (x * z - w * y),       2.0 * (y * z + w * x),       1.0 - 2.0 * (x * x + y * y),
-    };
-}
-
-fn applyRot(R: [9]f64, p: [3]f64) [3]f64 {
-    return .{
-        R[0] * p[0] + R[1] * p[1] + R[2] * p[2],
-        R[3] * p[0] + R[4] * p[1] + R[5] * p[2],
-        R[6] * p[0] + R[7] * p[1] + R[8] * p[2],
-    };
+/// Uniform random rotation in SO(3) via Gram-Schmidt on a Gaussian
+/// random matrix — `Mat3.randomNormal` fills with iid normals,
+/// `Mat3.orthonormalize` does modified Gram-Schmidt + det sign-fix.
+/// See `src/linalg.zig` for the methods.
+fn randomRotation(rng: std.Random) sphar.Mat3 {
+    var r = sphar.Mat3.randomNormal(rng);
+    r.orthonormalize();
+    return r;
 }
 
 const Case = struct {
@@ -279,13 +252,14 @@ test "extreme aspect ratio: three geometries, rotation-invariant" {
 
         // Same seed across all cases for reproducibility — if a particular
         // (case, k) pair fails, k identifies which rotation to reproduce.
-        var rng_state: u64 = 0xCA7;
+        var prng = std.Random.DefaultPrng.init(0xCA7);
+        const rng = prng.random();
         var k: u32 = 0;
         while (k < n_rotations) : (k += 1) {
-            const R = randomRotation(&rng_state);
+            const R = randomRotation(rng);
             var rot_pts: [3][3]f64 = undefined;
             for (case.points, 0..) |p, i| {
-                rot_pts[i] = applyRot(R, p);
+                rot_pts[i] = R.apply(.{ .m = p }).m;
             }
             var rot_outcome = try sphar.solve(allocator, rot_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = 1e-12, .max_outer = max_outer });
             defer rot_outcome.deinit();
@@ -362,12 +336,13 @@ test "coplanarity check flags great-circle inputs" {
     // guarantee is now structural (compile-time), not a runtime assertion.
 
     // Rotational invariance: should still be flagged after rotation.
-    var rng_state: u64 = 0xCA7;
+    var prng = std.Random.DefaultPrng.init(0xCA7);
+    const rng = prng.random();
     var k: u32 = 0;
     while (k < 10) : (k += 1) {
-        const R = randomRotation(&rng_state);
+        const R = randomRotation(rng);
         var rot_pts: [3][3]f64 = undefined;
-        for (canon_pts, 0..) |p, i| rot_pts[i] = applyRot(R, p);
+        for (canon_pts, 0..) |p, i| rot_pts[i] = R.apply(.{ .m = p }).m;
         try std.testing.expectError(
             sphar.InputError.CoplanarInput,
             sphar.solve(allocator, rot_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = coplanarity_tol, .max_outer = max_outer }),

@@ -5,6 +5,8 @@
 //! generic enough that they could be lifted into a standalone numerical
 //! library.
 
+const std = @import("std");
+
 /// Relative threshold for `eig2`'s closed-form vs. axis-aligned
 /// eigenvector fallback. `|b| ≫ sqrt(ulp)·max(|a|,|d|)` ≈ `1.5e-8·scale`
 /// is the regime where `vals[0] − d` retains useful precision.
@@ -274,6 +276,33 @@ pub const Mat3 = struct {
             }
         }
         return r;
+    }
+
+    /// Fill the 9 entries with iid samples from the standard normal
+    /// distribution (mean 0, stddev 1). Pair with `orthonormalize`
+    /// for a Haar-uniform random rotation: Gram-Schmidt of a
+    /// Gaussian random matrix is the classical construction.
+    pub fn randomNormal(rng: std.Random) Mat3 {
+        var r: Mat3 = undefined;
+        for (0..9) |i| r.m[i] = rng.floatNorm(f64);
+        return r;
+    }
+
+    /// In-place modified Gram-Schmidt on the columns, followed by a
+    /// determinant-sign correction so the result lives in SO(3)
+    /// (det = +1), not O(3). Assumes the columns are linearly
+    /// independent; behavior on a singular input is unspecified.
+    pub fn orthonormalize(self: *Mat3) void {
+        const c0 = self.col(0).normalize();
+        const c1_raw = self.col(1);
+        const c1 = c1_raw.sub(c0.scale(c0.dot(c1_raw))).normalize();
+        const c2_raw = self.col(2);
+        const c2_proj = c2_raw.sub(c0.scale(c0.dot(c2_raw))).sub(c1.scale(c1.dot(c2_raw))).normalize();
+        // If Gram-Schmidt produced a reflection (det = -1), flip the
+        // last column. Half of random orthogonal matrices land in this
+        // case; the flip makes the sampler uniform on SO(3).
+        const c2 = if (c0.cross(c1).dot(c2_proj) < 0) c2_proj.scale(-1.0) else c2_proj;
+        self.* = fromCols(c0, c1, c2);
     }
 
     /// Symmetric rank-1 update: self ← self + w · q · qᵀ. Updates all 9
