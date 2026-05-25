@@ -344,12 +344,20 @@ pub const Mat3 = struct {
 
     /// Symmetric rank-1 update: self ← self + w · q · qᵀ. Updates all 9
     /// entries (upper triangle computed via FMA, mirrored to lower by
-    /// exact assignment). Multiply order is (w·q_r)·q_c — preserved by
-    /// pre-computing `wqj = w * q.m[j]` before the FMA, which fuses
-    /// only the final mul-then-add (no reassociation). The "compute
-    /// upper, mirror to lower" pattern guarantees bit-exact symmetry
-    /// (m[1] == m[3], m[2] == m[6], m[5] == m[7]) regardless of FP
-    /// rounding — see tests/linalg_test.zig.
+    /// exact assignment).
+    ///
+    /// Multiply order is `(w·q_r)·q_c`. The pre-computed `wq_i = w·q.m[i]`
+    /// is shared across all three FMAs in row i — total rounding-step
+    /// count for the 6-element upper triangle is 3 muls + 6 FMAs = 9.
+    /// A factored form `w·(q_r·q_c)` couldn't share precomputes across
+    /// FMAs (each q_i·q_j is used exactly once), needing 6 muls + 6 FMAs
+    /// = 12 rounding steps. So the current order isn't just to avoid FP
+    /// reassociation drift in degenerate problems — it's also strictly
+    /// fewer rounding steps and fewer ops.
+    ///
+    /// The "compute upper, mirror to lower" pattern guarantees bit-exact
+    /// symmetry (m[1] == m[3], m[2] == m[6], m[5] == m[7]) regardless of
+    /// FP rounding — see tests/linalg_test.zig.
     pub inline fn addSymRank1(self: *Mat3, w: f64, q: Vec3) void {
         const wq0 = w * q.m[0];
         const wq1 = w * q.m[1];
@@ -367,11 +375,18 @@ pub const Mat3 = struct {
 
     /// Symmetric rank-2 update: self ← self + λ · (x zᵀ + z xᵀ) / 2.
     /// Upper triangle computed via FMA, mirrored to lower by exact
-    /// assignment. Diagonal multiplication order `(lam · x_i) · z_i`
-    /// is preserved by pre-computing `lam*x.m[i]`; off-diagonal inner
-    /// sums use `@mulAdd` for the cross term (addition is
-    /// commutative, so this is order-equivalent). Symmetry of the
-    /// output is bit-exact — see tests/linalg_test.zig.
+    /// assignment.
+    ///
+    /// Diagonal multiplication order `(lam·x_i)·z_i` is preserved by
+    /// pre-computing `lx_i = lam·x.m[i]`. Same rationale as
+    /// `addSymRank1`: the shared `lx_i` precompute amortizes across
+    /// the three FMAs touching row i (one diagonal + two off-diagonals
+    /// after the symmetric average), keeping the total rounding count
+    /// lower than any factored alternative.
+    ///
+    /// Off-diagonal inner sums use `@mulAdd` for the cross term
+    /// (addition is commutative, so this is order-equivalent).
+    /// Symmetry of the output is bit-exact — see tests/linalg_test.zig.
     pub inline fn addSymRank2(self: *Mat3, lam: f64, x: Vec3, z: Vec3) void {
         const lx0 = lam * x.m[0];
         const lx1 = lam * x.m[1];
