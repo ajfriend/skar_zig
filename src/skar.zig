@@ -202,14 +202,23 @@ fn mveeFw(
     var it: u32 = 0;
     while (it < max_iter) : (it += 1) {
         var S = Mat3.zero;
+        // Inlined `addSymRank1` minus the mirror writes — we mirror
+        // once after the loop instead of per-iteration. Shared
+        // `wq_i = wi · qi.m[i]` precompute + chained @mulAdd: 3 muls
+        // + 6 FMAs = 9 rounds per iter, vs the prior 12 muls + 6 adds
+        // = 18 ops / 12 rounds. Multiplication order `(wi·qi_r)·qi_c`
+        // preserved.
         for (Ql, 0..) |qi, i| {
             const wi = w[i];
-            S.m[0] += wi * qi.m[0] * qi.m[0];
-            S.m[1] += wi * qi.m[0] * qi.m[1];
-            S.m[2] += wi * qi.m[0] * qi.m[2];
-            S.m[4] += wi * qi.m[1] * qi.m[1];
-            S.m[5] += wi * qi.m[1] * qi.m[2];
-            S.m[8] += wi * qi.m[2] * qi.m[2];
+            const wq0 = wi * qi.m[0];
+            const wq1 = wi * qi.m[1];
+            const wq2 = wi * qi.m[2];
+            S.m[0] = @mulAdd(f64, wq0, qi.m[0], S.m[0]);
+            S.m[1] = @mulAdd(f64, wq0, qi.m[1], S.m[1]);
+            S.m[2] = @mulAdd(f64, wq0, qi.m[2], S.m[2]);
+            S.m[4] = @mulAdd(f64, wq1, qi.m[1], S.m[4]);
+            S.m[5] = @mulAdd(f64, wq1, qi.m[2], S.m[5]);
+            S.m[8] = @mulAdd(f64, wq2, qi.m[2], S.m[8]);
         }
         S.m[3] = S.m[1];
         S.m[6] = S.m[2];
