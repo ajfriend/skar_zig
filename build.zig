@@ -29,19 +29,6 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(lib);
 
-    const cli_mod = b.createModule(.{
-        .root_source_file = b.path("cli/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    cli_mod.addImport("skar", skar_mod);
-    cli_mod.addImport("cases", cases_mod);
-    const cli = b.addExecutable(.{
-        .name = "skar-cli",
-        .root_module = cli_mod,
-    });
-    b.installArtifact(cli);
-
     const bench_mod = b.createModule(.{
         .root_source_file = b.path("bench/main.zig"),
         .target = target,
@@ -79,16 +66,19 @@ pub fn build(b: *std.Build) void {
     const bench_step = b.step("bench", "Run skar bench");
     bench_step.dependOn(&run_bench.step);
 
-    // Examples. Intentionally separate from cli/bench so new users
-    // have small, single-file demos to read. Step name matches the
-    // example's filename (examples/<stem>.zig → `zig build ex-<stem>`).
-    addExample(b, skar_mod, target, optimize, "basic", "Run examples/basic.zig (happy-path only)");
-    addExample(b, skar_mod, target, optimize, "status", "Run examples/status.zig (full Outcome branching)");
+    // Examples. Single-file demos new users can read end-to-end. Step
+    // name matches the example's filename (examples/<stem>.zig →
+    // `zig build ex-<stem>`). `ex-cases` accepts pass-through args
+    // after `--`: `zig build ex-cases -- hex` or `-- --all`.
+    addExample(b, skar_mod, cases_mod, target, optimize, "basic", "Run examples/basic.zig (happy-path only)");
+    addExample(b, skar_mod, cases_mod, target, optimize, "status", "Run examples/status.zig (full Outcome branching)");
+    addExample(b, skar_mod, cases_mod, target, optimize, "cases", "Run examples/cases.zig (run a named case or --all)");
 }
 
 fn addExample(
     b: *std.Build,
     skar_mod: *std.Build.Module,
+    cases_mod: *std.Build.Module,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     stem: []const u8,
@@ -100,11 +90,15 @@ fn addExample(
         .optimize = optimize,
     });
     mod.addImport("skar", skar_mod);
+    mod.addImport("cases", cases_mod);
     const exe = b.addExecutable(.{
         .name = b.fmt("skar-ex-{s}", .{stem}),
         .root_module = mod,
     });
     const run = b.addRunArtifact(exe);
+    // Pass through any args after `--` on the `zig build` command.
+    // Only `ex-cases` uses them today; the others ignore the arg slice.
+    if (b.args) |args| run.addArgs(args);
     const step = b.step(b.fmt("ex-{s}", .{stem}), description);
     step.dependOn(&run.step);
 }

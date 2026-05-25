@@ -50,16 +50,18 @@ top-level method to accidentally call on a non-converged result.
 - `src/tests/*_test.zig` — in-tree tests (run via `zig build test`)
 - `cases/*.zon` — fixture point sets + expected outcomes (data only)
 - `cases/cases.zig` — comptime manifest over the .zon files; exposed as the `cases` build module
-- `cli/main.zig` — `skar-cli`: solve a single case by name, emit one JSONL line
 - `bench/main.zig` — `skar-bench`: per-case timing across the bundled set
-- `examples/basic.zig`, `examples/status.zig` — end-user usage demos
+- `examples/basic.zig`, `examples/status.zig`, `examples/cases.zig` — end-user usage demos
 - `dev.md` — developer-workflow guide (coverage, layout, conventions)
 
 ## Build
 
 ```sh
-zig build              # builds lib + skar-cli + skar-bench
+zig build              # builds lib + skar-bench
 zig build ex-basic     # runs examples/basic.zig
+zig build ex-status    # runs examples/status.zig
+zig build ex-cases -- hex      # runs one bundled case
+zig build ex-cases -- --all    # runs every bundled case
 zig build test         # runs tests under kcov via `just test`; see dev.md
 zig build bench        # runs the timing bench
 ```

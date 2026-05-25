@@ -97,17 +97,18 @@ each `*_test.zig` file.
 | `src/tests/all.zig` | Aggregator: `comptime { _ = @import(...); }` for each `*_test.zig`. Pulled in by `root.zig`'s `test {}` block. |
 | `src/tests/integration_test.zig` | Iterates the comptime case manifest from `cases/cases.zig`; validates convergence + certificates per-case. |
 | `src/tests/extreme_aspect_test.zig` | Rotation-invariance, coplanarity, near-degenerate edge-case tests on synthesized inputs. Also hits internal helpers (`acceptBUpdate`, `convexHull2d`) via filesystem imports for branches not reachable through `solve` for all inputs. |
-| `cases/cases.zig` | Comptime manifest over `cases/*.zon` — defines the `Case` schema and the `all` list. Exposed as the `cases` build module; imported by tests / cli / bench. |
+| `cases/cases.zig` | Comptime manifest over `cases/*.zon` — defines the `Case` schema and the `all` list. Exposed as the `cases` build module; imported by tests / bench / the `ex-cases` example. |
 
 To add a new test file: create `src/tests/<name>_test.zig`, then add
 `_ = @import("<name>_test.zig");` to `src/tests/all.zig`. The test
 binary picks it up automatically.
 
-## CLI and bench
+## Bench
 
-- `cli/main.zig` — `skar-cli` binary; one-shot solve of a case file.
-- `bench/main.zig` — `skar-bench` binary; min/median timings over the
-  bench case set.
+`bench/main.zig` produces the `skar-bench` binary: min/median
+timings over a hand-picked subset of the case manifest. Not part of
+the library; links against `src/root.zig` through the `skar` build
+module.
 
-Neither is part of the library; both link against `src/root.zig`
-through the `skar` build module.
+For ad-hoc shell-driven runs of a single case, use the `ex-cases`
+example: `zig build ex-cases -- <name>` or `-- --all`.

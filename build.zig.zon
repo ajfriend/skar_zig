@@ -8,9 +8,9 @@
         "build.zig",
         "build.zig.zon",
         "src",
-        "cli",
         "bench",
         "cases",
+        "examples",
         "readme.md",
     },
 }
