@@ -8,4 +8,5 @@ comptime {
     _ = @import("extreme_aspect_test.zig");
     _ = @import("cap_test.zig");
     _ = @import("stretched_cap_test.zig");
+    _ = @import("linalg_test.zig");
 }

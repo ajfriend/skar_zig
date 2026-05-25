@@ -343,37 +343,52 @@ pub const Mat3 = struct {
     }
 
     /// Symmetric rank-1 update: self ← self + w · q · qᵀ. Updates all 9
-    /// entries (upper triangle computed, mirrored to lower). Multiply order
-    /// is (w·q_r)·q_c — keeping this fixed matters for degenerate problems
-    /// where Newton polish would otherwise land on different points of the
-    /// KKT manifold under FP reassociation.
+    /// entries (upper triangle computed via FMA, mirrored to lower by
+    /// exact assignment). Multiply order is (w·q_r)·q_c — preserved by
+    /// pre-computing `wqj = w * q.m[j]` before the FMA, which fuses
+    /// only the final mul-then-add (no reassociation). The "compute
+    /// upper, mirror to lower" pattern guarantees bit-exact symmetry
+    /// (m[1] == m[3], m[2] == m[6], m[5] == m[7]) regardless of FP
+    /// rounding — see tests/linalg_test.zig.
     pub inline fn addSymRank1(self: *Mat3, w: f64, q: Vec3) void {
         const wq0 = w * q.m[0];
         const wq1 = w * q.m[1];
         const wq2 = w * q.m[2];
-        self.m[0] += wq0 * q.m[0];
-        self.m[4] += wq1 * q.m[1];
-        self.m[8] += wq2 * q.m[2];
-        self.m[1] += wq0 * q.m[1];
+        self.m[0] = @mulAdd(f64, wq0, q.m[0], self.m[0]);
+        self.m[4] = @mulAdd(f64, wq1, q.m[1], self.m[4]);
+        self.m[8] = @mulAdd(f64, wq2, q.m[2], self.m[8]);
+        self.m[1] = @mulAdd(f64, wq0, q.m[1], self.m[1]);
         self.m[3] = self.m[1];
-        self.m[2] += wq0 * q.m[2];
+        self.m[2] = @mulAdd(f64, wq0, q.m[2], self.m[2]);
         self.m[6] = self.m[2];
-        self.m[5] += wq1 * q.m[2];
+        self.m[5] = @mulAdd(f64, wq1, q.m[2], self.m[5]);
         self.m[7] = self.m[5];
     }
 
     /// Symmetric rank-2 update: self ← self + λ · (x zᵀ + z xᵀ) / 2.
-    /// Upper triangle computed, mirrored to lower.
+    /// Upper triangle computed via FMA, mirrored to lower by exact
+    /// assignment. Diagonal multiplication order `(lam · x_i) · z_i`
+    /// is preserved by pre-computing `lam*x.m[i]`; off-diagonal inner
+    /// sums use `@mulAdd` for the cross term (addition is
+    /// commutative, so this is order-equivalent). Symmetry of the
+    /// output is bit-exact — see tests/linalg_test.zig.
     pub inline fn addSymRank2(self: *Mat3, lam: f64, x: Vec3, z: Vec3) void {
-        self.m[0] += lam * x.m[0] * z.m[0];
-        self.m[4] += lam * x.m[1] * z.m[1];
-        self.m[8] += lam * x.m[2] * z.m[2];
+        const lx0 = lam * x.m[0];
+        const lx1 = lam * x.m[1];
+        const lx2 = lam * x.m[2];
+        self.m[0] = @mulAdd(f64, lx0, z.m[0], self.m[0]);
+        self.m[4] = @mulAdd(f64, lx1, z.m[1], self.m[4]);
+        self.m[8] = @mulAdd(f64, lx2, z.m[2], self.m[8]);
         const half = 0.5 * lam;
-        self.m[1] += half * (x.m[0] * z.m[1] + z.m[0] * x.m[1]);
+        // m[1]: half · (x[0]·z[1] + z[0]·x[1]) added in two FMAs.
+        const inner01 = @mulAdd(f64, z.m[0], x.m[1], x.m[0] * z.m[1]);
+        self.m[1] = @mulAdd(f64, half, inner01, self.m[1]);
         self.m[3] = self.m[1];
-        self.m[2] += half * (x.m[0] * z.m[2] + z.m[0] * x.m[2]);
+        const inner02 = @mulAdd(f64, z.m[0], x.m[2], x.m[0] * z.m[2]);
+        self.m[2] = @mulAdd(f64, half, inner02, self.m[2]);
         self.m[6] = self.m[2];
-        self.m[5] += half * (x.m[1] * z.m[2] + z.m[1] * x.m[2]);
+        const inner12 = @mulAdd(f64, z.m[1], x.m[2], x.m[1] * z.m[2]);
+        self.m[5] = @mulAdd(f64, half, inner12, self.m[5]);
         self.m[7] = self.m[5];
     }
 
