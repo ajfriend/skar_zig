@@ -19,20 +19,14 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // 6 unit vectors arranged as a regular hexagon at half-angle
-    // ~11.5° around the +z axis. The optimal enclosing cone is a
-    // circular cone (aspect ratio = 1).
-    const r = 0.19866933079506122; // sin(11.46°)
-    const z = 0.98006657784124163; // cos(11.46°)
-    const cos60 = 0.5;
-    const sin60 = @sqrt(3.0) / 2.0;
+    // Three unit vectors at the standard basis directions — the
+    // vertices of one octant of the unit sphere. By 3-fold symmetry
+    // around (1,1,1)/√3, the optimal enclosing cone is circular
+    // (aspect ratio = 1).
     const points = [_][3]f64{
-        .{ r,             0,             z },
-        .{ r * cos60,     r * sin60,     z },
-        .{ -r * cos60,    r * sin60,     z },
-        .{ -r,            0,             z },
-        .{ -r * cos60,    -r * sin60,    z },
-        .{ r * cos60,     -r * sin60,    z },
+        .{ 1, 0, 0 },
+        .{ 0, 1, 0 },
+        .{ 0, 0, 1 },
     };
 
     // Solve with default options. Pass `.{}` for sensible defaults;
