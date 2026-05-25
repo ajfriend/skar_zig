@@ -78,9 +78,10 @@ pub fn build(b: *std.Build) void {
     bench_step.dependOn(&run_bench.step);
 
     // Examples. Intentionally separate from cli/bench so new users
-    // have small, single-file demos to read.
-    addExample(b, skar_mod, target, optimize, "example", "examples/basic.zig", "Run the basic usage example");
-    addExample(b, skar_mod, target, optimize, "example-status", "examples/status.zig", "Run the full-status-handling example");
+    // have small, single-file demos to read. Step name matches the
+    // example's filename (examples/<stem>.zig → `zig build ex-<stem>`).
+    addExample(b, skar_mod, target, optimize, "basic", "Run examples/basic.zig (happy-path only)");
+    addExample(b, skar_mod, target, optimize, "status", "Run examples/status.zig (full Status branching)");
 }
 
 fn addExample(
@@ -88,21 +89,20 @@ fn addExample(
     skar_mod: *std.Build.Module,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    step_name: []const u8,
-    source: []const u8,
+    stem: []const u8,
     description: []const u8,
 ) void {
     const mod = b.createModule(.{
-        .root_source_file = b.path(source),
+        .root_source_file = b.path(b.fmt("examples/{s}.zig", .{stem})),
         .target = target,
         .optimize = optimize,
     });
     mod.addImport("skar", skar_mod);
     const exe = b.addExecutable(.{
-        .name = b.fmt("skar-{s}", .{step_name}),
+        .name = b.fmt("skar-ex-{s}", .{stem}),
         .root_module = mod,
     });
     const run = b.addRunArtifact(exe);
-    const step = b.step(step_name, description);
+    const step = b.step(b.fmt("ex-{s}", .{stem}), description);
     step.dependOn(&run.step);
 }

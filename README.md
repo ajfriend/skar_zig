@@ -11,8 +11,8 @@ standalone, std-only Zig package.
 ## Quick start
 
 ```sh
-zig build example          # runs examples/basic.zig — happy-path only
-zig build example-status   # runs examples/status.zig — every Status branch
+zig build ex-basic     # runs examples/basic.zig — happy-path only
+zig build ex-status    # runs examples/status.zig — every Status branch
 ```
 
 [`examples/basic.zig`](examples/basic.zig) is the minimum call:
@@ -55,7 +55,7 @@ switch (info.status) {
 
 ```sh
 zig build              # builds lib + skar-cli + skar-bench
-zig build example      # runs examples/basic.zig
+zig build ex-basic     # runs examples/basic.zig
 zig build test         # runs tests under kcov via `just test`; see dev.md
 zig build bench        # runs the timing bench
 ```

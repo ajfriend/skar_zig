@@ -20,12 +20,12 @@ coverage: test
     @echo "open coverage/skar-test/index.html"
 
 # Run the minimal usage example (examples/basic.zig).
-example:
-    zig build example
+ex-basic:
+    zig build ex-basic
 
 # Run the full status-handling example (examples/status.zig).
-example-status:
-    zig build example-status
+ex-status:
+    zig build ex-status
 
 # Run the benchmark suite (uses the release-built binary from `just build`).
 bench: build

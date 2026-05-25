@@ -2,7 +2,7 @@
 //! `Info.status` and the per-branch inspection of the result.
 //!
 //! Run with:
-//!   zig build example-status
+//!   zig build ex-status
 //!
 //! `solve` returns four distinct outcomes; only `.converged`
 //! produces a usable cone. The other three are still valid library

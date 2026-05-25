@@ -2,11 +2,11 @@
 //! 3-point set on the unit sphere.
 //!
 //! Run with:
-//!   zig build example
+//!   zig build ex-basic
 //!
 //! Just the happy-path call: pass points, get the cone axis and
-//! aspect ratio. See `examples/status.zig` for the full pattern
-//! showing every Status outcome.
+//! aspect ratio. See `examples/status.zig` (`zig build ex-status`)
+//! for the full pattern showing every Status outcome.
 
 const std = @import("std");
 const skar = @import("skar");
