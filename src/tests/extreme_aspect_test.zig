@@ -53,7 +53,7 @@
 //!  - 3 points exactly coplanar with the origin (great-circle inputs,
 //!    z = 0 in canonical orientation) caused the solver to diverge to
 //!    NaN. Now caught by the coplanarity preprocessing check in
-//!    `solve` (returns `Outcome.coplanar_input`); see the
+//!    `solve` (returns `InputError.CoplanarInput`); see the
 //!    "coplanarity check flags great-circle inputs" test below. The
 //!    three high-AR cases here include a z-perturbation that keeps
 //!    them safely above the rank-deficiency threshold.
@@ -312,15 +312,15 @@ test "coplanarity check cutoff is near the parameter's value" {
         var pts: [3][3]f64 = arcPoints(90.0, 2.0e-6);
         var outcome = try sphar.solve(allocator, pts[0..], .{ .gap_tol = tol, .coplanarity_tol = coplanarity_tol, .max_outer = max_outer });
         defer outcome.deinit();
-        try std.testing.expect(std.meta.activeTag(outcome) != .coplanar_input);
     }
 
     // Below cutoff: ratio ≈ 2.7e-14 (37× below tol). Must flag.
     {
         var pts: [3][3]f64 = arcPoints(90.0, 5.0e-8);
-        var outcome = try sphar.solve(allocator, pts[0..], .{ .gap_tol = tol, .coplanarity_tol = coplanarity_tol, .max_outer = max_outer });
-        defer outcome.deinit();
-        try std.testing.expect(std.meta.activeTag(outcome) == .coplanar_input);
+        try std.testing.expectError(
+            sphar.InputError.CoplanarInput,
+            sphar.solve(allocator, pts[0..], .{ .gap_tol = tol, .coplanarity_tol = coplanarity_tol, .max_outer = max_outer }),
+        );
     }
 
     // Same near-degenerate input, but tol tightened by 1e8: ratio
@@ -331,7 +331,6 @@ test "coplanarity check cutoff is near the parameter's value" {
         var pts: [3][3]f64 = arcPoints(90.0, 5.0e-8);
         var outcome = try sphar.solve(allocator, pts[0..], .{ .gap_tol = tol, .coplanarity_tol = 1e-20, .max_outer = max_outer });
         defer outcome.deinit();
-        try std.testing.expect(std.meta.activeTag(outcome) != .coplanar_input);
     }
 }
 
@@ -350,9 +349,10 @@ test "coplanarity check flags great-circle inputs" {
         .{ 1.0, 0.0, 0.0 },
         .{ std.math.cos(half), std.math.sin(half), 0.0 },
     };
-    var outcome = try sphar.solve(allocator, canon_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = coplanarity_tol, .max_outer = max_outer });
-    defer outcome.deinit();
-    try std.testing.expect(std.meta.activeTag(outcome) == .coplanar_input);
+    try std.testing.expectError(
+        sphar.InputError.CoplanarInput,
+        sphar.solve(allocator, canon_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = coplanarity_tol, .max_outer = max_outer }),
+    );
     // `checkFeasibility` is no longer callable on a non-converged outcome:
     // its signature takes `Converged`, so a caller who hasn't switched
     // can't reach it. The "no apparent feasibility on a rejected input"
@@ -365,16 +365,18 @@ test "coplanarity check flags great-circle inputs" {
         const R = randomRotation(&rng_state);
         var rot_pts: [3][3]f64 = undefined;
         for (canon_pts, 0..) |p, i| rot_pts[i] = applyRot(R, p);
-        var rot_outcome = try sphar.solve(allocator, rot_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = coplanarity_tol, .max_outer = max_outer });
-        defer rot_outcome.deinit();
-        try std.testing.expect(std.meta.activeTag(rot_outcome) == .coplanar_input);
+        try std.testing.expectError(
+            sphar.InputError.CoplanarInput,
+            sphar.solve(allocator, rot_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = coplanarity_tol, .max_outer = max_outer }),
+        );
     }
 
-    // Sanity: same input passes when the check is disabled (we don't
-    // care whether it converges — only that we're not flagging it).
+    // Sanity: same input does NOT flag when the check is disabled.
+    // We don't care whether it converges — only that we get past the
+    // coplanarity gate and produce an Outcome (which may itself be
+    // any variant).
     var unchecked = try sphar.solve(allocator, canon_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = -1, .max_outer = max_outer });
     defer unchecked.deinit();
-    try std.testing.expect(std.meta.activeTag(unchecked) != .coplanar_input);
 }
 
 test "solve rejects malformed inputs with typed errors" {

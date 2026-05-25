@@ -34,7 +34,7 @@ switch (outcome) {
         const aspect = c.aspectRatio();
         // ...
     },
-    .infeasible, .did_not_converge, .coplanar_input => { /* ... */ },
+    .infeasible, .did_not_converge => { /* ... */ },
 }
 ```
 

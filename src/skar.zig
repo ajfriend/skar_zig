@@ -540,6 +540,15 @@ pub const InputError = error{
     /// finite, or had an invalid sign. See the parameter docs on
     /// `solve` for the contract on each.
     InvalidTolerance,
+    /// The input is rank-deficient at the feasible axis: the points'
+    /// tangent-plane projections form a near-collinear 2D scatter, so
+    /// the SDP would be degenerate (one tangent eigenvalue → 0). The
+    /// literal "all points on a great circle" case is the dominant
+    /// instance, but short arcs on non-equatorial latitude circles can
+    /// also project to a near-line in the tangent plane and trigger
+    /// this. Disable the check by passing `coplanarity_tol ≤ 0` to
+    /// `solve` if you want to handle this case yourself.
+    CoplanarInput,
 };
 
 /// User-tunable solver options. Pass `.{}` to use defaults; override
@@ -561,7 +570,7 @@ pub const SolveOptions = struct {
     /// good break-even point on typical inputs.
     n_hull: i32 = 10,
 
-    /// Coplanarity check threshold (see `Outcome.coplanar_input`).
+    /// Coplanarity check threshold (see `InputError.CoplanarInput`).
     /// `4·det(C) < tol · trace(C)²` on the centered 2D scatter
     /// triggers rejection. ≤ 0 disables the check; tighter positive
     /// values catch only essentially-exact coplanarity; looser
@@ -685,7 +694,9 @@ pub const PartialInfo = struct {
 /// Tagged union over the possible outcomes of `solve`. Switch on it
 /// before reading the payload — there is no top-level `aspectRatio`
 /// to accidentally call. Use `defer outcome.deinit()` to free the
-/// per-variant allocations.
+/// per-variant allocations. Rank-deficient inputs (great-circle
+/// scatter) don't appear here: they're signaled as
+/// `InputError.CoplanarInput`, alongside `InsufficientPoints`.
 pub const Outcome = union(enum) {
     /// A valid cone was found; full eigendecomposition + primal certificate.
     converged: Converged,
@@ -694,19 +705,12 @@ pub const Outcome = union(enum) {
     /// Solver hit `max_outer` without closing the gap. Last iterate
     /// is available for inspection; no certified cone.
     did_not_converge: PartialInfo,
-    /// Input is rank-deficient (all points on a single great circle, or
-    /// more generally the tangent-plane projection at the feasible axis
-    /// is near-collinear). Disable the check by passing
-    /// `coplanarity_tol ≤ 0` to `solve` if you want to handle this
-    /// case yourself.
-    coplanar_input: void,
 
     pub fn deinit(self: *Outcome) void {
         switch (self.*) {
             .converged => |*c| c.deinit(),
             .infeasible => |*i| i.deinit(),
             .did_not_converge => |*p| p.deinit(),
-            .coplanar_input => {},
         }
     }
 };
@@ -884,10 +888,11 @@ fn isCoplanarInput(points: []const Vec3, b: Vec3, threshold: f64) bool {
 /// Main solver. Returns an `Outcome` tagged union — switch on the tag
 /// to dispatch (`converged` carries the cone's eigendecomposition +
 /// primal certificate; `infeasible` carries the Farkas certificate;
-/// `did_not_converge` carries the last iterate for diagnostics;
-/// `coplanar_input` carries nothing). `opts` controls convergence,
-/// preprocessing, and validation knobs — see `SolveOptions` for
-/// per-field docs and defaults.
+/// `did_not_converge` carries the last iterate for diagnostics).
+/// Structural input problems (too few points, bad tolerance,
+/// rank-deficient X) propagate as `InputError` via `try`. `opts`
+/// controls convergence, preprocessing, and validation knobs — see
+/// `SolveOptions` for per-field docs and defaults.
 pub fn solve(
     allocator: std.mem.Allocator,
     X: []const [3]f64,
@@ -940,9 +945,10 @@ pub fn solve(
     // 2.5) Coplanarity check on the hulled subset — an input whose hull is
     //      collinear in the tangent plane drives the SDP to a degenerate
     //      cone (one tangent eigenvalue → 0) and produces NaN downstream.
+    //      Signaled as `InputError.CoplanarInput`, symmetric with
+    //      `InsufficientPoints` — both are "X is structurally bad."
     if (opts.coplanarity_tol > 0 and isCoplanarInput(Xw, b, opts.coplanarity_tol)) {
-        // No certificate or allocation on this path.
-        return .{ .coplanar_input = {} };
+        return InputError.CoplanarInput;
     }
 
     // 3) Working buffers — all backed by the arena, freed once at the

@@ -4,11 +4,11 @@
 //! Run with:
 //!   zig build ex-status
 //!
-//! `solve` returns four distinct outcomes; only `.converged` produces
-//! a usable cone. The other three are still valid library responses
-//! — the caller dispatches on the union tag to decide what to do.
-//! Zig's exhaustive-switch check enforces that you handle every
-//! variant.
+//! `solve` returns three distinct outcomes; only `.converged` produces
+//! a usable cone. `.infeasible` and `.did_not_converge` are still
+//! valid library responses — the caller dispatches on the union tag
+//! to decide what to do. Structural input problems (too few points,
+//! rank-deficient X) propagate as `InputError` via `try`.
 
 const std = @import("std");
 const skar = @import("skar");
@@ -63,12 +63,6 @@ pub fn main() !void {
             // certificate; p.cert.claimed_gap holds the last computed gap.
             std.debug.print("did_not_converge: hit max iterations ({d})\n", .{p.outer_iters});
             std.debug.print("  last gap = {e:.3}\n", .{p.cert.claimed_gap});
-        },
-        .coplanar_input => {
-            // Input is rank-deficient (all points on a single great
-            // circle). The SDP is structurally degenerate; the
-            // solver bails before iterating.
-            std.debug.print("coplanar_input: rank-deficient input\n", .{});
         },
     }
 }

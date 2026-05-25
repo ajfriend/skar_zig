@@ -61,7 +61,6 @@ fn outcomeTag(outcome: sphar.Outcome) []const u8 {
         .converged => "converged",
         .infeasible => "infeasible",
         .did_not_converge => "did_not_converge",
-        .coplanar_input => "coplanar_input",
     };
 }
 
@@ -88,9 +87,8 @@ fn writeRecord(w: anytype, args: Args, outcome: sphar.Outcome, time_s: f64) !voi
     try w.print("\"tolerance\":{d},", .{args.tol});
     try w.print("\"time_s\":{d}", .{time_s});
 
-    // Iteration counters are 0 on the variants that bail before iterating
-    // (Infeasible bails in halfspaceCheck; coplanar_input bails in
-    // preprocessing). Only Converged and PartialInfo carry them.
+    // Iteration counters are 0 on Infeasible (bails in halfspaceCheck
+    // before iterating). Only Converged and PartialInfo carry them.
     var outer_iters: u32 = 0;
     var newton_polish_failures: u32 = 0;
 
@@ -118,7 +116,6 @@ fn writeRecord(w: anytype, args: Args, outcome: sphar.Outcome, time_s: f64) !voi
             outer_iters = p.outer_iters;
             newton_polish_failures = p.newton_polish_failures;
         },
-        .coplanar_input => {},
     }
 
     try w.print(",\"instrumentation\":{{\"outer_iters\":{d},\"newton_polish_failures\":{d}}}", .{

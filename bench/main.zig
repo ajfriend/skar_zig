@@ -72,10 +72,9 @@ pub fn main() !void {
                 .converged => "ok",
                 .infeasible => "infeas",
                 .did_not_converge => "DNC",
-                .coplanar_input => "coplanar",
             };
             // Per-variant: only Converged/PartialInfo carry iteration
-            // counters; Infeasible and coplanar bail before iterating.
+            // counters; Infeasible bails in halfspaceCheck before iterating.
             // Aspect ratio is only meaningful on Converged.
             var outer_iters: u32 = 0;
             var newton_polish_failures: u32 = 0;
@@ -95,20 +94,17 @@ pub fn main() !void {
                     // certified; compute it inline here.
                     aspect_ratio = p.sigma[2] / p.sigma[1];
                 },
-                .infeasible, .coplanar_input => {},
+                .infeasible => {},
             }
             try stdout.print("{s:22}  {s:8}  {d:2}  {d:5}  {d:11.2}  {d:14.2}  {d:12.6}  {d:7}\n", .{
                 name,        status_str, X.len,
                 outer_iters, t_min,      t_median,
                 aspect_ratio, newton_polish_failures,
             });
-            switch (lo) {
-                .converged => {
-                    total_converged_min += t_min;
-                    total_converged_median += t_median;
-                    n_converged += 1;
-                },
-                else => {},
+            if (lo == .converged) {
+                total_converged_min += t_min;
+                total_converged_median += t_median;
+                n_converged += 1;
             }
         }
     }
