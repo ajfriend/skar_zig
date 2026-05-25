@@ -1,9 +1,18 @@
 _:
     just --list
 
-# Build, run tests under kcov, fail if line coverage isn't 100%.
+# Fast test loop. Skips long-running randomized stress tests
+# (e.g. cap_test). No coverage gate. Sub-second; use this while
+# iterating. Run `just test-slow` before committing.
 test:
     zig build install-test
+    ./zig-out/bin/skar-test
+
+# Full test suite + 100% line coverage gate. Builds with -Dslow=true
+# so the randomized stress tests run, then measures coverage under
+# kcov. Slower (~10s) — the pre-commit / CI check.
+test-slow:
+    zig build install-test -Dslow=true
     rm -rf coverage
     kcov --include-pattern=src/,tests/ coverage zig-out/bin/skar-test
     @n=$(ls -1d coverage/skar-test.*/ 2>/dev/null | wc -l | tr -d ' '); \
@@ -15,8 +24,8 @@ test:
 build:
     zig build -Doptimize=ReleaseFast
 
-# Run `just test` and print where the HTML coverage report landed.
-coverage: test
+# Run `just test-slow` and print where the HTML coverage report landed.
+coverage: test-slow
     @echo "open coverage/skar-test/index.html"
 
 # Run the minimal usage example (examples/basic.zig).

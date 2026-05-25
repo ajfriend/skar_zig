@@ -27,6 +27,16 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(lib);
 
+    // Two-tier test target. The `slow` build option (`-Dslow=true`)
+    // toggles whether the long-running randomized stress tests are
+    // included. `just test` builds without it (fast subset, sub-
+    // second); `just test-slow` builds with it (full suite + coverage
+    // gate). Slow tests check `test_options.slow` and skip themselves
+    // when it's false.
+    const slow = b.option(bool, "slow", "Include slow randomized stress tests in the test binary") orelse false;
+    const test_options = b.addOptions();
+    test_options.addOption(bool, "slow", slow);
+
     // Test runner roots at `test_root.zig` at the repo root, so the
     // test module's filesystem-import scope covers BOTH `src/` (for
     // the library under test, reached via `@import("../src/foo.zig")`
@@ -39,6 +49,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     test_mod.addImport("cases", cases_mod);
+    test_mod.addOptions("test_options", test_options);
     const tests = b.addTest(.{ .name = "skar-test", .root_module = test_mod });
     const run_tests = b.addRunArtifact(tests);
     run_tests.setCwd(b.path(""));

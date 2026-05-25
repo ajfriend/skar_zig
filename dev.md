@@ -16,11 +16,33 @@
 
 | Command | What it does |
 | --- | --- |
-| `just test` | Build the test binary, run tests under `kcov`, print line coverage, fail if not exactly 100%. The inner-loop iteration command. |
-| `just build` | Build the library + CLI + bench (release-optimized). |
-| `just coverage` | Same as `just test`, then prints the path to the HTML report. |
-| `just bench` | Run the benchmark suite (uses the release binary). |
+| `just test` | Fast test loop — skips long-running randomized stress tests, no coverage gate. Sub-second; the inner-loop iteration command. |
+| `just test-slow` | Full suite + 100% line coverage gate under `kcov`. Builds with `-Dslow=true` so randomized stress tests run. ~10s; the pre-commit / CI check. |
+| `just build` | Build the library (release-optimized). |
+| `just coverage` | Same as `just test-slow`, then prints the path to the HTML report. |
+| `just bench` | Run the benchmark suite (release-built `ex-bench`). |
 | `just clean` | Remove `zig-out/`, `.zig-cache/`, `coverage/`. |
+
+### Two test tiers
+
+`just test` is the dev fast loop — runs every test except those gated
+on `-Dslow`. `just test-slow` adds the slow ones and enforces the
+coverage gate. The slow flag is plumbed via `build.zig`'s
+`b.addOptions("test_options", ...)` into a `test_options` module
+that gated tests import:
+
+```zig
+const test_options = @import("test_options");
+
+test "my slow test" {
+    if (!test_options.slow) return error.SkipZigTest;
+    // ...
+}
+```
+
+Slow tests show up as `SKIP` in the fast tier and `OK` in the slow
+tier. Coverage only makes sense on the slow tier — fast-tier
+coverage would be incomplete by design.
 
 ## Coverage
 
@@ -39,9 +61,10 @@ run). If you're debugging a gate failure, the JSON is in the
 hash-suffixed sibling, not the merged dir.
 
 The gate enforces **100% line coverage** across both production code
-(`src/*.zig`, `src/tests/*.zig`) and the case-loader helper
-(`cases/cases.zig`). Test code isn't exempt — dead test helpers are
-dead code too.
+(`src/*.zig`, `tests/*.zig`) and the case manifest (`tests/cases/cases.zig`).
+Test code isn't exempt — dead test helpers are dead code too. The
+gate runs under `just test-slow`, not `just test` — slow-tier tests
+(currently cap_test) exercise lines that the fast tier doesn't reach.
 
 What "100% line coverage" buys you:
 

@@ -105,6 +105,14 @@ const HullCtx = struct {
     }
 };
 
+/// Andrew's monotone-chain convex hull on `P`. Writes the hull
+/// vertices (as indices into `P`) into `hull_idx[0..return_value]`.
+///
+/// PRECONDITION: `hull_idx.len >= 2 * P.len`. The buffer is used as
+/// scratch during construction — lower and upper hull passes can
+/// each fill up to `P.len` entries before the trailing dedup. On
+/// inputs where most points lie on the hull (e.g. points on a
+/// circle), an `hull_idx.len == P.len` buffer overflows.
 pub fn convexHull2d(allocator: std.mem.Allocator, P: []const [2]f64, hull_idx: []u32) !u32 {
     const n = @as(u32, @intCast(P.len));
     const idx = try allocator.alloc(u32, n);

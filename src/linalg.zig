@@ -82,6 +82,15 @@ pub const Vec3 = extern struct {
         const e2 = b.cross(e1).normalize();
         return .{ .e1 = e1, .e2 = e2 };
     }
+
+    /// Uniformly random unit vector on the 2-sphere: three iid
+    /// standard normals, then normalize. The Gaussian's spherical
+    /// symmetry makes the direction uniform with no rejection.
+    pub fn randomUnit(rng: std.Random) Vec3 {
+        return (Vec3{ .m = .{
+            rng.floatNorm(f64), rng.floatNorm(f64), rng.floatNorm(f64),
+        } }).normalize();
+    }
 };
 
 // ----------------------------------------------------------------

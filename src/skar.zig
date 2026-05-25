@@ -566,7 +566,11 @@ fn hullPreprocess(
     for (Xv, 0..) |xi, i| {
         P2[i] = Qh.applyT(xi).m;
     }
-    const hull_idx = try scratch.alloc(u32, Xv.len);
+    // 2·n: Andrew's monotone chain uses `hull_idx` as scratch for the
+    // lower and upper passes; on inputs where most points are on the
+    // hull (e.g. equispaced on a circle), both passes can write up to
+    // n entries before the final dedup. Allocating only n overflows.
+    const hull_idx = try scratch.alloc(u32, 2 * Xv.len);
     const nh = try convexHull2d(scratch, P2, hull_idx);
     if (nh >= 3) {
         const Xhull = try scratch.alloc(Vec3, nh);
