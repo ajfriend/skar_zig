@@ -27,19 +27,6 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(lib);
 
-    const bench_mod = b.createModule(.{
-        .root_source_file = b.path("bench/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    bench_mod.addImport("skar", skar_mod);
-    bench_mod.addImport("cases", cases_mod);
-    const bench_exe = b.addExecutable(.{
-        .name = "skar-bench",
-        .root_module = bench_mod,
-    });
-    b.installArtifact(bench_exe);
-
     // Test runner roots at `test_root.zig` at the repo root, so the
     // test module's filesystem-import scope covers BOTH `src/` (for
     // the library under test, reached via `@import("../src/foo.zig")`
@@ -65,18 +52,15 @@ pub fn build(b: *std.Build) void {
     const install_test_step = b.step("install-test", "Install the test binary at zig-out/bin/skar-test");
     install_test_step.dependOn(&install_test.step);
 
-    const run_bench = b.addRunArtifact(bench_exe);
-    run_bench.setCwd(b.path(""));
-    const bench_step = b.step("bench", "Run skar bench");
-    bench_step.dependOn(&run_bench.step);
-
-    // Examples. Single-file demos new users can read end-to-end. Step
-    // name matches the example's filename (examples/<stem>.zig →
-    // `zig build ex-<stem>`). `ex-cases` accepts pass-through args
-    // after `--`: `zig build ex-cases -- hex` or `-- --all`.
-    addExample(b, skar_mod, cases_mod, target, optimize, "basic", "Run examples/basic.zig (happy-path only)");
-    addExample(b, skar_mod, cases_mod, target, optimize, "status", "Run examples/status.zig (full Outcome branching)");
-    addExample(b, skar_mod, cases_mod, target, optimize, "cases", "Run examples/cases.zig (run a named case or --all)");
+    // Examples. Single-file runnable programs. Step name matches the
+    // example's filename (examples/<stem>.zig → `zig build ex-<stem>`).
+    // `ex-cases` accepts pass-through args after `--`: `zig build
+    // ex-cases -- hex` or `-- --all`. `ex-bench` is force-built in
+    // ReleaseFast — timing numbers are meaningless in Debug.
+    addExample(b, skar_mod, cases_mod, target, optimize, "basic", null, "Run examples/basic.zig (happy-path only)");
+    addExample(b, skar_mod, cases_mod, target, optimize, "status", null, "Run examples/status.zig (full Outcome branching)");
+    addExample(b, skar_mod, cases_mod, target, optimize, "cases", null, "Run examples/cases.zig (run a named case or --all)");
+    addExample(b, skar_mod, cases_mod, target, optimize, "bench", .ReleaseFast, "Run examples/bench.zig (per-case timing, release-built)");
 }
 
 fn addExample(
@@ -86,12 +70,16 @@ fn addExample(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     stem: []const u8,
+    /// Per-example optimize override; null inherits the project-wide
+    /// flag. Used by `ex-bench` to force ReleaseFast regardless of
+    /// the top-level build setting.
+    optimize_override: ?std.builtin.OptimizeMode,
     description: []const u8,
 ) void {
     const mod = b.createModule(.{
         .root_source_file = b.path(b.fmt("examples/{s}.zig", .{stem})),
         .target = target,
-        .optimize = optimize,
+        .optimize = optimize_override orelse optimize,
     });
     mod.addImport("skar", skar_mod);
     mod.addImport("cases", cases_mod);

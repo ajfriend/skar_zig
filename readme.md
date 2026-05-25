@@ -52,20 +52,20 @@ top-level method to accidentally call on a non-converged result.
 - `tests/cases/*.zon` — fixture point sets + expected outcomes (data only)
 - `tests/cases/cases.zig` — comptime manifest over the .zon files; exposed as the `cases` build module
 - `test_root.zig` — test-target root at repo level
-- `bench/main.zig` — `skar-bench`: per-case timing across the bundled set
 - `examples/basic.zig`, `examples/status.zig`, `examples/cases.zig` — end-user usage demos
+- `examples/bench.zig` — per-case timing (release-built; run via `zig build ex-bench`)
 - `dev.md` — developer-workflow guide (coverage, layout, conventions)
 
 ## Build
 
 ```sh
-zig build              # builds lib + skar-bench
+zig build              # builds the library
 zig build ex-basic     # runs examples/basic.zig
 zig build ex-status    # runs examples/status.zig
 zig build ex-cases -- hex      # runs one bundled case
 zig build ex-cases -- --all    # runs every bundled case
+zig build ex-bench     # runs the per-case timing bench (release-built)
 zig build test         # runs tests under kcov via `just test`; see dev.md
-zig build bench        # runs the timing bench
 ```
 
 Equivalent `just` targets are in `justfile`. The `test` recipe

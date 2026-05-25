@@ -105,12 +105,19 @@ To add a new test file: create `tests/<name>_test.zig`, then add
 `_ = @import("<name>_test.zig");` to `tests/all.zig`. The test
 binary picks it up automatically.
 
-## Bench
+## Examples
 
-`bench/main.zig` produces the `skar-bench` binary: min/median
-timings over a hand-picked subset of the case manifest. Not part of
-the library; links against `src/root.zig` through the `skar` build
-module.
+Four single-file programs under `examples/`, each wired into
+`build.zig` via `addExample`:
 
-For ad-hoc shell-driven runs of a single case, use the `ex-cases`
-example: `zig build ex-cases -- <name>` or `-- --all`.
+| Step | Source | Role |
+| --- | --- | --- |
+| `ex-basic` | `examples/basic.zig` | Minimum API call — solve + read AR + axis. |
+| `ex-status` | `examples/status.zig` | Full `Outcome` switch with per-variant inspection. |
+| `ex-cases` | `examples/cases.zig` | Runs a bundled case by name (`-- hex`) or iterates the whole manifest (`-- --all`). |
+| `ex-bench` | `examples/bench.zig` | Per-case timing across a hand-picked subset. Forced to `.ReleaseFast` in `build.zig` regardless of the top-level optimize flag — Debug timings are noise. |
+
+`addExample` accepts an optional optimize override (`null` inherits
+the project-wide flag); only `ex-bench` uses it today. Examples
+also receive pass-through args after `--`; only `ex-cases` reads
+them today.

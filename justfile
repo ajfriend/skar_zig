@@ -11,7 +11,7 @@ test:
     @jq -r '"skar coverage: \(.percent_covered)%"' coverage/skar-test.*/coverage.json
     @jq -e '(.percent_covered | tonumber) >= 100' coverage/skar-test.*/coverage.json > /dev/null
 
-# Build the library and CLI / bench binaries (optimized).
+# Build the library (optimized).
 build:
     zig build -Doptimize=ReleaseFast
 
@@ -27,9 +27,9 @@ ex-basic:
 ex-status:
     zig build ex-status
 
-# Run the benchmark suite (uses the release-built binary from `just build`).
-bench: build
-    ./zig-out/bin/skar-bench
+# Run the per-case timing bench (examples/bench.zig, forced ReleaseFast by build.zig).
+bench:
+    zig build ex-bench
 
 # Remove build artifacts and coverage output.
 clean:
