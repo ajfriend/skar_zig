@@ -19,6 +19,10 @@ build:
 coverage: test
     @echo "open coverage/skar-test/index.html"
 
+# Run the minimal usage example (examples/basic.zig).
+example:
+    zig build example
+
 # Run the benchmark suite (uses the release-built binary from `just build`).
 bench: build
     ./zig-out/bin/skar-bench

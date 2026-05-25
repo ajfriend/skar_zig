@@ -76,4 +76,21 @@ pub fn build(b: *std.Build) void {
     run_bench.setCwd(b.path(""));
     const bench_step = b.step("bench", "Run skar bench");
     bench_step.dependOn(&run_bench.step);
+
+    // `zig build example` — minimal usage demo against the public
+    // API. Intentionally separate from cli/bench so new users have a
+    // single small file to read.
+    const example_mod = b.createModule(.{
+        .root_source_file = b.path("examples/basic.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    example_mod.addImport("skar", skar_mod);
+    const example_exe = b.addExecutable(.{
+        .name = "skar-example-basic",
+        .root_module = example_mod,
+    });
+    const run_example = b.addRunArtifact(example_exe);
+    const example_step = b.step("example", "Run the basic usage example");
+    example_step.dependOn(&run_example.step);
 }
