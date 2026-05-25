@@ -4,8 +4,25 @@
 //! eigendecomposition. No algorithm-specific knowledge — these are
 //! generic enough that they could be lifted into a standalone numerical
 //! library.
+//!
+//! Cancellation hygiene: dot products and their variants chain
+//! `@mulAdd` to save 1 rounding per term. Cross products and 2×2
+//! determinants use `diff_of_products`, Kahan's compensated FMA scheme
+//! for `a*b − c*d`, accurate to ~2 ulp even at near-cancellation.
+//! Pattern mirrored from sibling project sparea_zig.
 
 const std = @import("std");
+
+/// `a*b − c*d`, computed via Kahan's compensated FMA scheme so the
+/// result is correct to ~2 ulp even when the two products nearly
+/// cancel. Used for 2×2 determinants, cross-product components, and
+/// any other place a difference of products is the canonical form.
+pub inline fn diff_of_products(a: f64, b: f64, c: f64, d: f64) f64 {
+    const cd = c * d;
+    const err = @mulAdd(f64, -c, d, cd);
+    const dop = @mulAdd(f64, a, b, -cd);
+    return dop + err;
+}
 
 /// Relative threshold for `eig2`'s closed-form vs. axis-aligned
 /// eigenvector fallback. `|b| ≫ sqrt(ulp)·max(|a|,|d|)` ≈ `1.5e-8·scale`
@@ -25,7 +42,10 @@ pub const Vec3 = extern struct {
     pub const zero: Vec3 = .{ .m = .{ 0, 0, 0 } };
 
     pub inline fn dot(a: Vec3, b: Vec3) f64 {
-        return a.m[0] * b.m[0] + a.m[1] * b.m[1] + a.m[2] * b.m[2];
+        var t = a.m[0] * b.m[0];
+        t = @mulAdd(f64, a.m[1], b.m[1], t);
+        t = @mulAdd(f64, a.m[2], b.m[2], t);
+        return t;
     }
     pub inline fn norm(v: Vec3) f64 {
         return @sqrt(v.dot(v));
@@ -45,17 +65,18 @@ pub const Vec3 = extern struct {
     /// Linear combination: s_a·a + s_b·b.
     pub inline fn lincomb(s_a: f64, a: Vec3, s_b: f64, b: Vec3) Vec3 {
         return .{ .m = .{
-            s_a * a.m[0] + s_b * b.m[0],
-            s_a * a.m[1] + s_b * b.m[1],
-            s_a * a.m[2] + s_b * b.m[2],
+            @mulAdd(f64, s_a, a.m[0], s_b * b.m[0]),
+            @mulAdd(f64, s_a, a.m[1], s_b * b.m[1]),
+            @mulAdd(f64, s_a, a.m[2], s_b * b.m[2]),
         } };
     }
-    /// Cross product a × b.
+    /// Cross product a × b. Each component is a `diff_of_products`
+    /// so near-parallel inputs don't suffer catastrophic cancellation.
     pub inline fn cross(a: Vec3, b: Vec3) Vec3 {
         return .{ .m = .{
-            a.m[1] * b.m[2] - a.m[2] * b.m[1],
-            a.m[2] * b.m[0] - a.m[0] * b.m[2],
-            a.m[0] * b.m[1] - a.m[1] * b.m[0],
+            diff_of_products(a.m[1], b.m[2], a.m[2], b.m[1]),
+            diff_of_products(a.m[2], b.m[0], a.m[0], b.m[2]),
+            diff_of_products(a.m[0], b.m[1], a.m[1], b.m[0]),
         } };
     }
 
@@ -102,13 +123,18 @@ pub const Vec2 = extern struct {
 
     pub const zero: Vec2 = .{ .m = .{ 0, 0 } };
 
-    pub inline fn dot(a: Vec2, b: Vec2) f64 { return a.m[0] * b.m[0] + a.m[1] * b.m[1]; }
+    pub inline fn dot(a: Vec2, b: Vec2) f64 {
+        return @mulAdd(f64, a.m[1], b.m[1], a.m[0] * b.m[0]);
+    }
     pub inline fn norm(v: Vec2) f64 { return @sqrt(v.dot(v)); }
     pub inline fn scale(v: Vec2, s: f64) Vec2 { return .{ .m = .{ s * v.m[0], s * v.m[1] } }; }
     pub inline fn add(a: Vec2, b: Vec2) Vec2 { return .{ .m = .{ a.m[0] + b.m[0], a.m[1] + b.m[1] } }; }
     pub inline fn sub(a: Vec2, b: Vec2) Vec2 { return .{ .m = .{ a.m[0] - b.m[0], a.m[1] - b.m[1] } }; }
     pub inline fn lincomb(s_a: f64, a: Vec2, s_b: f64, b: Vec2) Vec2 {
-        return .{ .m = .{ s_a * a.m[0] + s_b * b.m[0], s_a * a.m[1] + s_b * b.m[1] } };
+        return .{ .m = .{
+            @mulAdd(f64, s_a, a.m[0], s_b * b.m[0]),
+            @mulAdd(f64, s_a, a.m[1], s_b * b.m[1]),
+        } };
     }
 };
 
@@ -123,13 +149,13 @@ pub const Mat2 = struct {
 
     pub inline fn apply(self: Mat2, v: Vec2) Vec2 {
         return .{ .m = .{
-            self.m[0] * v.m[0] + self.m[1] * v.m[1],
-            self.m[2] * v.m[0] + self.m[3] * v.m[1],
+            @mulAdd(f64, self.m[1], v.m[1], self.m[0] * v.m[0]),
+            @mulAdd(f64, self.m[3], v.m[1], self.m[2] * v.m[0]),
         } };
     }
 
     pub inline fn det(self: Mat2) f64 {
-        return self.m[0] * self.m[3] - self.m[1] * self.m[2];
+        return diff_of_products(self.m[0], self.m[3], self.m[1], self.m[2]);
     }
 
     pub inline fn scale(self: Mat2, s: f64) Mat2 {
@@ -138,10 +164,10 @@ pub const Mat2 = struct {
 
     pub inline fn lincomb(s_a: f64, a: Mat2, s_b: f64, b: Mat2) Mat2 {
         return .{ .m = .{
-            s_a * a.m[0] + s_b * b.m[0],
-            s_a * a.m[1] + s_b * b.m[1],
-            s_a * a.m[2] + s_b * b.m[2],
-            s_a * a.m[3] + s_b * b.m[3],
+            @mulAdd(f64, s_a, a.m[0], s_b * b.m[0]),
+            @mulAdd(f64, s_a, a.m[1], s_b * b.m[1]),
+            @mulAdd(f64, s_a, a.m[2], s_b * b.m[2]),
+            @mulAdd(f64, s_a, a.m[3], s_b * b.m[3]),
         } };
     }
 
@@ -207,20 +233,22 @@ pub const Mat3 = struct {
 
     pub inline fn apply(self: Mat3, v: Vec3) Vec3 {
         const a = self.m;
-        return .{
-            .m = .{
-                a[0] * v.m[0] + a[1] * v.m[1] + a[2] * v.m[2],
-                a[3] * v.m[0] + a[4] * v.m[1] + a[5] * v.m[2],
-                a[6] * v.m[0] + a[7] * v.m[1] + a[8] * v.m[2],
-            },
-        };
+        return .{ .m = .{
+            @mulAdd(f64, a[2], v.m[2], @mulAdd(f64, a[1], v.m[1], a[0] * v.m[0])),
+            @mulAdd(f64, a[5], v.m[2], @mulAdd(f64, a[4], v.m[1], a[3] * v.m[0])),
+            @mulAdd(f64, a[8], v.m[2], @mulAdd(f64, a[7], v.m[1], a[6] * v.m[0])),
+        } };
     }
 
+    /// Cofactor expansion along the top row. Each inner 2×2 minor uses
+    /// `diff_of_products`; the outer alternating sum chains `@mulAdd`.
     pub inline fn det(self: Mat3) f64 {
         const a = self.m;
-        return a[0] * (a[4] * a[8] - a[5] * a[7]) -
-            a[1] * (a[3] * a[8] - a[5] * a[6]) +
-            a[2] * (a[3] * a[7] - a[4] * a[6]);
+        const m0 = diff_of_products(a[4], a[8], a[5], a[7]);
+        const m1 = diff_of_products(a[3], a[8], a[5], a[6]);
+        const m2 = diff_of_products(a[3], a[7], a[4], a[6]);
+        // a[0]·m0 − a[1]·m1 + a[2]·m2, in two FMA steps.
+        return @mulAdd(f64, a[2], m2, @mulAdd(f64, -a[1], m1, a[0] * m0));
     }
 
     pub inline fn scale(self: Mat3, s: f64) Mat3 {
@@ -232,7 +260,7 @@ pub const Mat3 = struct {
     /// Linear combination: s_a·A + s_b·B.
     pub inline fn lincomb(s_a: f64, a: Mat3, s_b: f64, b: Mat3) Mat3 {
         var r: Mat3 = undefined;
-        for (0..9) |i| r.m[i] = s_a * a.m[i] + s_b * b.m[i];
+        for (0..9) |i| r.m[i] = @mulAdd(f64, s_a, a.m[i], s_b * b.m[i]);
         return r;
     }
 
@@ -252,10 +280,10 @@ pub const Mat3 = struct {
         var r: Mat3 = undefined;
         for (0..3) |row| {
             for (0..3) |c| {
-                r.m[row * 3 + c] =
-                    a[row * 3 + 0] * b[0 * 3 + c] +
-                    a[row * 3 + 1] * b[1 * 3 + c] +
-                    a[row * 3 + 2] * b[2 * 3 + c];
+                var t = a[row * 3 + 0] * b[0 * 3 + c];
+                t = @mulAdd(f64, a[row * 3 + 1], b[1 * 3 + c], t);
+                t = @mulAdd(f64, a[row * 3 + 2], b[2 * 3 + c], t);
+                r.m[row * 3 + c] = t;
             }
         }
         return r;
@@ -396,8 +424,8 @@ pub const Chol3 = struct {
     pub inline fn forwardSolve(self: Chol3, b: Vec3) Vec3 {
         const L = self.m;
         const y0 = b.m[0] / L[0];
-        const y1 = (b.m[1] - L[3] * y0) / L[4];
-        const y2 = (b.m[2] - L[6] * y0 - L[7] * y1) / L[8];
+        const y1 = @mulAdd(f64, -L[3], y0, b.m[1]) / L[4];
+        const y2 = @mulAdd(f64, -L[7], y1, @mulAdd(f64, -L[6], y0, b.m[2])) / L[8];
         return .{ .m = .{ y0, y1, y2 } };
     }
 
@@ -405,8 +433,8 @@ pub const Chol3 = struct {
     pub inline fn backSolve(self: Chol3, y: Vec3) Vec3 {
         const L = self.m;
         const x2 = y.m[2] / L[8];
-        const x1 = (y.m[1] - L[7] * x2) / L[4];
-        const x0 = (y.m[0] - L[3] * x1 - L[6] * x2) / L[0];
+        const x1 = @mulAdd(f64, -L[7], x2, y.m[1]) / L[4];
+        const x0 = @mulAdd(f64, -L[6], x2, @mulAdd(f64, -L[3], x1, y.m[0])) / L[0];
         return .{ .m = .{ x0, x1, x2 } };
     }
 
