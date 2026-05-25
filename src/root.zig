@@ -7,15 +7,13 @@
 const linalg = @import("linalg.zig");
 const skar = @import("skar.zig");
 
-// Linear algebra primitives (`src/linalg.zig`).
+// Linear-algebra types surfaced by the public solver API:
+//   Vec3 — returned by `info.b()`.
+//   Mat3 — `info.Q`, returned by `info.A()`.
+// Other linalg primitives (Vec2, Mat2, Mat3x2, Chol3, Eig2, eig2) are
+// internal — see `src/linalg.zig`.
 pub const Vec3 = linalg.Vec3;
-pub const Vec2 = linalg.Vec2;
-pub const Mat2 = linalg.Mat2;
-pub const Mat3x2 = linalg.Mat3x2;
 pub const Mat3 = linalg.Mat3;
-pub const Chol3 = linalg.Chol3;
-pub const Eig2 = linalg.Eig2;
-pub const eig2 = linalg.eig2;
 
 // Solver API (`src/skar.zig`).
 pub const Status = skar.Status;

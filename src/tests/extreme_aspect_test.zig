@@ -69,6 +69,7 @@ const sphar = @import("../root.zig");
 // public API exposed via root.zig, but tests inside src/ have direct
 // access to sibling files.
 const halfspace = @import("../halfspace.zig");
+const linalg = @import("../linalg.zig");
 const skar = @import("../skar.zig");
 
 fn deg(d: f64) f64 {
@@ -529,7 +530,7 @@ test "acceptBUpdate fallback: all backtracks fail when a point sits below FEAS_M
     // u sends Q·u in the -y direction with b=x̂, Q=(ŷ, ẑ); since x has
     // y ≈ 1, this pushes b_trial · x further below FEAS_MARGIN — every
     // backtrack stays infeasible.
-    const u = sphar.Vec2{ .m = .{ -1, 0 } };
+    const u = linalg.Vec2{ .m = .{ -1, 0 } };
     var P_buf: [1][2]f64 = undefined;
     var Ps: [1][2]f64 = undefined;
     const step = acceptBUpdate(&Xw, b, Q, u, 1.0, &P_buf, &Ps);
