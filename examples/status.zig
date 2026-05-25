@@ -60,9 +60,10 @@ pub fn main() !void {
         .did_not_converge => |p| {
             // Solver hit `max_outer` without closing the gap. The
             // last iterate is in p.Q / p.sigma but isn't a verified
-            // certificate; p.last_gap holds the last computed gap.
+            // certificate; p.gap holds the last computed gap (not
+            // certified to be ≤ `gap_tol`, unlike `Converged.gap`).
             std.debug.print("did_not_converge: hit max iterations ({d})\n", .{p.outer_iters});
-            std.debug.print("  last gap = {e:.3}\n", .{p.last_gap});
+            std.debug.print("  last gap = {e:.3}\n", .{p.gap});
         },
     }
 }

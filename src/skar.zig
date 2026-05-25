@@ -663,7 +663,7 @@ pub const Infeasible = struct {
 
 /// Solver hit `max_outer` without closing the gap. Last iterate is
 /// available for warm-start / inspection; not a certified cone, so no
-/// `aspectRatio`/`b`/`A` methods. Raw `Q`, `sigma`, `last_gap`, and
+/// `aspectRatio`/`b`/`A` methods. Raw `Q`, `sigma`, `gap`, and
 /// iteration counters are exposed for diagnostics.
 pub const DidNotConverge = struct {
     Q: Mat3,
@@ -671,8 +671,9 @@ pub const DidNotConverge = struct {
     /// Last computed gap from the final outer iteration. May be near
     /// zero (almost converged) or large (the solver gave up far from
     /// optimal); inspect alongside `outer_iters` rather than as a
-    /// uniform quality metric.
-    last_gap: f64,
+    /// uniform quality metric — unlike `Converged.gap`, this value is
+    /// not certified to be below `gap_tol`.
+    gap: f64,
     outer_iters: u32,
     newton_polish_failures: u32,
     /// Active-set cert from the last iterate (uncertified — solver
@@ -770,8 +771,8 @@ fn buildFarkasCert(allocator: std.mem.Allocator, hs: HalfspaceResult) !Cert {
 /// Build the active-set certificate for a converged (or DNC-best-effort)
 /// solve. Translates work-set indices back to the caller's original
 /// `X[]` indexing via `work_to_orig` (`null` when no hull reduction
-/// happened). The scalar quality measurement (gap / last_gap) lives on
-/// the enclosing variant.
+/// happened). The scalar quality measurement (the `gap` field) lives
+/// on the enclosing variant.
 fn buildPrimalCert(
     allocator: std.mem.Allocator,
     cert_active: []const usize,
@@ -1055,7 +1056,7 @@ pub fn solve(
         return .{ .did_not_converge = .{
             .Q = Qmat,
             .sigma = sigma,
-            .last_gap = final_gap,
+            .gap = final_gap,
             .outer_iters = outer_count,
             .newton_polish_failures = newton_polish_failures,
             .cert = cert,
