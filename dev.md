@@ -40,7 +40,7 @@ hash-suffixed sibling, not the merged dir.
 
 The gate enforces **100% line coverage** across both production code
 (`src/*.zig`, `src/tests/*.zig`) and the case-loader helper
-(`tests/cases.zig`). Test code isn't exempt — dead test helpers are
+(`cases/cases.zig`). Test code isn't exempt — dead test helpers are
 dead code too.
 
 What "100% line coverage" buys you:
@@ -95,9 +95,9 @@ each `*_test.zig` file.
 | File | Role |
 | --- | --- |
 | `src/tests/all.zig` | Aggregator: `comptime { _ = @import(...); }` for each `*_test.zig`. Pulled in by `root.zig`'s `test {}` block. |
-| `src/tests/integration_test.zig` | Loads fixtures from `cases/*.txt`, validates convergence + certificates against the C baseline. |
+| `src/tests/integration_test.zig` | Iterates the comptime case manifest from `cases/cases.zig`; validates convergence + certificates per-case. |
 | `src/tests/extreme_aspect_test.zig` | Rotation-invariance, coplanarity, near-degenerate edge-case tests on synthesized inputs. Also hits internal helpers (`acceptBUpdate`, `convexHull2d`) via filesystem imports for branches not reachable through `solve` for all inputs. |
-| `tests/cases.zig` | Shared `cases/*.txt` fixture loader. Lives outside `src/` so its module path doesn't conflict with the skar module; exposed as the `cases` build module and imported by tests / cli / bench. |
+| `cases/cases.zig` | Comptime manifest over `cases/*.zon` — defines the `Case` schema and the `all` list. Exposed as the `cases` build module; imported by tests / cli / bench. |
 
 To add a new test file: create `src/tests/<name>_test.zig`, then add
 `_ = @import("<name>_test.zig");` to `src/tests/all.zig`. The test

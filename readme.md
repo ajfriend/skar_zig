@@ -48,9 +48,9 @@ top-level method to accidentally call on a non-converged result.
 - `src/skar.zig` — solver core (~1300 lines, std-only)
 - `src/linalg.zig`, `src/halfspace.zig`, `src/newton.zig`, `src/config.zig` — internal modules
 - `src/tests/*_test.zig` — in-tree tests (run via `zig build test`)
-- `tests/cases.zig` — fixture loader (shared by tests, cli, bench)
-- `cases/*.txt` — fixture point sets
-- `cli/main.zig` — `skar-cli`: solve a single case file, emit one JSONL line
+- `cases/*.zon` — fixture point sets + expected outcomes (data only)
+- `cases/cases.zig` — comptime manifest over the .zon files; exposed as the `cases` build module
+- `cli/main.zig` — `skar-cli`: solve a single case by name, emit one JSONL line
 - `bench/main.zig` — `skar-bench`: per-case timing across the bundled set
 - `examples/basic.zig`, `examples/status.zig` — end-user usage demos
 - `dev.md` — developer-workflow guide (coverage, layout, conventions)

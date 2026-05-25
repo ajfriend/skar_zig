@@ -1,9 +1,13 @@
-//! Uniform CLI shim for the skar solver. Reads a single case file,
-//! runs the solver, emits one JSONL line on stdout.
+//! Uniform CLI shim for the skar solver. Takes a case name, runs the
+//! solver, emits one JSONL line on stdout.
 //!
 //! Usage:
-//!   skar-cli <case-file> [--tol FLOAT] [--max-iter INT]
+//!   skar-cli <case-name> [--tol FLOAT] [--max-iter INT]
 //!                         [--warmup INT] [--n-runs INT]
+//!
+//! Case names are the manifest keys in `cases/cases.zig` (e.g.
+//! "hex", "np100", "infeas_antipodal"). Run with no args to see the
+//! full list.
 
 const std = @import("std");
 const sphar = @import("skar");
@@ -14,7 +18,7 @@ const N_HULL: i32 = 10;
 const DEFAULT_TOL: f64 = 1e-6;
 
 const Args = struct {
-    case_path: []const u8,
+    case_name: []const u8,
     tol: f64 = DEFAULT_TOL,
     max_iter: ?u32 = null, // sphar.solve currently has no max_iter knob; reserved
     warmup: u32 = 0,
@@ -25,9 +29,9 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
     const argv = try std.process.argsAlloc(allocator);
     // Don't free here; caller's arena owns argv.
 
-    if (argv.len < 2) return error.MissingCasePath;
+    if (argv.len < 2) return error.MissingCaseName;
 
-    var args: Args = .{ .case_path = "" };
+    var args: Args = .{ .case_name = "" };
     var positional_seen = false;
 
     var i: usize = 1;
@@ -46,13 +50,13 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
             i += 1;
             args.n_runs = try std.fmt.parseInt(u32, argv[i], 10);
         } else if (!positional_seen) {
-            args.case_path = a;
+            args.case_name = a;
             positional_seen = true;
         } else {
             return error.UnexpectedArg;
         }
     }
-    if (!positional_seen) return error.MissingCasePath;
+    if (!positional_seen) return error.MissingCaseName;
     return args;
 }
 
@@ -78,11 +82,9 @@ fn writeLambdas(w: anytype, indices: []const u32, lambdas: []const f64) !void {
 }
 
 fn writeRecord(w: anytype, args: Args, outcome: sphar.Outcome, time_s: f64) !void {
-    const case_stem = cases.caseStem(args.case_path);
-
     try w.writeAll("{");
     try w.print("\"solver\":\"{s}\",", .{SOLVER_NAME});
-    try w.print("\"case\":\"{s}\",", .{case_stem});
+    try w.print("\"case\":\"{s}\",", .{args.case_name});
     try w.print("\"status\":\"{s}\",", .{outcomeTag(outcome)});
     try w.print("\"tolerance\":{d},", .{args.tol});
     try w.print("\"time_s\":{d}", .{time_s});
@@ -132,12 +134,17 @@ pub fn main() !void {
 
     const args = parseArgs(allocator) catch |err| {
         std.debug.print("error parsing args: {s}\n", .{@errorName(err)});
-        std.debug.print("usage: skar-cli <case-file> [--tol F] [--max-iter N] [--warmup N] [--n-runs N]\n", .{});
+        std.debug.print("usage: skar-cli <case-name> [--tol F] [--max-iter N] [--warmup N] [--n-runs N]\n", .{});
         std.process.exit(2);
     };
 
-    const X = try cases.loadCase(allocator, args.case_path);
-    defer allocator.free(X);
+    const case = cases.byName(args.case_name) orelse {
+        std.debug.print("unknown case: {s}\n", .{args.case_name});
+        std.debug.print("known cases:\n", .{});
+        for (cases.all) |entry| std.debug.print("  {s}\n", .{entry.name});
+        std.process.exit(2);
+    };
+    const X = case.points;
 
     // Warmup — discard timing.
     for (0..args.warmup) |_| {

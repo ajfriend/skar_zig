@@ -1,0 +1,10 @@
+.{
+    .description = "H3 icosahedron face 10 (vertices 3,5,9): 3 adjacent res-0 pentagon centers; covers 1/20 of the sphere; AR = 1 by symmetry",
+    .tags = .{ "small", "symmetric", "wide_angle", "icosa" },
+    .points = .{
+        .{ 0.35578140253294438, -0.84358000246617826, 0.4022342266029254 },
+        .{ 0.99500943943624154, -0.091347795276427959, 0.040147175877166437 },
+        .{ 0.41468222532033544, -0.65596240543480067, -0.63067580789147515 },
+    },
+    .expected = .{ .converged = .{ .ar = 1.0000000000000013 } },
+}

@@ -10,11 +10,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Test fixture loader. Lives outside `src/` so its module path
-    // doesn't conflict with the skar module path. Wired into skar_mod
-    // as well so tests inside `src/tests/` can `@import("cases")`.
+    // Case fixtures (cases/*.zon) + their compile-time manifest. The
+    // module lives inside cases/ so the manifest can `@import` the
+    // sibling .zon files directly without crossing module-path
+    // boundaries. Wired into skar_mod so tests inside `src/tests/`
+    // can `@import("cases")`.
     const cases_mod = b.addModule("cases", .{
-        .root_source_file = b.path("tests/cases.zig"),
+        .root_source_file = b.path("cases/cases.zig"),
         .target = target,
         .optimize = optimize,
     });

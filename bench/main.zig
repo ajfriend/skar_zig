@@ -1,5 +1,6 @@
-//! Per-case timing bench. Reads cases/*.txt, runs the solver N times,
-//! prints per-case min/median μs.
+//! Per-case timing bench. Iterates a hand-picked subset of the
+//! comptime case manifest, runs the solver N times per case, prints
+//! per-case min/median μs.
 //!
 //! Uses std.heap.smp_allocator (Zig's fast thread-safe production allocator)
 //! — see the allocator note in skar.zig.
@@ -19,6 +20,9 @@ fn cmpF64(_: void, a: f64, b: f64) bool {
 pub fn main() !void {
     const allocator = std.heap.smp_allocator;
 
+    // Representative subset of the full manifest. Intentionally fewer
+    // cases than `cases.all` — bench is for cross-config timing, not
+    // completeness; the full case-coverage gate is the test suite.
     const CASE_NAMES: []const []const u8 = &.{
         "hex",      "np20",     "np100",    "np400",
         "h3_res05", "h3_res09", "h3_res12", "h3_res15",
@@ -35,13 +39,11 @@ pub fn main() !void {
     var n_converged: u32 = 0;
 
     for (CASE_NAMES) |name| {
-        const path = try std.fmt.allocPrint(allocator, "cases/{s}.txt", .{name});
-        defer allocator.free(path);
-        const X = cases.loadCase(allocator, path) catch |err| {
-            try stdout.print("{s:22}  load error: {s}\n", .{ name, @errorName(err) });
+        const case = cases.byName(name) orelse {
+            try stdout.print("{s:22}  unknown case (not in manifest)\n", .{name});
             continue;
         };
-        defer allocator.free(X);
+        const X = case.points;
 
         // Warm up.
         for (0..N_WARMUP) |_| {

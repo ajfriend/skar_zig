@@ -1,0 +1,10 @@
+.{
+    .description = "octahedron face: S pole + equator at (0°, 90°); covers 1/8 of sphere; AR = 1 by symmetry",
+    .tags = .{ "small", "symmetric", "wide_angle" },
+    .points = .{
+        .{ 0, 0, -1 },
+        .{ 1, 0, 0 },
+        .{ 6.123233995736766e-17, 1, 0 },
+    },
+    .expected = .{ .converged = .{ .ar = 1.0000000000000004 } },
+}
