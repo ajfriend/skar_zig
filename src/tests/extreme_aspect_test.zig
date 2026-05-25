@@ -53,7 +53,7 @@
 //!  - 3 points exactly coplanar with the origin (great-circle inputs,
 //!    z = 0 in canonical orientation) caused the solver to diverge to
 //!    NaN. Now caught by the coplanarity preprocessing check in
-//!    `solve` (returns `Status.coplanar_input`); see the
+//!    `solve` (returns `Outcome.coplanar_input`); see the
 //!    "coplanarity check flags great-circle inputs" test below. The
 //!    three high-AR cases here include a z-perturbation that keeps
 //!    them safely above the rank-deficiency threshold.
@@ -155,26 +155,30 @@ const Case = struct {
 };
 
 /// Rotation-invariance assertion with case + rotation-index labels.
-/// Three checks against a converged `rot_info`: status, gap magnitude,
-/// AR drift from canonical. Each failure prints case={s} k={d} +
-/// offending value so a future regression is easy to localize. The
-/// three failure-print branches are exercised by negative tests below.
+/// Three checks against a rotated `rot_outcome`: it must be converged,
+/// have small gap, and match canonical AR. Each failure prints
+/// case={s} k={d} + offending value so a future regression is easy to
+/// localize. The three failure-print branches are exercised by negative
+/// tests below.
 fn checkRotationInvariance(
     label: []const u8,
     k: u32,
     canon_ar: f64,
-    rot_info: sphar.Info,
+    rot_outcome: sphar.Outcome,
     tol: f64,
     ar_rel_tol: f64,
 ) !void {
-    if (rot_info.status != sphar.Status.converged) {
-        std.debug.print(
-            "rotation status mismatch case={s} k={d}: expected converged, got {any}\n",
-            .{ label, k, rot_info.status },
-        );
-        return error.RotationNotConverged;
-    }
-    const gap_abs = @abs(rot_info.cert.claimed_gap);
+    const c = switch (rot_outcome) {
+        .converged => |c| c,
+        else => {
+            std.debug.print(
+                "rotation status mismatch case={s} k={d}: expected converged, got {s}\n",
+                .{ label, k, @tagName(rot_outcome) },
+            );
+            return error.RotationNotConverged;
+        },
+    };
+    const gap_abs = @abs(c.cert.claimed_gap);
     if (gap_abs >= tol) {
         std.debug.print(
             "rotation gap exceeds tol case={s} k={d}: |gap|={e:.3} tol={e:.3}\n",
@@ -182,27 +186,23 @@ fn checkRotationInvariance(
         );
         return error.RotationGapTooLarge;
     }
-    const ar_delta = @abs(canon_ar - rot_info.aspectRatio());
+    const ar_delta = @abs(canon_ar - c.aspectRatio());
     const ar_tol = ar_rel_tol * canon_ar;
     if (ar_delta > ar_tol) {
         std.debug.print(
             "rotation AR drift case={s} k={d}: canon={d:.10} rot={d:.10} delta={e:.3} tol={e:.3}\n",
-            .{ label, k, canon_ar, rot_info.aspectRatio(), ar_delta, ar_tol },
+            .{ label, k, canon_ar, c.aspectRatio(), ar_delta, ar_tol },
         );
         return error.RotationArMismatch;
     }
 }
 
 test "checkRotationInvariance: status branch prints case+k label" {
-    const fake = sphar.Info{
-        .status = .infeasible,
-        .Q = sphar.Mat3.zero,
-        .sigma = .{ 0, 0, 0 },
-        .outer_iters = 0,
-        .newton_polish_failures = 0,
-        .cert = .{ .indices = &[_]u32{}, .lambdas = &[_]f64{}, .claimed_gap = 0 },
+    const fake: sphar.Outcome = .{ .infeasible = .{
+        .cert = .{ .indices = &[_]u32{}, .lambdas = &[_]f64{} },
+        .residual = 0,
         .allocator = std.testing.allocator,
-    };
+    } };
     try std.testing.expectError(
         error.RotationNotConverged,
         checkRotationInvariance("test_label", 7, 1.0, fake, 1e-6, 1e-4),
@@ -210,15 +210,14 @@ test "checkRotationInvariance: status branch prints case+k label" {
 }
 
 test "checkRotationInvariance: gap branch prints case+k label" {
-    const fake = sphar.Info{
-        .status = .converged,
+    const fake: sphar.Outcome = .{ .converged = .{
         .Q = sphar.Mat3.zero,
         .sigma = .{ 0, 1, 1 },
         .outer_iters = 0,
         .newton_polish_failures = 0,
         .cert = .{ .indices = &[_]u32{}, .lambdas = &[_]f64{}, .claimed_gap = 1.0 },
         .allocator = std.testing.allocator,
-    };
+    } };
     try std.testing.expectError(
         error.RotationGapTooLarge,
         checkRotationInvariance("test_label", 3, 1.0, fake, 1e-6, 1e-4),
@@ -228,15 +227,14 @@ test "checkRotationInvariance: gap branch prints case+k label" {
 test "checkRotationInvariance: AR branch prints case+k label" {
     // sigma[2]/sigma[1] = 2.0, which deviates from canon_ar = 1.0
     // by far more than ar_rel_tol * canon_ar = 1e-4.
-    const fake = sphar.Info{
-        .status = .converged,
+    const fake: sphar.Outcome = .{ .converged = .{
         .Q = sphar.Mat3.zero,
         .sigma = .{ 0, 1, 2 },
         .outer_iters = 0,
         .newton_polish_failures = 0,
         .cert = .{ .indices = &[_]u32{}, .lambdas = &[_]f64{}, .claimed_gap = 0 },
         .allocator = std.testing.allocator,
-    };
+    } };
     try std.testing.expectError(
         error.RotationArMismatch,
         checkRotationInvariance("test_label", 0, 1.0, fake, 1e-6, 1e-4),
@@ -266,12 +264,13 @@ test "extreme aspect ratio: three geometries, rotation-invariant" {
     for (cases) |case| {
         // Canonical (unrotated) solve establishes the reference AR.
         var canon_pts: [3][3]f64 = case.points;
-        var canon_info = try sphar.solve(allocator, canon_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = 1e-12, .max_outer = max_outer });
-        defer canon_info.deinit();
+        var canon_outcome = try sphar.solve(allocator, canon_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = 1e-12, .max_outer = max_outer });
+        defer canon_outcome.deinit();
 
-        try std.testing.expectEqual(sphar.Status.converged, canon_info.status);
-        try std.testing.expect(@abs(canon_info.cert.claimed_gap) < tol);
-        const canon_ar = canon_info.aspectRatio();
+        try std.testing.expect(std.meta.activeTag(canon_outcome) == .converged);
+        const canon_c = canon_outcome.converged;
+        try std.testing.expect(@abs(canon_c.cert.claimed_gap) < tol);
+        const canon_ar = canon_c.aspectRatio();
         // Each case here has AR far above the existing-suite max of 1.09.
         try std.testing.expect(canon_ar > 50.0);
 
@@ -285,13 +284,13 @@ test "extreme aspect ratio: three geometries, rotation-invariant" {
             for (case.points, 0..) |p, i| {
                 rot_pts[i] = applyRot(R, p);
             }
-            var rot_info = try sphar.solve(allocator, rot_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = 1e-12, .max_outer = max_outer });
-            defer rot_info.deinit();
+            var rot_outcome = try sphar.solve(allocator, rot_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = 1e-12, .max_outer = max_outer });
+            defer rot_outcome.deinit();
 
             // Labeled check: status + gap + AR with case + rotation
             // index in the failure diagnostic. Negative tests below
             // exercise each print branch.
-            try checkRotationInvariance(case.name, k, canon_ar, rot_info, tol, ar_rel_tol);
+            try checkRotationInvariance(case.name, k, canon_ar, rot_outcome, tol, ar_rel_tol);
         }
     }
 }
@@ -311,17 +310,17 @@ test "coplanarity check cutoff is near the parameter's value" {
     // Above cutoff: ratio ≈ 4.3e-11 (43× above tol). Must not flag.
     {
         var pts: [3][3]f64 = arcPoints(90.0, 2.0e-6);
-        var info = try sphar.solve(allocator, pts[0..], .{ .gap_tol = tol, .coplanarity_tol = coplanarity_tol, .max_outer = max_outer });
-        defer info.deinit();
-        try std.testing.expect(info.status != sphar.Status.coplanar_input);
+        var outcome = try sphar.solve(allocator, pts[0..], .{ .gap_tol = tol, .coplanarity_tol = coplanarity_tol, .max_outer = max_outer });
+        defer outcome.deinit();
+        try std.testing.expect(std.meta.activeTag(outcome) != .coplanar_input);
     }
 
     // Below cutoff: ratio ≈ 2.7e-14 (37× below tol). Must flag.
     {
         var pts: [3][3]f64 = arcPoints(90.0, 5.0e-8);
-        var info = try sphar.solve(allocator, pts[0..], .{ .gap_tol = tol, .coplanarity_tol = coplanarity_tol, .max_outer = max_outer });
-        defer info.deinit();
-        try std.testing.expectEqual(sphar.Status.coplanar_input, info.status);
+        var outcome = try sphar.solve(allocator, pts[0..], .{ .gap_tol = tol, .coplanarity_tol = coplanarity_tol, .max_outer = max_outer });
+        defer outcome.deinit();
+        try std.testing.expect(std.meta.activeTag(outcome) == .coplanar_input);
     }
 
     // Same near-degenerate input, but tol tightened by 1e8: ratio
@@ -330,9 +329,9 @@ test "coplanarity check cutoff is near the parameter's value" {
     // cutoff rather than the threshold being baked in.
     {
         var pts: [3][3]f64 = arcPoints(90.0, 5.0e-8);
-        var info = try sphar.solve(allocator, pts[0..], .{ .gap_tol = tol, .coplanarity_tol = 1e-20, .max_outer = max_outer });
-        defer info.deinit();
-        try std.testing.expect(info.status != sphar.Status.coplanar_input);
+        var outcome = try sphar.solve(allocator, pts[0..], .{ .gap_tol = tol, .coplanarity_tol = 1e-20, .max_outer = max_outer });
+        defer outcome.deinit();
+        try std.testing.expect(std.meta.activeTag(outcome) != .coplanar_input);
     }
 }
 
@@ -351,13 +350,13 @@ test "coplanarity check flags great-circle inputs" {
         .{ 1.0, 0.0, 0.0 },
         .{ std.math.cos(half), std.math.sin(half), 0.0 },
     };
-    var info = try sphar.solve(allocator, canon_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = coplanarity_tol, .max_outer = max_outer });
-    defer info.deinit();
-    try std.testing.expectEqual(sphar.Status.coplanar_input, info.status);
-    // checkFeasibility on a non-converged status must signal violation
-    // (else a caller using it as a "is this Info usable" gate would
-    // see apparent feasibility on a rejected input).
-    try std.testing.expect(std.math.isInf(sphar.checkFeasibility(info, canon_pts[0..])));
+    var outcome = try sphar.solve(allocator, canon_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = coplanarity_tol, .max_outer = max_outer });
+    defer outcome.deinit();
+    try std.testing.expect(std.meta.activeTag(outcome) == .coplanar_input);
+    // `checkFeasibility` is no longer callable on a non-converged outcome:
+    // its signature takes `Converged`, so a caller who hasn't switched
+    // can't reach it. The "no apparent feasibility on a rejected input"
+    // guarantee is now structural (compile-time), not a runtime assertion.
 
     // Rotational invariance: should still be flagged after rotation.
     var rng_state: u64 = 0xCA7;
@@ -366,16 +365,16 @@ test "coplanarity check flags great-circle inputs" {
         const R = randomRotation(&rng_state);
         var rot_pts: [3][3]f64 = undefined;
         for (canon_pts, 0..) |p, i| rot_pts[i] = applyRot(R, p);
-        var rinfo = try sphar.solve(allocator, rot_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = coplanarity_tol, .max_outer = max_outer });
-        defer rinfo.deinit();
-        try std.testing.expectEqual(sphar.Status.coplanar_input, rinfo.status);
+        var rot_outcome = try sphar.solve(allocator, rot_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = coplanarity_tol, .max_outer = max_outer });
+        defer rot_outcome.deinit();
+        try std.testing.expect(std.meta.activeTag(rot_outcome) == .coplanar_input);
     }
 
     // Sanity: same input passes when the check is disabled (we don't
     // care whether it converges — only that we're not flagging it).
     var unchecked = try sphar.solve(allocator, canon_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = -1, .max_outer = max_outer });
     defer unchecked.deinit();
-    try std.testing.expect(unchecked.status != sphar.Status.coplanar_input);
+    try std.testing.expect(std.meta.activeTag(unchecked) != .coplanar_input);
 }
 
 test "solve rejects malformed inputs with typed errors" {
@@ -464,15 +463,15 @@ test "convexHull2d tie-break sort: points sharing an x-coordinate" {
 // ArenaAllocator page-pull / halfspaceCheck scratch / future build
 // changes that would shift a hard-coded fail_index off-target.
 
-fn runWithFailIndex(fail_index: usize, X: []const [3]f64, opts: sphar.SolveOptions) !sphar.Info {
+fn runWithFailIndex(fail_index: usize, X: []const [3]f64, opts: sphar.SolveOptions) !sphar.Outcome {
     var fa = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = fail_index });
     return sphar.solve(fa.allocator(), X, opts);
 }
 
 fn lastAllocFailIndex(X: []const [3]f64, opts: sphar.SolveOptions) !usize {
     var fa = std.testing.FailingAllocator.init(std.testing.allocator, .{});
-    var info = try sphar.solve(fa.allocator(), X, opts);
-    info.deinit();
+    var outcome = try sphar.solve(fa.allocator(), X, opts);
+    outcome.deinit();
     return fa.alloc_index - 1;
 }
 

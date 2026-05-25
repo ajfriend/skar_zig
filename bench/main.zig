@@ -45,44 +45,70 @@ pub fn main() !void {
 
         // Warm up.
         for (0..N_WARMUP) |_| {
-            var info = sphar.solve(allocator, X, .{ .gap_tol = TOL, .n_hull = 10, .coplanarity_tol = 1e-12 }) catch continue;
-            info.deinit();
+            var outcome = sphar.solve(allocator, X, .{ .gap_tol = TOL, .n_hull = 10, .coplanarity_tol = 1e-12 }) catch continue;
+            outcome.deinit();
         }
 
         var times = try allocator.alloc(f64, N_RUNS);
         defer allocator.free(times);
 
-        var last_info: ?sphar.Info = null;
-        defer if (last_info) |*li| li.deinit();
+        var last_outcome: ?sphar.Outcome = null;
+        defer if (last_outcome) |*lo| lo.deinit();
         for (0..N_RUNS) |r| {
             const t0 = std.time.nanoTimestamp();
-            const info = try sphar.solve(allocator, X, .{ .gap_tol = TOL, .n_hull = 10, .coplanarity_tol = 1e-12 });
+            const outcome = try sphar.solve(allocator, X, .{ .gap_tol = TOL, .n_hull = 10, .coplanarity_tol = 1e-12 });
             const t1 = std.time.nanoTimestamp();
             times[r] = @as(f64, @floatFromInt(t1 - t0)) / 1000.0;
-            if (last_info) |*li| li.deinit();
-            last_info = info;
+            if (last_outcome) |*lo| lo.deinit();
+            last_outcome = outcome;
         }
 
         std.mem.sort(f64, times, {}, cmpF64);
         const t_min = times[0];
         const t_median = times[N_RUNS / 2];
 
-        if (last_info) |li| {
-            const status_str = switch (li.status) {
+        if (last_outcome) |lo| {
+            const status_str = switch (lo) {
                 .converged => "ok",
                 .infeasible => "infeas",
                 .did_not_converge => "DNC",
                 .coplanar_input => "coplanar",
             };
+            // Per-variant: only Converged/PartialInfo carry iteration
+            // counters; Infeasible and coplanar bail before iterating.
+            // Aspect ratio is only meaningful on Converged.
+            var outer_iters: u32 = 0;
+            var newton_polish_failures: u32 = 0;
+            var aspect_ratio: f64 = 0;
+            switch (lo) {
+                .converged => |c| {
+                    outer_iters = c.outer_iters;
+                    newton_polish_failures = c.newton_polish_failures;
+                    aspect_ratio = c.aspectRatio();
+                },
+                .did_not_converge => |p| {
+                    outer_iters = p.outer_iters;
+                    newton_polish_failures = p.newton_polish_failures;
+                    // Uncertified ratio from the last iterate — useful when
+                    // chasing a DNC regression. `PartialInfo` intentionally
+                    // omits an `aspectRatio()` method since the value isn't
+                    // certified; compute it inline here.
+                    aspect_ratio = p.sigma[2] / p.sigma[1];
+                },
+                .infeasible, .coplanar_input => {},
+            }
             try stdout.print("{s:22}  {s:8}  {d:2}  {d:5}  {d:11.2}  {d:14.2}  {d:12.6}  {d:7}\n", .{
-                name,           status_str,      X.len,
-                li.outer_iters, t_min, t_median,
-                li.aspectRatio(), li.newton_polish_failures,
+                name,        status_str, X.len,
+                outer_iters, t_min,      t_median,
+                aspect_ratio, newton_polish_failures,
             });
-            if (li.status == .converged) {
-                total_converged_min += t_min;
-                total_converged_median += t_median;
-                n_converged += 1;
+            switch (lo) {
+                .converged => {
+                    total_converged_min += t_min;
+                    total_converged_median += t_median;
+                    n_converged += 1;
+                },
+                else => {},
             }
         }
     }

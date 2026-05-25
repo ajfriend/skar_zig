@@ -56,8 +56,8 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
     return args;
 }
 
-fn statusString(s: sphar.Status) []const u8 {
-    return switch (s) {
+fn outcomeTag(outcome: sphar.Outcome) []const u8 {
+    return switch (outcome) {
         .converged => "converged",
         .infeasible => "infeasible",
         .did_not_converge => "did_not_converge",
@@ -78,36 +78,52 @@ fn writeLambdas(w: anytype, indices: []const u32, lambdas: []const f64) !void {
     try w.writeAll("}");
 }
 
-fn writeRecord(w: anytype, args: Args, info: sphar.Info, time_s: f64) !void {
+fn writeRecord(w: anytype, args: Args, outcome: sphar.Outcome, time_s: f64) !void {
     const case_stem = cases.caseStem(args.case_path);
 
     try w.writeAll("{");
     try w.print("\"solver\":\"{s}\",", .{SOLVER_NAME});
     try w.print("\"case\":\"{s}\",", .{case_stem});
-    try w.print("\"status\":\"{s}\",", .{statusString(info.status)});
+    try w.print("\"status\":\"{s}\",", .{outcomeTag(outcome)});
     try w.print("\"tolerance\":{d},", .{args.tol});
     try w.print("\"time_s\":{d}", .{time_s});
 
-    if (info.status == .converged) {
-        try w.print(",\"aspect_ratio\":{d},", .{info.aspectRatio()});
-        try w.writeAll("\"Q\":[");
-        try writeVec3(w, info.Q.col(0).m);
-        try w.writeAll(",");
-        try writeVec3(w, info.Q.col(1).m);
-        try w.writeAll(",");
-        try writeVec3(w, info.Q.col(2).m);
-        try w.print("],\"sigma\":[{d},{d},{d}],", .{ info.sigma[0], info.sigma[1], info.sigma[2] });
-        try w.writeAll("\"lambdas\":");
-        try writeLambdas(w, info.cert.indices, info.cert.lambdas);
-        try w.print(",\"claimed_gap\":{d}", .{info.cert.claimed_gap});
-    } else if (info.status == .infeasible) {
-        try w.writeAll(",\"lambdas\":");
-        try writeLambdas(w, info.cert.indices, info.cert.lambdas);
+    // Iteration counters are 0 on the variants that bail before iterating
+    // (Infeasible bails in halfspaceCheck; coplanar_input bails in
+    // preprocessing). Only Converged and PartialInfo carry them.
+    var outer_iters: u32 = 0;
+    var newton_polish_failures: u32 = 0;
+
+    switch (outcome) {
+        .converged => |c| {
+            try w.print(",\"aspect_ratio\":{d},", .{c.aspectRatio()});
+            try w.writeAll("\"Q\":[");
+            try writeVec3(w, c.Q.col(0).m);
+            try w.writeAll(",");
+            try writeVec3(w, c.Q.col(1).m);
+            try w.writeAll(",");
+            try writeVec3(w, c.Q.col(2).m);
+            try w.print("],\"sigma\":[{d},{d},{d}],", .{ c.sigma[0], c.sigma[1], c.sigma[2] });
+            try w.writeAll("\"lambdas\":");
+            try writeLambdas(w, c.cert.indices, c.cert.lambdas);
+            try w.print(",\"claimed_gap\":{d}", .{c.cert.claimed_gap});
+            outer_iters = c.outer_iters;
+            newton_polish_failures = c.newton_polish_failures;
+        },
+        .infeasible => |i| {
+            try w.writeAll(",\"lambdas\":");
+            try writeLambdas(w, i.cert.indices, i.cert.lambdas);
+        },
+        .did_not_converge => |p| {
+            outer_iters = p.outer_iters;
+            newton_polish_failures = p.newton_polish_failures;
+        },
+        .coplanar_input => {},
     }
 
     try w.print(",\"instrumentation\":{{\"outer_iters\":{d},\"newton_polish_failures\":{d}}}", .{
-        info.outer_iters,
-        info.newton_polish_failures,
+        outer_iters,
+        newton_polish_failures,
     });
 
     try w.writeAll("}\n");
@@ -128,28 +144,28 @@ pub fn main() !void {
 
     // Warmup — discard timing.
     for (0..args.warmup) |_| {
-        var info = sphar.solve(allocator, X, .{ .gap_tol = args.tol, .n_hull = N_HULL, .coplanarity_tol = 1e-12 }) catch continue;
-        info.deinit();
+        var outcome = sphar.solve(allocator, X, .{ .gap_tol = args.tol, .n_hull = N_HULL, .coplanarity_tol = 1e-12 }) catch continue;
+        outcome.deinit();
     }
 
     const n_runs = if (args.n_runs == 0) 1 else args.n_runs;
     var times = try allocator.alloc(f64, n_runs);
     defer allocator.free(times);
 
-    var last_info: ?sphar.Info = null;
-    defer if (last_info) |*li| li.deinit();
+    var last_outcome: ?sphar.Outcome = null;
+    defer if (last_outcome) |*lo| lo.deinit();
     for (0..n_runs) |r| {
         const t0 = std.time.nanoTimestamp();
-        const info = try sphar.solve(allocator, X, .{ .gap_tol = args.tol, .n_hull = N_HULL, .coplanarity_tol = 1e-12 });
+        const outcome = try sphar.solve(allocator, X, .{ .gap_tol = args.tol, .n_hull = N_HULL, .coplanarity_tol = 1e-12 });
         const t1 = std.time.nanoTimestamp();
         times[r] = @as(f64, @floatFromInt(t1 - t0)) / 1e9;
-        if (last_info) |*li| li.deinit();
-        last_info = info;
+        if (last_outcome) |*lo| lo.deinit();
+        last_outcome = outcome;
     }
 
     var sum: f64 = 0;
     for (times) |t| sum += t;
     const time_s = sum / @as(f64, @floatFromInt(n_runs));
 
-    try writeRecord(stdout, args, last_info.?, time_s);
+    try writeRecord(stdout, args, last_outcome.?, time_s);
 }

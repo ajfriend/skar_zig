@@ -75,7 +75,7 @@ should be test- or diagnostic-specific.
 | File | Role |
 | --- | --- |
 | `src/root.zig` | Public API surface — re-exports from the other modules. |
-| `src/skar.zig` | Algorithm orchestration: `Status`/`SolveError`/`InputError`/`SolveOptions`/`Cert`/`Info`, mvee/gap inner code, outer-loop driver, `solve`. |
+| `src/skar.zig` | Algorithm orchestration: `Outcome` (`Converged` / `Infeasible` / `PartialInfo`), `PrimalCert` / `FarkasCert`, `SolveError`/`InputError`/`SolveOptions`, mvee/gap inner code, outer-loop driver, `solve`. |
 | `src/linalg.zig` | Linear algebra primitives: Vec2/3, Mat2/3/3x2, Chol3, `eig2`. |
 | `src/config.zig` | Internal tuning: `SIGMA_0`, `algo` (algorithm tuning), `tol` (numerical tolerances). |
 | `src/halfspace.zig` | Geometric preprocessing: `halfspaceCheck`, `convexHull2d`, `projectGnomonic`. |

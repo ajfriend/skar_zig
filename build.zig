@@ -81,7 +81,7 @@ pub fn build(b: *std.Build) void {
     // have small, single-file demos to read. Step name matches the
     // example's filename (examples/<stem>.zig → `zig build ex-<stem>`).
     addExample(b, skar_mod, target, optimize, "basic", "Run examples/basic.zig (happy-path only)");
-    addExample(b, skar_mod, target, optimize, "status", "Run examples/status.zig (full Status branching)");
+    addExample(b, skar_mod, target, optimize, "status", "Run examples/status.zig (full Outcome branching)");
 }
 
 fn addExample(

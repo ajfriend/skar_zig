@@ -8,17 +8,20 @@ const linalg = @import("linalg.zig");
 const skar = @import("skar.zig");
 
 // Linear-algebra types surfaced by the public solver API:
-//   Vec3 — returned by `info.b()`.
-//   Mat3 — `info.Q`, returned by `info.A()`.
+//   Vec3 — returned by `Converged.b()`.
+//   Mat3 — `Converged.Q`, returned by `Converged.A()`.
 // Other linalg primitives (Vec2, Mat2, Mat3x2, Chol3, Eig2, eig2) are
 // internal — see `src/linalg.zig`.
 pub const Vec3 = linalg.Vec3;
 pub const Mat3 = linalg.Mat3;
 
 // Solver API (`src/skar.zig`).
-pub const Status = skar.Status;
-pub const Cert = skar.Cert;
-pub const Info = skar.Info;
+pub const Outcome = skar.Outcome;
+pub const Converged = skar.Converged;
+pub const Infeasible = skar.Infeasible;
+pub const PartialInfo = skar.PartialInfo;
+pub const PrimalCert = skar.PrimalCert;
+pub const FarkasCert = skar.FarkasCert;
 pub const SolveError = skar.SolveError;
 pub const InputError = skar.InputError;
 pub const SolveOptions = skar.SolveOptions;

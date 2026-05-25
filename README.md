@@ -12,31 +12,35 @@ standalone, std-only Zig package.
 
 ```sh
 zig build ex-basic     # runs examples/basic.zig — happy-path only
-zig build ex-status    # runs examples/status.zig — every Status branch
+zig build ex-status    # runs examples/status.zig — every Outcome branch
 ```
 
 [`examples/basic.zig`](examples/basic.zig) is the minimum call:
-define points, call `solve`, print the aspect ratio and axis.
-[`examples/status.zig`](examples/status.zig) adds the canonical
-switch on `Info.status` showing what to inspect on each outcome.
+define points, call `solve`, switch on the outcome, print the aspect
+ratio and axis. [`examples/status.zig`](examples/status.zig) shows
+the canonical switch over every variant of the `Outcome` union.
 
 In a Zig package, depend on `skar` and call into the public API:
 
 ```zig
 const skar = @import("skar");
 
-var info = try skar.solve(allocator, points, .{});
-defer info.deinit();
+var outcome = try skar.solve(allocator, points, .{});
+defer outcome.deinit();
 
-switch (info.status) {
-    .converged => {
-        const axis = info.b();
-        const aspect = info.aspectRatio();
+switch (outcome) {
+    .converged => |c| {
+        const axis = c.b();
+        const aspect = c.aspectRatio();
         // ...
     },
     .infeasible, .did_not_converge, .coplanar_input => { /* ... */ },
 }
 ```
+
+`solve` returns a tagged union, so accessors like `aspectRatio()`,
+`b()`, `A()` only exist on the `Converged` variant — there's no
+top-level method to accidentally call on a non-converged result.
 
 ## Layout
 

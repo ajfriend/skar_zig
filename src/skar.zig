@@ -483,40 +483,15 @@ fn dualityGapConstructed(
 //     caller cooperates with allocation / fixes their input / files a
 //     bug against the library, respectively.
 //
-//   - `Info.status` describes what the algorithm *found* on the input.
-//     Callers switch on it to dispatch — use the certificate, ask the
-//     user to fix the input, retry with more iterations, etc. Every
-//     status variant corresponds to a meaningful (possibly partial)
-//     `Info` the caller can inspect.
+//   - `Outcome` is a tagged union over what the algorithm *found* on
+//     the input. Callers switch on it to dispatch — use the certificate,
+//     ask the user to fix the input, retry with more iterations, etc.
+//     Each variant carries only the data meaningful for it; the type
+//     system prevents reading `aspectRatio()` etc. on a non-converged
+//     outcome (you have to switch first and reach it through the
+//     `Converged` payload).
 //
-// In short: errors = "couldn't run"; status = "ran, here's the answer."
-
-pub const Status = enum {
-    /// Solver closed the duality gap within `gap_tol`. `Info.cert` holds
-    /// the primal certificate; `Info.Q` and `Info.sigma` hold the
-    /// eigendecomposition of A.
-    converged,
-    /// No feasible cone exists for the input. `Info.cert` holds the
-    /// Farkas certificate (`λ ≥ 0`, `Σλ = 1`, `‖Σ λᵢ xᵢ‖` small) and
-    /// `claimed_gap` is the Farkas residual.
-    infeasible,
-    /// Solver hit max iterations without closing the gap. `Info.Q` and
-    /// `Info.sigma` reflect the last iterate (near-feasible but
-    /// uncertified).
-    did_not_converge,
-    /// Coplanarity check rejected the input before iteration: the
-    /// points' tangent-plane projections at the feasible axis form a
-    /// near-collinear 2D scatter, so the SDP would be degenerate
-    /// (one tangent eigenvalue → 0). The literal "coplanar with the
-    /// origin" case (all points on a great circle) is the dominant
-    /// instance, but the check is slightly broader — short arcs on
-    /// non-equatorial latitude circles can also project to a near-line
-    /// in the tangent plane and trigger this. Either way the solver
-    /// can't produce a meaningful cone. `Info` is otherwise empty.
-    /// Disable the check by passing `coplanarity_tol ≤ 0` to `solve`
-    /// if you want to handle this case yourself.
-    coplanar_input,
-};
+// In short: errors = "couldn't run"; outcome = "ran, here's the answer."
 
 /// Internal-correctness errors. Distinct from `Allocator.Error` (the
 /// host couldn't allocate) — these mean the library produced a result
@@ -586,7 +561,7 @@ pub const SolveOptions = struct {
     /// good break-even point on typical inputs.
     n_hull: i32 = 10,
 
-    /// Coplanarity check threshold (see `Status.coplanar_input`).
+    /// Coplanarity check threshold (see `Outcome.coplanar_input`).
     /// `4·det(C) < tol · trace(C)²` on the centered 2D scatter
     /// triggers rejection. ≤ 0 disables the check; tighter positive
     /// values catch only essentially-exact coplanarity; looser
@@ -594,28 +569,42 @@ pub const SolveOptions = struct {
     /// otherwise NaN on.
     coplanarity_tol: f64 = 1e-12,
 
-    /// Outer iteration cap before returning `Status.did_not_converge`.
+    /// Outer iteration cap before returning `Outcome.did_not_converge`.
     /// Each outer iteration runs `algo.FW_PER_NEWTON` inner cycles +
     /// one Newton polish + one gap check.
     max_outer: u32 = 100,
 };
 
-pub const Cert = struct {
+/// Primal certificate for a converged or last-iterate solve.
+/// `indices` / `lambdas` are paired arrays giving the active set's
+/// indices into the caller's `X[]` and their dual weights (λ ≥ 0,
+/// ∑λ = 1).
+pub const PrimalCert = struct {
     indices: []u32,
     lambdas: []f64,
-    /// On `.converged`: the duality gap |primal − dual| (≤ `gap_tol`).
-    /// On `.infeasible`: the Farkas residual ‖∑ λᵢ xᵢ‖.
-    /// On `.did_not_converge`: the last computed gap from the final
-    /// outer iteration. May be near zero (almost converged) or large
-    /// (the solver gave up far from optimal); inspect alongside
-    /// `status` and `outer_iters` rather than as a uniform quality
-    /// metric.
-    /// On `.coplanar_input`: 0 (no certificate was constructed).
+    /// On `Converged`: the certified duality gap |primal − dual| (≤ `gap_tol`).
+    /// On `PartialInfo`: the last computed gap from the final outer
+    /// iteration. May be near zero (almost converged) or large (the
+    /// solver gave up far from optimal); inspect alongside `outer_iters`
+    /// rather than as a uniform quality metric.
     claimed_gap: f64,
 };
 
-pub const Info = struct {
-    status: Status,
+/// Farkas infeasibility certificate. `indices` / `lambdas` are the
+/// non-zero entries of a vector λ ≥ 0 with ∑λ = 1 such that
+/// ‖∑ λᵢ xᵢ‖ is small (the Farkas residual lives on the enclosing
+/// `Infeasible` variant as `residual`).
+pub const FarkasCert = struct {
+    indices: []u32,
+    lambdas: []f64,
+};
+
+/// Successful solve. Carries the full eigendecomposition of A and a
+/// primal certificate. Methods (`aspectRatio`, `b`, `A`) are defined
+/// here, not on `Outcome`, so a caller must switch on the union tag
+/// first — by construction they can't accidentally read these on a
+/// non-converged outcome.
+pub const Converged = struct {
     /// Full eigenbasis of A as columns of a 3×3 orthonormal matrix:
     ///   Q[:,0] = b (cone axis, structural eigenvalue λ_b = 1/√3)
     ///   Q[:,1], Q[:,2] = tangent-plane eigenvectors
@@ -629,43 +618,96 @@ pub const Info = struct {
     outer_iters: u32,
     /// Count of outer iterations where Newton polish bailed and FW weights were used.
     newton_polish_failures: u32,
-    cert: Cert,
+    cert: PrimalCert,
     allocator: std.mem.Allocator,
 
-    pub fn deinit(self: *Info) void {
+    pub fn deinit(self: *Converged) void {
         self.allocator.free(self.cert.indices);
         self.allocator.free(self.cert.lambdas);
     }
 
     /// Aspect ratio of the cone cross-section = sigma[2] / sigma[1] ≥ 1.
-    /// NaN (via 0/0) on any non-converged status — sigma stays at its
-    /// zero-initialized value on `infeasible` and `coplanar_input`, and
-    /// `did_not_converge` may have partial sigma but no guarantee of
-    /// meaningful aspect ratio. Callers that care should gate on
-    /// `status == .converged` before reading.
-    pub fn aspectRatio(self: Info) f64 {
+    pub fn aspectRatio(self: Converged) f64 {
         return self.sigma[2] / self.sigma[1];
     }
 
-    /// Cone axis: first column of Q. Only meaningful on `.converged` —
-    /// on other statuses Q stays at its zero-initialized value and
-    /// this silently returns `Vec3.zero`. Callers should gate on
-    /// `status == .converged` before reading.
-    pub fn b(self: Info) Vec3 {
+    /// Cone axis: first column of Q.
+    pub fn b(self: Converged) Vec3 {
         return self.Q.col(0);
     }
 
     /// Materialize A from its eigendecomposition: Σᵢ sigma[i] · Q[:,i] · Q[:,i]ᵀ.
     /// Cheap (three symmetric rank-1 updates). For a loop applying A to many
-    /// vectors, call once and reuse. Only meaningful on `.converged` — on
-    /// other statuses sigma and Q stay at zero and this silently returns
-    /// the zero matrix.
-    pub fn A(self: Info) Mat3 {
+    /// vectors, call once and reuse.
+    pub fn A(self: Converged) Mat3 {
         var m = Mat3.zero;
         m.addSymRank1(self.sigma[0], self.Q.col(0));
         m.addSymRank1(self.sigma[1], self.Q.col(1));
         m.addSymRank1(self.sigma[2], self.Q.col(2));
         return m;
+    }
+};
+
+/// Proven-infeasible outcome. Carries the Farkas certificate and the
+/// witness magnitude ‖∑ λᵢ xᵢ‖.
+pub const Infeasible = struct {
+    cert: FarkasCert,
+    /// Farkas residual: ‖∑ λᵢ xᵢ‖. Near zero by construction.
+    residual: f64,
+    allocator: std.mem.Allocator,
+
+    pub fn deinit(self: *Infeasible) void {
+        self.allocator.free(self.cert.indices);
+        self.allocator.free(self.cert.lambdas);
+    }
+};
+
+/// Solver hit `max_outer` without closing the gap. Last iterate is
+/// available for warm-start / inspection; not a certified cone, so no
+/// `aspectRatio`/`b`/`A` methods. Raw `Q`, `sigma`, `cert.claimed_gap`,
+/// and iteration counters are exposed for diagnostics.
+pub const PartialInfo = struct {
+    Q: Mat3,
+    sigma: [3]f64,
+    outer_iters: u32,
+    newton_polish_failures: u32,
+    /// Last-iterate primal cert (uncertified — solver did not close the
+    /// gap). `cert.claimed_gap` holds the last computed gap.
+    cert: PrimalCert,
+    allocator: std.mem.Allocator,
+
+    pub fn deinit(self: *PartialInfo) void {
+        self.allocator.free(self.cert.indices);
+        self.allocator.free(self.cert.lambdas);
+    }
+};
+
+/// Tagged union over the possible outcomes of `solve`. Switch on it
+/// before reading the payload — there is no top-level `aspectRatio`
+/// to accidentally call. Use `defer outcome.deinit()` to free the
+/// per-variant allocations.
+pub const Outcome = union(enum) {
+    /// A valid cone was found; full eigendecomposition + primal certificate.
+    converged: Converged,
+    /// Proven infeasible — no hemisphere contains all input points.
+    infeasible: Infeasible,
+    /// Solver hit `max_outer` without closing the gap. Last iterate
+    /// is available for inspection; no certified cone.
+    did_not_converge: PartialInfo,
+    /// Input is rank-deficient (all points on a single great circle, or
+    /// more generally the tangent-plane projection at the feasible axis
+    /// is near-collinear). Disable the check by passing
+    /// `coplanarity_tol ≤ 0` to `solve` if you want to handle this
+    /// case yourself.
+    coplanar_input: void,
+
+    pub fn deinit(self: *Outcome) void {
+        switch (self.*) {
+            .converged => |*c| c.deinit(),
+            .infeasible => |*i| i.deinit(),
+            .did_not_converge => |*p| p.deinit(),
+            .coplanar_input => {},
+        }
     }
 };
 
@@ -680,18 +722,16 @@ fn buildA(b: Vec3, v1: Vec3, v2: Vec3, sigma1: f64, sigma2: f64) Mat3 {
 }
 
 /// Max primal violation `‖A·xᵢ‖ − b·xᵢ` over all input points. Negative
-/// or zero means every point sits inside the cone defined by `info`;
+/// or zero means every point sits inside the cone defined by `c`;
 /// positive means the certificate doesn't cover at least one point.
 ///
-/// Returns `+inf` on any non-converged status — `info.A()` and `info.b()`
-/// are not meaningful when the solver didn't produce a certificate, so
-/// "violation = 0 for every point" would be misleading apparent
-/// feasibility. The `+inf` sentinel composes correctly with the typical
-/// `checkFeasibility(info, X) <= tol` gate: it always rejects.
-pub fn checkFeasibility(info: Info, X: []const [3]f64) f64 {
-    if (info.status != .converged) return std.math.inf(f64);
-    const A = info.A();
-    const bv = info.b();
+/// Takes `Converged` rather than `Outcome` — feasibility is only
+/// meaningful for a certified cone, so the type system gates the call
+/// at the switch site. Callers reach this via `outcome.converged` after
+/// switching on the union tag.
+pub fn checkFeasibility(c: Converged, X: []const [3]f64) f64 {
+    const A = c.A();
+    const bv = c.b();
     var max_viol: f64 = -1e30;
     const Xv: []const Vec3 = @ptrCast(X);
     for (Xv) |xi| {
@@ -707,8 +747,9 @@ pub fn checkFeasibility(info: Info, X: []const [3]f64) f64 {
 
 /// Build a Farkas infeasibility certificate from the halfspace result.
 /// Keeps only the nonzero (above-threshold) λ entries with their original
-/// indices. `claimed_gap` holds the Farkas residual ‖Σ λᵢ xᵢ‖.
-fn buildFarkasCert(allocator: std.mem.Allocator, hs: HalfspaceResult) !Cert {
+/// indices. The Farkas residual ‖Σ λᵢ xᵢ‖ lives on the enclosing
+/// `Infeasible` variant as `residual`, not on the cert.
+fn buildFarkasCert(allocator: std.mem.Allocator, hs: HalfspaceResult) !FarkasCert {
     var k: u32 = 0;
     for (hs.lam) |l| if (l > algo.ACTIVE_THRESH) {
         k += 1;
@@ -724,7 +765,7 @@ fn buildFarkasCert(allocator: std.mem.Allocator, hs: HalfspaceResult) !Cert {
             j += 1;
         }
     }
-    return .{ .indices = indices, .lambdas = lambdas, .claimed_gap = hs.residual };
+    return .{ .indices = indices, .lambdas = lambdas };
 }
 
 /// Build the primal certificate for a converged (or DNC-best-effort) solve.
@@ -737,7 +778,7 @@ fn buildPrimalCert(
     cert_n: usize,
     work_to_orig: ?[]const u32,
     claimed_gap: f64,
-) !Cert {
+) !PrimalCert {
     const indices = try allocator.alloc(u32, cert_n);
     errdefer allocator.free(indices);
     const lambdas = try allocator.alloc(f64, cert_n);
@@ -840,33 +881,23 @@ fn isCoplanarInput(points: []const Vec3, b: Vec3, threshold: f64) bool {
     return tr <= 0 or 4.0 * det < threshold * tr * tr;
 }
 
-/// Main solver. Returns an `Info` carrying the result `Status`, the
-/// cone's eigendecomposition (when converged), and a certificate.
-/// `opts` controls convergence, preprocessing, and validation knobs —
-/// see `SolveOptions` for per-field docs and defaults.
+/// Main solver. Returns an `Outcome` tagged union — switch on the tag
+/// to dispatch (`converged` carries the cone's eigendecomposition +
+/// primal certificate; `infeasible` carries the Farkas certificate;
+/// `did_not_converge` carries the last iterate for diagnostics;
+/// `coplanar_input` carries nothing). `opts` controls convergence,
+/// preprocessing, and validation knobs — see `SolveOptions` for
+/// per-field docs and defaults.
 pub fn solve(
     allocator: std.mem.Allocator,
     X: []const [3]f64,
     opts: SolveOptions,
-) !Info {
-    var info = Info{
-        .status = .did_not_converge,
-        .Q = Mat3.zero,
-        .sigma = .{ 0, 0, 0 },  // aspectRatio() returns NaN via 0/0 on any non-converged status
-        .outer_iters = 0,
-        .newton_polish_failures = 0,
-        .cert = .{
-            .indices = &[_]u32{},
-            .lambdas = &[_]f64{},
-            .claimed_gap = 0,
-        },
-        .allocator = allocator,
-    };
-
+) !Outcome {
     // Arena for all transient scratch allocations in this solve call.
     // Single backing alloc (bumped) + single free-all on deinit — vastly
-    // cheaper than per-buffer alloc/free. The returned Info.cert lives on
-    // the parent `allocator` so it outlives the arena.
+    // cheaper than per-buffer alloc/free. The returned cert (for the
+    // Converged / Infeasible / PartialInfo variants) lives on the
+    // parent `allocator` so it outlives the arena.
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const scratch_alloc = arena.allocator();
@@ -892,9 +923,12 @@ pub fn solve(
     } else {
         // Infeasible: Farkas cert lives on the parent allocator since it's
         // returned to the caller.
-        info.status = .infeasible;
-        info.cert = try buildFarkasCert(allocator, hs);
-        return info;
+        const farkas = try buildFarkasCert(allocator, hs);
+        return .{ .infeasible = .{
+            .cert = farkas,
+            .residual = hs.residual,
+            .allocator = allocator,
+        } };
     }
 
     // 2) Optional hull preprocessing.
@@ -907,22 +941,8 @@ pub fn solve(
     //      collinear in the tangent plane drives the SDP to a degenerate
     //      cone (one tangent eigenvalue → 0) and produces NaN downstream.
     if (opts.coplanarity_tol > 0 and isCoplanarInput(Xw, b, opts.coplanarity_tol)) {
-        // No certificate to emit. `std.mem.Allocator.free` short-circuits
-        // on zero-length slices regardless of pointer provenance, so the
-        // static-literal empty slices in `info.cert` are safe for
-        // `Info.deinit` (no allocation needed here).
-        //
-        // FUTURE-REFACTOR CAVEAT: this branch relies on `info.cert`
-        // still holding the initial static-literal value from the
-        // `var info = Info{...}` literal at the top of `solve`. If you
-        // add code between that init and this branch that conditionally
-        // assigns an *allocated* cert to `info.cert`, you must either
-        // free it before falling through here or skip this early-return
-        // and let buildPrimalCert handle the final cert assembly —
-        // otherwise the allocated cert leaks because `info.cert` is
-        // never inspected again on this path.
-        info.status = .coplanar_input;
-        return info;
+        // No certificate or allocation on this path.
+        return .{ .coplanar_input = {} };
     }
 
     // 3) Working buffers — all backed by the arena, freed once at the
@@ -939,8 +959,8 @@ pub fn solve(
     var converged = false;
     var newton_polish_failures: u32 = 0;
 
-    // Eigen-data from the last gap call — feeds info.Q/info.sigma at finalization
-    // without a redundant eig2 + lift.
+    // Eigen-data from the last gap call — feeds the converged/partial
+    // outcome's Q/sigma at finalization without a redundant eig2 + lift.
     var last_gap = GapResult{ .gap = 1e30, .cert_n = 0, .v1 = Vec3.zero, .v2 = Vec3.zero, .sigma = .{ 0, 0 } };
 
     // Orthonormal tangent basis at the current b. Rebuilt after each
@@ -1008,9 +1028,7 @@ pub fn solve(
     }
 
     // 5) Build final cert (translate work indices back to original X indices).
-    info.outer_iters = outer_count;
-    info.newton_polish_failures = newton_polish_failures;
-    info.cert = try buildPrimalCert(allocator, wb.cert_active, wb.cert_lambdas, cert_n, work_to_orig, final_gap);
+    const cert = try buildPrimalCert(allocator, wb.cert_active, wb.cert_lambdas, cert_n, work_to_orig, final_gap);
 
     // Bundle the full eigendecomposition: Q's columns are (b, v1, v2) with
     // eigenvalues (SIGMA_0, sigma[0], sigma[1]). Flip v2 if needed so (b, v1, v2) is
@@ -1018,9 +1036,27 @@ pub fn solve(
     var v1 = last_gap.v1;
     var v2 = last_gap.v2;
     if (v1.cross(v2).dot(b) < 0) v2 = v2.scale(-1.0);
-    info.Q = Mat3.fromCols(b, v1, v2);
-    info.sigma = .{ SIGMA_0, last_gap.sigma[0], last_gap.sigma[1] };
-    info.status = if (converged) .converged else .did_not_converge;
-    return info;
+    const Qmat = Mat3.fromCols(b, v1, v2);
+    const sigma: [3]f64 = .{ SIGMA_0, last_gap.sigma[0], last_gap.sigma[1] };
+
+    if (converged) {
+        return .{ .converged = .{
+            .Q = Qmat,
+            .sigma = sigma,
+            .outer_iters = outer_count,
+            .newton_polish_failures = newton_polish_failures,
+            .cert = cert,
+            .allocator = allocator,
+        } };
+    } else {
+        return .{ .did_not_converge = .{
+            .Q = Qmat,
+            .sigma = sigma,
+            .outer_iters = outer_count,
+            .newton_polish_failures = newton_polish_failures,
+            .cert = cert,
+            .allocator = allocator,
+        } };
+    }
 }
 

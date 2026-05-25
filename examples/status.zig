@@ -1,13 +1,14 @@
-//! Full status-handling example: shows the canonical switch on
-//! `Info.status` and the per-branch inspection of the result.
+//! Full outcome-handling example: shows the canonical switch on the
+//! `Outcome` tagged union and per-variant inspection.
 //!
 //! Run with:
 //!   zig build ex-status
 //!
-//! `solve` returns four distinct outcomes; only `.converged`
-//! produces a usable cone. The other three are still valid library
-//! responses — the caller dispatches on `status` to decide what to
-//! do.
+//! `solve` returns four distinct outcomes; only `.converged` produces
+//! a usable cone. The other three are still valid library responses
+//! — the caller dispatches on the union tag to decide what to do.
+//! Zig's exhaustive-switch check enforces that you handle every
+//! variant.
 
 const std = @import("std");
 const skar = @import("skar");
@@ -33,32 +34,35 @@ pub fn main() !void {
     // arguments — too few points, bad tolerance), `SolveError`
     // (library internal-correctness violation), or `OutOfMemory`.
     // All three propagate via `try`.
-    var info = try skar.solve(allocator, &points, .{});
-    defer info.deinit();
+    var outcome = try skar.solve(allocator, &points, .{});
+    defer outcome.deinit();
 
-    switch (info.status) {
-        .converged => {
-            const b = info.b(); // Vec3 — cone axis
-            const aspect = info.aspectRatio();
+    switch (outcome) {
+        .converged => |c| {
+            // `c` is a `Converged` — accessors like `aspectRatio()`,
+            // `b()`, `A()` live here, not on `Outcome` directly. The
+            // type system prevents calling them without first switching.
+            const b = c.b(); // Vec3 — cone axis
+            const aspect = c.aspectRatio();
             std.debug.print("converged: aspect ratio = {d:.6}\n", .{aspect});
             std.debug.print("  cone axis     b = ({d:.4}, {d:.4}, {d:.4})\n", .{ b.m[0], b.m[1], b.m[2] });
-            std.debug.print("  duality gap     = {e:.3}\n", .{info.cert.claimed_gap});
-            std.debug.print("  outer iters     = {d}\n", .{info.outer_iters});
-            std.debug.print("  active in cert  = {d} of {d} input points\n", .{ info.cert.indices.len, points.len });
+            std.debug.print("  duality gap     = {e:.3}\n", .{c.cert.claimed_gap});
+            std.debug.print("  outer iters     = {d}\n", .{c.outer_iters});
+            std.debug.print("  active in cert  = {d} of {d} input points\n", .{ c.cert.indices.len, points.len });
         },
-        .infeasible => {
-            // No hemisphere contains all input points. `info.cert`
-            // holds the Farkas certificate (λ ≥ 0, Σλ = 1, with
-            // ‖Σ λᵢ xᵢ‖ near zero — the residual is `claimed_gap`).
+        .infeasible => |i| {
+            // No hemisphere contains all input points. `i.cert` is a
+            // Farkas certificate (λ ≥ 0, Σλ = 1, with ‖Σ λᵢ xᵢ‖ near
+            // zero); the witness magnitude lives on `i.residual`.
             std.debug.print("infeasible: no hemisphere fits all points\n", .{});
-            std.debug.print("  Farkas residual = {e:.3}\n", .{info.cert.claimed_gap});
+            std.debug.print("  Farkas residual = {e:.3}\n", .{i.residual});
         },
-        .did_not_converge => {
+        .did_not_converge => |p| {
             // Solver hit `max_outer` without closing the gap. The
-            // last iterate is in info.Q/info.sigma but isn't a
-            // verified certificate.
-            std.debug.print("did_not_converge: hit max iterations ({d})\n", .{info.outer_iters});
-            std.debug.print("  last gap = {e:.3}\n", .{info.cert.claimed_gap});
+            // last iterate is in p.Q / p.sigma but isn't a verified
+            // certificate; p.cert.claimed_gap holds the last computed gap.
+            std.debug.print("did_not_converge: hit max iterations ({d})\n", .{p.outer_iters});
+            std.debug.print("  last gap = {e:.3}\n", .{p.cert.claimed_gap});
         },
         .coplanar_input => {
             // Input is rank-deficient (all points on a single great

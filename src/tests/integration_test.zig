@@ -101,24 +101,25 @@ test "converged cases match C baseline AR" {
         const X = try loadCase(allocator, path);
         defer allocator.free(X);
 
-        var info = try sphar.solve(allocator, X, .{ .gap_tol = tol, .n_hull = 10, .coplanarity_tol = 1e-12 });
-        defer info.deinit();
+        var outcome = try sphar.solve(allocator, X, .{ .gap_tol = tol, .n_hull = 10, .coplanarity_tol = 1e-12 });
+        defer outcome.deinit();
 
-        try std.testing.expectEqual(sphar.Status.converged, info.status);
-        try std.testing.expect(info.aspectRatio() >= 1.0 - 1e-10);
+        try std.testing.expect(std.meta.activeTag(outcome) == .converged);
+        const c = outcome.converged;
+        try std.testing.expect(c.aspectRatio() >= 1.0 - 1e-10);
         // Gap: nonneg by weak duality (solver raises on meaningfully-negative
         // gap; ulp-level negatives can slip through here, hence |gap|).
-        try std.testing.expect(@abs(info.cert.claimed_gap) < tol);
+        try std.testing.expect(@abs(c.cert.claimed_gap) < tol);
 
         // AR agrees with C baseline to within solve tolerance. Zig and C
         // are independent numerical algorithms; the certified duality gap
         // is the source of truth for correctness, not cross-implementation
         // AR equality. Use the labeled helper so the case name appears
         // in the failure diagnostic.
-        try checkArEq(exp.name, exp.ar, info.aspectRatio(), tol);
+        try checkArEq(exp.name, exp.ar, c.aspectRatio(), tol);
 
         // Feasibility: ‖Ax_i‖ ≤ b·x_i for all i (tol includes numerics buffer).
-        const viol = sphar.checkFeasibility(info, X);
+        const viol = sphar.checkFeasibility(c, X);
         try std.testing.expect(viol <= tol);
     }
 }
@@ -132,25 +133,26 @@ test "infeasible cases return Farkas certificate" {
         const X = try loadCase(allocator, path);
         defer allocator.free(X);
 
-        var info = try sphar.solve(allocator, X, .{ .gap_tol = 1e-6, .n_hull = 10, .coplanarity_tol = 1e-12 });
-        defer info.deinit();
+        var outcome = try sphar.solve(allocator, X, .{ .gap_tol = 1e-6, .n_hull = 10, .coplanarity_tol = 1e-12 });
+        defer outcome.deinit();
 
-        try std.testing.expectEqual(sphar.Status.infeasible, info.status);
+        try std.testing.expect(std.meta.activeTag(outcome) == .infeasible);
+        const inf = outcome.infeasible;
         // Verify Farkas certificate: λ ≥ 0, ∑ λ ≈ 1, ‖∑ λᵢ xᵢ‖ small.
         var sum: f64 = 0;
-        for (info.cert.lambdas) |l| {
+        for (inf.cert.lambdas) |l| {
             try std.testing.expect(l >= 0);
             sum += l;
         }
         try std.testing.expect(@abs(sum - 1.0) < 1e-9);
 
         var z = Vec3.zero;
-        for (info.cert.indices, info.cert.lambdas) |idx, l| {
+        for (inf.cert.indices, inf.cert.lambdas) |idx, l| {
             z = Vec3.lincomb(1.0, z, l, Vec3{ .m = X[idx] });
         }
         try std.testing.expect(z.norm() < 1e-2);
-        // claimed_gap matches the residual (to a couple of ulp).
-        try std.testing.expect(@abs(info.cert.claimed_gap - z.norm()) < 1e-6);
+        // residual matches the computed witness magnitude (to a couple of ulp).
+        try std.testing.expect(@abs(inf.residual - z.norm()) < 1e-6);
     }
 }
 
@@ -163,10 +165,10 @@ test "did_not_converge case raises DNC status" {
         const X = try loadCase(allocator, path);
         defer allocator.free(X);
 
-        var info = try sphar.solve(allocator, X, .{ .gap_tol = 1e-6, .n_hull = 10, .coplanarity_tol = 1e-12 });
-        defer info.deinit();
+        var outcome = try sphar.solve(allocator, X, .{ .gap_tol = 1e-6, .n_hull = 10, .coplanarity_tol = 1e-12 });
+        defer outcome.deinit();
 
-        try std.testing.expectEqual(sphar.Status.did_not_converge, info.status);
+        try std.testing.expect(std.meta.activeTag(outcome) == .did_not_converge);
     }
 }
 
@@ -175,12 +177,15 @@ test "Shape invariants: Q right-handed orthonormal, sigma paired with columns, A
     const X = try loadCase(allocator, "cases/np100.txt");
     defer allocator.free(X);
 
-    var info = try sphar.solve(allocator, X, .{ .gap_tol = 1e-6, .n_hull = 10, .coplanarity_tol = 1e-12 });
-    defer info.deinit();
+    var outcome = try sphar.solve(allocator, X, .{ .gap_tol = 1e-6, .n_hull = 10, .coplanarity_tol = 1e-12 });
+    defer outcome.deinit();
 
-    const c0 = info.Q.col(0);
-    const c1 = info.Q.col(1);
-    const c2 = info.Q.col(2);
+    try std.testing.expect(std.meta.activeTag(outcome) == .converged);
+    const c = outcome.converged;
+
+    const c0 = c.Q.col(0);
+    const c1 = c.Q.col(1);
+    const c2 = c.Q.col(2);
 
     // Q's three columns are an orthonormal basis.
     try std.testing.expect(@abs(c0.dot(c0) - 1.0) < 1e-14);
@@ -197,23 +202,23 @@ test "Shape invariants: Q right-handed orthonormal, sigma paired with columns, A
     try std.testing.expect(@abs(cross.m[2] - c2.m[2]) < 1e-14);
 
     // b() returns the first column.
-    const b = info.b();
+    const b = c.b();
     try std.testing.expect(@abs(b.m[0] - c0.m[0]) < 1e-14);
     try std.testing.expect(@abs(b.m[1] - c0.m[1]) < 1e-14);
     try std.testing.expect(@abs(b.m[2] - c0.m[2]) < 1e-14);
 
     // sigma[0] = 1/√3, tangent eigenvalues ascending, AR = sigma[2]/sigma[1].
-    try std.testing.expect(@abs(info.sigma[0] - 1.0 / @sqrt(3.0)) < 1e-14);
-    try std.testing.expect(info.sigma[1] <= info.sigma[2]);
-    try std.testing.expect(@abs(info.sigma[2] / info.sigma[1] - info.aspectRatio()) < 1e-14);
+    try std.testing.expect(@abs(c.sigma[0] - 1.0 / @sqrt(3.0)) < 1e-14);
+    try std.testing.expect(c.sigma[1] <= c.sigma[2]);
+    try std.testing.expect(@abs(c.sigma[2] / c.sigma[1] - c.aspectRatio()) < 1e-14);
 
-    // info.A() reconstructs A faithfully: each Q column is an eigenvector of
+    // c.A() reconstructs A faithfully: each Q column is an eigenvector of
     // A with the corresponding sigma as eigenvalue.
-    const A_mat = info.A();
+    const A_mat = c.A();
     const Ac0 = A_mat.apply(c0);
     const Ac1 = A_mat.apply(c1);
     const Ac2 = A_mat.apply(c2);
-    try std.testing.expect(@abs(c0.dot(Ac0) - info.sigma[0]) < 1e-12);
-    try std.testing.expect(@abs(c1.dot(Ac1) - info.sigma[1]) < 1e-12);
-    try std.testing.expect(@abs(c2.dot(Ac2) - info.sigma[2]) < 1e-12);
+    try std.testing.expect(@abs(c0.dot(Ac0) - c.sigma[0]) < 1e-12);
+    try std.testing.expect(@abs(c1.dot(Ac1) - c.sigma[1]) < 1e-12);
+    try std.testing.expect(@abs(c2.dot(Ac2) - c.sigma[2]) < 1e-12);
 }

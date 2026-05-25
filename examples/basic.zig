@@ -4,9 +4,9 @@
 //! Run with:
 //!   zig build ex-basic
 //!
-//! Just the happy-path call: pass points, get the cone axis and
-//! aspect ratio. See `examples/status.zig` (`zig build ex-status`)
-//! for the full pattern showing every Status outcome.
+//! Just the happy-path call: pass points, switch on the outcome, and
+//! print the cone axis + aspect ratio. See `examples/status.zig`
+//! (`zig build ex-status`) for the full pattern showing every variant.
 
 const std = @import("std");
 const skar = @import("skar");
@@ -26,10 +26,18 @@ pub fn main() !void {
         .{ 0, 0, 1 },
     };
 
-    var info = try skar.solve(allocator, &points, .{});
-    defer info.deinit();
+    var outcome = try skar.solve(allocator, &points, .{});
+    defer outcome.deinit();
 
-    const b = info.b();
-    std.debug.print("aspect ratio: {d:.6}\n", .{info.aspectRatio()});
+    // `solve` returns a tagged union. Switch on it before touching any
+    // payload — the type system enforces that you handle every variant.
+    // This example only cares about the happy path; see ex-status for
+    // the full set.
+    const c = switch (outcome) {
+        .converged => |c| c,
+        else => return error.UnexpectedOutcome,
+    };
+    const b = c.b();
+    std.debug.print("aspect ratio: {d:.6}\n", .{c.aspectRatio()});
     std.debug.print("cone axis:    ({d:.4}, {d:.4}, {d:.4})\n", .{ b.m[0], b.m[1], b.m[2] });
 }
