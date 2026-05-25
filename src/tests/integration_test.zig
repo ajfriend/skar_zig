@@ -82,12 +82,38 @@ const EXPECTED: []const ExpectedAr = &.{
     .{ .name = "ico_17", .ar = 1.0000000000000004 },
     .{ .name = "ico_18", .ar = 1.0000000000000004 },
     .{ .name = "ico_19", .ar = 1.0000000000000009 },
+    // H3 cells at four resolutions × four geometries (equator hex,
+    // mid-latitude hex, pentagon, ring-10 hex). The `_equator` cells
+    // are flagged in their case-file headers as solver-stress
+    // (potential DNC at tol=1e-6); the quasi-Newton b-update converges
+    // them. AR values measured by the current solver — independent
+    // from the C baseline.
+    .{ .name = "h3_r5_equator", .ar = 1.1752958153842907 },
+    .{ .name = "h3_r5_midLat", .ar = 1.0545590295012641 },
+    .{ .name = "h3_r5_pent", .ar = 1.0000000000002196 },
+    .{ .name = "h3_r5_ring10", .ar = 1.243366353672534 },
+    .{ .name = "h3_r9_equator", .ar = 1.1747851119522874 },
+    .{ .name = "h3_r9_midLat", .ar = 1.054683064195106 },
+    .{ .name = "h3_r9_pent", .ar = 1.0000000000033948 },
+    .{ .name = "h3_r9_ring10", .ar = 1.2580981665189603 },
+    .{ .name = "h3_r12_equator", .ar = 1.1747706650563783 },
+    .{ .name = "h3_r12_midLat", .ar = 1.0546757905476078 },
+    .{ .name = "h3_r12_pent", .ar = 1.000000000028632 },
+    .{ .name = "h3_r12_ring10", .ar = 1.0265391285748902 },
+    .{ .name = "h3_r15_equator", .ar = 1.1747700613978662 },
+    .{ .name = "h3_r15_midLat", .ar = 1.0546753510934872 },
+    .{ .name = "h3_r15_pent", .ar = 1.0000000014804105 },
+    .{ .name = "h3_r15_ring10", .ar = 1.2584076676894103 },
+    // Historical DNC case from before the quasi-Newton b-update;
+    // converges with the current solver. Kept as a regression check
+    // that the convergence improvement holds.
+    .{ .name = "dnc_small_wide", .ar = 2.345914858647444 },
 };
 
 const INFEASIBLE_CASES: []const []const u8 = &.{ "infeas_antipodal", "near_collinear" };
-// With the quasi-Newton preconditioned b-update, dnc_small_wide converges
-// (the original damped-gradient axis update couldn't close it within 100
-// iters). No cases left that should DNC.
+// No real case in cases/ currently produces a DidNotConverge outcome
+// at default tolerance — the synthetic `max_outer = 1` test below
+// covers the DNC code path deterministically.
 const DNC_CASES: []const []const u8 = &.{};
 
 test "converged cases match C baseline AR" {
@@ -221,4 +247,31 @@ test "Shape invariants: Q right-handed orthonormal, sigma paired with columns, A
     try std.testing.expect(@abs(c0.dot(Ac0) - c.sigma[0]) < 1e-12);
     try std.testing.expect(@abs(c1.dot(Ac1) - c.sigma[1]) < 1e-12);
     try std.testing.expect(@abs(c2.dot(Ac2) - c.sigma[2]) < 1e-12);
+}
+
+test "max_outer cap forces DidNotConverge on any input" {
+    // Deterministic DNC: an unattainably tight gap_tol with max_outer
+    // = 1 guarantees the outer loop hits its cap without closing the
+    // gap, regardless of input geometry. Pins the contract that solve
+    // returns `.did_not_converge` with `outer_iters == max_outer` and
+    // a real (non-degenerate) last-iterate gap. No real case in
+    // cases/ currently DNCs at default tolerance, so this is the only
+    // end-to-end DNC coverage.
+    const allocator = std.testing.allocator;
+    const pts = [_][3]f64{
+        .{ 1, 0, 0 },
+        .{ 0, 1, 0 },
+        .{ 0, 0, 1 },
+    };
+    var outcome = try sphar.solve(allocator, &pts, .{
+        .max_outer = 1,
+        .gap_tol = 1e-20,
+    });
+    defer outcome.deinit();
+    try std.testing.expect(std.meta.activeTag(outcome) == .did_not_converge);
+    const p = outcome.did_not_converge;
+    try std.testing.expectEqual(@as(u32, 1), p.outer_iters);
+    // Convergence is `@abs(gap) <= gap_tol`. So DNC means `@abs(gap) > tol`,
+    // not `gap > tol` — gap can be FP-noise-negative on near-converged inputs.
+    try std.testing.expect(@abs(p.gap) > 1e-20);
 }

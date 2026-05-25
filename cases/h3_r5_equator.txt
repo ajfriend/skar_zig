@@ -1,4 +1,4 @@
-# description: H3 res-5 hex at (0°, 0°); at small scales this geometry exposes solver stress (may DNC at tol=1e-6)
+# description: H3 res-5 hex at (0°, 0°); at small scales this geometry exposes solver stress
 # n: 6
 # tags: dggs, stress
 0.9999996897668092 0.00070806179796596843 0.00034513008493581481

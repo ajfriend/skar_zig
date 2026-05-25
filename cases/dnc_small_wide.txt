@@ -1,6 +1,6 @@
-# description: 10 random points in a 46° cap, rotated; DNCs at MAX_OUTER with current algorithm
+# description: 10 random points in a 46° cap, rotated
 # n: 10
-# tags: small, wide_angle, dnc_expected
+# tags: small, wide_angle
 -0.73833254178220897 0.57468173385851373 -0.35299569758680444
 -0.24755893223212069 0.52007574088831532 -0.81745690945245686
 0.10861470644791821 -0.14787648500200029 -0.98302359622070401
