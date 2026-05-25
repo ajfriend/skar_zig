@@ -9,7 +9,7 @@
 //! Run via `zig build test` from the package root.
 
 const std = @import("std");
-const sphar = @import("../root.zig");
+const sphar = @import("../src/root.zig");
 const cases = @import("cases");
 const Vec3 = sphar.Vec3;
 
@@ -35,6 +35,11 @@ test "checkArEq prints case label on failure" {
         error.AspectRatioMismatch,
         checkArEq("test_label", 1.0, 1.1, 1e-6),
     );
+}
+
+test "cases.byName: found and not-found" {
+    try std.testing.expect(cases.byName("hex") != null);
+    try std.testing.expectEqual(@as(?cases.Case, null), cases.byName("definitely_not_a_case"));
 }
 
 test "all cases match expected outcome" {

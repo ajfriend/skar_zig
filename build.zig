@@ -10,17 +10,15 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Case fixtures (cases/*.zon) + their compile-time manifest. The
-    // module lives inside cases/ so the manifest can `@import` the
-    // sibling .zon files directly without crossing module-path
-    // boundaries. Wired into skar_mod so tests inside `src/tests/`
-    // can `@import("cases")`.
+    // Case fixtures (tests/cases/*.zon) + their compile-time manifest.
+    // The module lives inside tests/cases/ so the manifest can `@import`
+    // the sibling .zon files directly without crossing module-path
+    // boundaries.
     const cases_mod = b.addModule("cases", .{
-        .root_source_file = b.path("cases/cases.zig"),
+        .root_source_file = b.path("tests/cases/cases.zig"),
         .target = target,
         .optimize = optimize,
     });
-    skar_mod.addImport("cases", cases_mod);
 
     const lib = b.addLibrary(.{
         .name = "skar",
@@ -42,13 +40,19 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(bench_exe);
 
-    // Test runner roots at the library module — `root.zig`'s `test {}`
-    // block pulls in `src/tests/all.zig` which aggregates every
-    // `*_test.zig`. Tests live in the same module path as the
-    // library sources, so they can reach internals via filesystem
-    // `@import("../halfspace.zig")` etc. without the `_internal`
-    // namespace dance.
-    const tests = b.addTest(.{ .name = "skar-test", .root_module = skar_mod });
+    // Test runner roots at `test_root.zig` at the repo root, so the
+    // test module's filesystem-import scope covers BOTH `src/` (for
+    // the library under test, reached via `@import("../src/foo.zig")`
+    // from test files) AND `tests/` (the test files themselves).
+    // This lets tests reach internals like `acceptBUpdate` directly,
+    // without re-exporting them through the public API.
+    const test_mod = b.createModule(.{
+        .root_source_file = b.path("test_root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_mod.addImport("cases", cases_mod);
+    const tests = b.addTest(.{ .name = "skar-test", .root_module = test_mod });
     const run_tests = b.addRunArtifact(tests);
     run_tests.setCwd(b.path(""));
     const test_step = b.step("test", "Run skar tests");

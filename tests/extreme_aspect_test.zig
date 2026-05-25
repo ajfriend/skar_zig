@@ -64,13 +64,14 @@
 //!    drift doesn't make the test flaky.
 
 const std = @import("std");
-const sphar = @import("../root.zig");
+const sphar = @import("../src/root.zig");
 // Internals reached by filesystem path — these aren't part of the
-// public API exposed via root.zig, but tests inside src/ have direct
-// access to sibling files.
-const halfspace = @import("../halfspace.zig");
-const linalg = @import("../linalg.zig");
-const skar = @import("../skar.zig");
+// public API exposed via root.zig, but the test module's root
+// (`test_root.zig` at the repo root) has both `src/` and `tests/`
+// inside its filesystem-import scope, so these direct reaches work.
+const halfspace = @import("../src/halfspace.zig");
+const linalg = @import("../src/linalg.zig");
+const skar = @import("../src/skar.zig");
 
 fn deg(d: f64) f64 {
     return d * std.math.pi / 180.0;

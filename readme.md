@@ -45,11 +45,13 @@ top-level method to accidentally call on a non-converged result.
 ## Layout
 
 - `src/root.zig` — public API re-exports
-- `src/skar.zig` — solver core (~1300 lines, std-only)
+- `src/api.zig` — public API surface (types + methods + `checkFeasibility`)
+- `src/skar.zig` — solver core (std-only)
 - `src/linalg.zig`, `src/halfspace.zig`, `src/newton.zig`, `src/config.zig` — internal modules
-- `src/tests/*_test.zig` — in-tree tests (run via `zig build test`)
-- `cases/*.zon` — fixture point sets + expected outcomes (data only)
-- `cases/cases.zig` — comptime manifest over the .zon files; exposed as the `cases` build module
+- `tests/*_test.zig` — top-level tests (run via `zig build test`)
+- `tests/cases/*.zon` — fixture point sets + expected outcomes (data only)
+- `tests/cases/cases.zig` — comptime manifest over the .zon files; exposed as the `cases` build module
+- `test_root.zig` — test-target root at repo level
 - `bench/main.zig` — `skar-bench`: per-case timing across the bundled set
 - `examples/basic.zig`, `examples/status.zig`, `examples/cases.zig` — end-user usage demos
 - `dev.md` — developer-workflow guide (coverage, layout, conventions)

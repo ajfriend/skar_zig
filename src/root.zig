@@ -37,13 +37,3 @@ pub const checkFeasibility = api.checkFeasibility;
 
 // Solver entry point (`src/skar.zig`).
 pub const solve = skar.solve;
-
-// Test discovery: `zig build test` uses this file as the test root,
-// so the comptime import below pulls every test in `src/tests/` into
-// the test binary. The body of this `test` block only compiles when
-// Zig is building tests (the `test` declaration is skipped in
-// non-test builds), so the library artifact itself sees no test
-// dependencies.
-test {
-    _ = @import("tests/all.zig");
-}

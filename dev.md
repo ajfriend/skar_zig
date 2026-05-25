@@ -84,23 +84,25 @@ should be test- or diagnostic-specific.
 
 ## Test layout
 
-Test files live **inside** `src/tests/` so they're in the same Zig
-module path as the library sources — internals are reached via
-filesystem `@import("../halfspace.zig")` etc., without needing a
-"test-only" namespace in the public API. `zig build test` uses
-`src/root.zig` as the test root; the `test {}` block at the bottom
-of `root.zig` pulls in `src/tests/all.zig`, which `comptime`-imports
-each `*_test.zig` file.
+Tests live at top-level `tests/`, not inside `src/`. The test target
+roots at `test_root.zig` at the repo root; its module's
+filesystem-import scope therefore covers both `src/` (the library
+under test, reached via `@import("../src/foo.zig")` from test files)
+and `tests/` (the test files themselves). This lets tests reach
+internals like `acceptBUpdate` or `convexHull2d` directly, without
+re-exporting them through the public API.
 
 | File | Role |
 | --- | --- |
-| `src/tests/all.zig` | Aggregator: `comptime { _ = @import(...); }` for each `*_test.zig`. Pulled in by `root.zig`'s `test {}` block. |
-| `src/tests/integration_test.zig` | Iterates the comptime case manifest from `cases/cases.zig`; validates convergence + certificates per-case. |
-| `src/tests/extreme_aspect_test.zig` | Rotation-invariance, coplanarity, near-degenerate edge-case tests on synthesized inputs. Also hits internal helpers (`acceptBUpdate`, `convexHull2d`) via filesystem imports for branches not reachable through `solve` for all inputs. |
-| `cases/cases.zig` | Comptime manifest over `cases/*.zon` — defines the `Case` schema and the `all` list. Exposed as the `cases` build module; imported by tests / bench / the `ex-cases` example. |
+| `test_root.zig` | Test-target root at the repo level. One `test {}` block that pulls in `tests/all.zig`. |
+| `tests/all.zig` | Aggregator: `comptime { _ = @import(...); }` for each `*_test.zig`. |
+| `tests/integration_test.zig` | Iterates the comptime case manifest from `tests/cases/cases.zig`; validates convergence + certificates per-case. |
+| `tests/extreme_aspect_test.zig` | Rotation-invariance, coplanarity, near-degenerate edge-case tests on synthesized inputs. Also hits internal helpers (`acceptBUpdate`, `convexHull2d`) via filesystem imports for branches not reachable through `solve` for all inputs. |
+| `tests/cases/cases.zig` | Comptime manifest over `tests/cases/*.zon` — defines the `Case` schema and the `all` list. Exposed as the `cases` build module; imported by tests / bench / the `ex-cases` example. |
+| `tests/cases/*.zon` | Per-case fixture: description + tags + points + expected outcome. |
 
-To add a new test file: create `src/tests/<name>_test.zig`, then add
-`_ = @import("<name>_test.zig");` to `src/tests/all.zig`. The test
+To add a new test file: create `tests/<name>_test.zig`, then add
+`_ = @import("<name>_test.zig");` to `tests/all.zig`. The test
 binary picks it up automatically.
 
 ## Bench
