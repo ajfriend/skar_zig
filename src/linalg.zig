@@ -394,7 +394,8 @@ pub const Mat3 = struct {
     }
 
     /// Cholesky: returns L (lower-triangular, upper zeroed) such that
-    /// self = L · Lᵀ, or null on non-SPD.
+    /// self = L · Lᵀ, or null on non-SPD. Inner `a − b*c` subtractions
+    /// use `@mulAdd`, matching the pattern in `Chol3.forwardSolve`.
     pub fn cholesky(self: Mat3) ?Chol3 {
         const S = self.m;
         var L: [9]f64 = .{0} ** 9;
@@ -403,11 +404,11 @@ pub const Mat3 = struct {
         L[0] = @sqrt(s);
         L[3] = S[1] / L[0];
         L[6] = S[2] / L[0];
-        s = S[4] - L[3] * L[3];
+        s = @mulAdd(f64, -L[3], L[3], S[4]);
         if (s <= 0) return null;
         L[4] = @sqrt(s);
-        L[7] = (S[5] - L[6] * L[3]) / L[4];
-        s = S[8] - L[6] * L[6] - L[7] * L[7];
+        L[7] = @mulAdd(f64, -L[6], L[3], S[5]) / L[4];
+        s = @mulAdd(f64, -L[7], L[7], @mulAdd(f64, -L[6], L[6], S[8]));
         if (s <= 0) return null;
         L[8] = @sqrt(s);
         return Chol3{ .m = L };
@@ -460,7 +461,11 @@ pub fn eig2(M: [4]f64) Eig2 {
     const b = M[1];
     const d = M[3];
     const tr = a + d;
-    const disc = @sqrt((a - d) * (a - d) + 4.0 * b * b);
+    const ad = a - d;
+    // (a-d)² + 4·b², via FMA. Sum-of-squares — no cancellation
+    // possible, so the win is precision-stylistic consistency, not
+    // a robustness fix.
+    const disc = @sqrt(@mulAdd(f64, 4.0, b * b, ad * ad));
     var result: Eig2 = undefined;
     result.vals[0] = (tr - disc) / 2.0;
     result.vals[1] = (tr + disc) / 2.0;
