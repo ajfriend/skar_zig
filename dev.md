@@ -95,11 +95,12 @@ re-exporting them through the public API.
 | File | Role |
 | --- | --- |
 | `test_root.zig` | Test-target root at the repo level. One `test {}` block that pulls in `tests/all.zig`. |
-| `tests/all.zig` | Aggregator: `comptime { _ = @import(...); }` for each `*_test.zig`. |
-| `tests/integration_test.zig` | Iterates the comptime case manifest from `tests/cases/cases.zig`; validates convergence + certificates per-case. |
+| `tests/all.zig` | Aggregator: `comptime { _ = @import(...); }` for each test file. |
+| `tests/solver_test.zig` | Synthetic property/contract tests of `solve` (e.g. the `max_outer` DNC contract). No fixture dependency. |
 | `tests/extreme_aspect_test.zig` | Rotation-invariance, coplanarity, near-degenerate edge-case tests on synthesized inputs. Also hits internal helpers (`acceptBUpdate`, `convexHull2d`) via filesystem imports for branches not reachable through `solve` for all inputs. |
-| `tests/cases/cases.zig` | Comptime manifest over `tests/cases/*.zon` — defines the `Case` schema and the `all` list. Exposed as the `cases` build module; imported by tests / bench / the `ex-cases` example. |
-| `tests/cases/*.zon` | Per-case fixture: description + tags + points + expected outcome. |
+| `tests/cases/cases.zig` | Comptime manifest over `tests/cases/zon/*.zon` — defines the `Case` schema and the `all` list. Exposed as the `cases` build module; imported by tests / bench / the `ex-cases` example. |
+| `tests/cases/cases_test.zig` | Tests driven by the case manifest: cases.byName lookup, per-case outcome dispatch, Q/sigma shape invariants on np100. Lives next to `cases.zig` but is not part of the cases module compilation. |
+| `tests/cases/zon/*.zon` | Per-case fixture: description + tags + points + expected outcome. |
 
 To add a new test file: create `tests/<name>_test.zig`, then add
 `_ = @import("<name>_test.zig");` to `tests/all.zig`. The test

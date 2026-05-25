@@ -49,8 +49,9 @@ top-level method to accidentally call on a non-converged result.
 - `src/skar.zig` — solver core (std-only)
 - `src/linalg.zig`, `src/halfspace.zig`, `src/newton.zig`, `src/config.zig` — internal modules
 - `tests/*_test.zig` — top-level tests (run via `zig build test`)
-- `tests/cases/*.zon` — fixture point sets + expected outcomes (data only)
 - `tests/cases/cases.zig` — comptime manifest over the .zon files; exposed as the `cases` build module
+- `tests/cases/cases_test.zig` — tests driven by the case manifest
+- `tests/cases/zon/*.zon` — fixture point sets + expected outcomes (data only)
 - `test_root.zig` — test-target root at repo level
 - `examples/basic.zig`, `examples/status.zig`, `examples/cases.zig` — end-user usage demos
 - `examples/bench.zig` — per-case timing (release-built; run via `zig build ex-bench`)

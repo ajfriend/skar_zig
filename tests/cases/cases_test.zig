@@ -1,25 +1,21 @@
-//! Integration tests for the skar solver.
+//! Tests driven by the bundled case manifest in `cases.zig`.
 //!
-//! Iterates the comptime case manifest from `cases/cases.zig`, dispatching
-//! on each case's expected outcome (converged → AR check + feasibility;
-//! infeasible → Farkas cert validation). The `max_outer` cap test below
-//! covers the DidNotConverge variant deterministically — no real case in
-//! `cases/` currently produces that outcome.
-//!
-//! Run via `zig build test` from the package root.
+//! This file lives in `tests/cases/` next to the `cases.zig` module
+//! it exercises, but it is NOT compiled as part of the cases module.
+//! It's a stand-alone test file reached by the test target's root
+//! (`test_root.zig` → `tests/all.zig` → here).
 
 const std = @import("std");
-const sphar = @import("../src/root.zig");
+const sphar = @import("../../src/root.zig");
 const cases = @import("cases");
 const Vec3 = sphar.Vec3;
 
 /// Labeled approx-equal check on aspect ratios. On failure prints
-/// the case label and full-precision expected/actual/delta — the
-/// equivalent of the hand-rolled diagnostic that pre-dated the move
-/// to `std.testing.expectApproxEqAbs` (which prints values but no
-/// label, leaving "which case tripped it?" implicit). The failure
-/// branch is exercised by a dedicated negative test below, so kcov
-/// covers the print path.
+/// the case label + full-precision expected/actual/delta — useful
+/// because the all-cases test loop has dozens of iterations and a
+/// plain `expect` failure wouldn't say which case tripped it. The
+/// failure branch is exercised by a dedicated negative test below,
+/// so kcov covers the print path.
 fn checkArEq(label: []const u8, expected: f64, actual: f64, tol: f64) !void {
     if (@abs(expected - actual) > tol) {
         std.debug.print(
@@ -63,10 +59,10 @@ test "all cases match expected outcome" {
                 // gap; ulp-level negatives can slip through here, hence |gap|).
                 try std.testing.expect(@abs(c.gap) < tol);
 
-                // AR agrees with C baseline / measured value to within solve
+                // AR agrees with the per-case expected value to within solve
                 // tolerance. The certified duality gap is the source of truth
-                // for correctness; cross-implementation AR agreement is a
-                // sanity check that uses the labeled helper for diagnostics.
+                // for correctness; AR agreement is a cross-implementation /
+                // cross-version sanity check.
                 try checkArEq(entry.name, exp.ar, c.aspectRatio(), tol);
 
                 // Feasibility: ‖Ax_i‖ ≤ b·x_i for all i (tol includes numerics buffer).
@@ -144,31 +140,4 @@ test "Shape invariants: Q right-handed orthonormal, sigma paired with columns, A
     try std.testing.expect(@abs(c0.dot(Ac0) - c.sigma[0]) < 1e-12);
     try std.testing.expect(@abs(c1.dot(Ac1) - c.sigma[1]) < 1e-12);
     try std.testing.expect(@abs(c2.dot(Ac2) - c.sigma[2]) < 1e-12);
-}
-
-test "max_outer cap forces DidNotConverge on any input" {
-    // Deterministic DNC: an unattainably tight gap_tol with max_outer
-    // = 1 guarantees the outer loop hits its cap without closing the
-    // gap, regardless of input geometry. Pins the contract that solve
-    // returns `.did_not_converge` with `outer_iters == max_outer` and
-    // a real (non-degenerate) last-iterate gap. No real case in
-    // cases/ currently DNCs at default tolerance, so this is the only
-    // end-to-end DNC coverage.
-    const allocator = std.testing.allocator;
-    const pts = [_][3]f64{
-        .{ 1, 0, 0 },
-        .{ 0, 1, 0 },
-        .{ 0, 0, 1 },
-    };
-    var outcome = try sphar.solve(allocator, &pts, .{
-        .max_outer = 1,
-        .gap_tol = 1e-20,
-    });
-    defer outcome.deinit();
-    try std.testing.expect(std.meta.activeTag(outcome) == .did_not_converge);
-    const p = outcome.did_not_converge;
-    try std.testing.expectEqual(@as(u32, 1), p.outer_iters);
-    // Convergence is `@abs(gap) <= gap_tol`. So DNC means `@abs(gap) > tol`,
-    // not `gap > tol` — gap can be FP-noise-negative on near-converged inputs.
-    try std.testing.expect(@abs(p.gap) > 1e-20);
 }
