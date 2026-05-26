@@ -83,7 +83,7 @@ const LU = struct {
             for (kk + 1..n) |i| {
                 data[i * n + kk] *= inv;
                 for (kk + 1..n) |j| {
-                    data[i * n + j] -= data[i * n + kk] * data[kk * n + j];
+                    data[i * n + j] = @mulAdd(f64, -data[i * n + kk], data[kk * n + j], data[i * n + j]);
                 }
             }
         }
@@ -104,13 +104,13 @@ const LU = struct {
             }
         }
         for (1..n) |i| {
-            for (0..i) |j| b[i] -= data[i * n + j] * b[j];
+            for (0..i) |j| b[i] = @mulAdd(f64, -data[i * n + j], b[j], b[i]);
         }
         var i: usize = n;
         while (i > 0) {
             i -= 1;
             var j = i + 1;
-            while (j < n) : (j += 1) b[i] -= data[i * n + j] * b[j];
+            while (j < n) : (j += 1) b[i] = @mulAdd(f64, -data[i * n + j], b[j], b[i]);
             b[i] /= data[i * n + i];
         }
     }
