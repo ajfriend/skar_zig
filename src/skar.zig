@@ -71,7 +71,7 @@ const SolveOptions = api.SolveOptions;
 inline fn rescaleP(P_buf: []const [2]f64, Ps: [][2]f64) f64 {
     var s2_max: f64 = 0;
     for (P_buf) |p| {
-        const sq = p[0] * p[0] + p[1] * p[1];
+        const sq = @mulAdd(f64, p[1], p[1], p[0] * p[0]);
         if (sq > s2_max) s2_max = sq;
     }
     var s_scale = @sqrt(s2_max);
@@ -251,7 +251,7 @@ fn mveeFw(
             if (jm != j_max) {
                 const g_cross = Ql[j_max].dot(x_min);
                 const a = g_max - g_min;
-                const det_G = g_max * g_min - g_cross * g_cross;
+                const det_G = linalg.diff_of_products(g_max, g_min, g_cross, g_cross);
                 var step: f64 = if (det_G > tol.NEAR_SING) a / (2.0 * det_G) else w[jm];
                 if (step > w[jm]) step = w[jm];
                 w[j_max] += step;
@@ -298,7 +298,7 @@ fn recoverAPerp(P: []const [2]f64, M: Mat2) SolveError!Mat2 {
     const det = Minv.det();
     if (det < -tol.PSD_NEG_REL * tr * tr) return SolveError.SingularMoment;
     const s_det = @sqrt(@max(det, 0));
-    const denom = @sqrt(tr + 2.0 * s_det);
+    const denom = @sqrt(@mulAdd(f64, 2.0, s_det, tr));
     const eye2: Mat2 = .{ .m = .{ 1, 0, 0, 1 } };
     const Minv_half = Mat2.lincomb(1.0 / denom, Minv, s_det / denom, eye2);
 
@@ -637,7 +637,7 @@ fn isCoplanarInput(points: []const Vec3, b: Vec3, threshold: f64) bool {
     }
 
     const tr = c00 + c11;
-    const det = c00 * c11 - c01 * c01;
+    const det = linalg.diff_of_products(c00, c11, c01, c01);
     return tr <= 0 or 4.0 * det < threshold * tr * tr;
 }
 

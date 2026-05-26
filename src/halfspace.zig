@@ -92,7 +92,11 @@ pub fn halfspaceCheck(allocator: std.mem.Allocator, X: []const Vec3) !HalfspaceR
 // ---- 2D convex hull (Andrew's monotone chain) ----
 
 fn cross2(O: [2]f64, A: [2]f64, B: [2]f64) f64 {
-    return (A[0] - O[0]) * (B[1] - O[1]) - (A[1] - O[1]) * (B[0] - O[0]);
+    const ax = A[0] - O[0];
+    const ay = A[1] - O[1];
+    const bx = B[0] - O[0];
+    const by = B[1] - O[1];
+    return linalg.diff_of_products(ax, by, ay, bx);
 }
 
 const HullCtx = struct {
