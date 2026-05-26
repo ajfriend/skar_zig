@@ -179,13 +179,21 @@ pub const Mat2 = struct {
         } };
     }
 
-    /// Symmetric rank-1 update: self ← self + w · p · pᵀ.
+    /// Symmetric rank-1 update: self ← self + w · p · pᵀ. Upper
+    /// triangle computed via FMA, mirrored to lower by exact
+    /// assignment. Multiplication order `(w·p_r)·p_c` is preserved
+    /// by pre-computing `wp_i = w * p.m[i]`. Same rationale as
+    /// `Mat3.addSymRank1`: shared `wp_i` precompute amortizes
+    /// across both row-0 FMAs (m[0] and m[1]), fewer rounding
+    /// steps than any factored alternative. Mirror by exact
+    /// assignment (`m[2] = m[1]`) guarantees bit-exact symmetry —
+    /// see tests/linalg_test.zig.
     pub inline fn addSymRank1(self: *Mat2, w: f64, p: Vec2) void {
         const wp0 = w * p.m[0];
         const wp1 = w * p.m[1];
-        self.m[0] += wp0 * p.m[0];
-        self.m[3] += wp1 * p.m[1];
-        self.m[1] += wp0 * p.m[1];
+        self.m[0] = @mulAdd(f64, wp0, p.m[0], self.m[0]);
+        self.m[3] = @mulAdd(f64, wp1, p.m[1], self.m[3]);
+        self.m[1] = @mulAdd(f64, wp0, p.m[1], self.m[1]);
         self.m[2] = self.m[1];
     }
 

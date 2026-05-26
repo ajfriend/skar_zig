@@ -46,3 +46,58 @@ test "addSymRank2: output matrix is bit-exactly symmetric" {
         try std.testing.expectEqual(m.m[5], m.m[7]);
     }
 }
+
+test "Mat3.symmetrize: output matrix is bit-exactly symmetric" {
+    // `symmetrize` returns (self + self.transpose()) / 2 via Mat3.lincomb.
+    // Cell (i,j) = 0.5·m[i,j] + 0.5·m[j,i] (single FMA rounding).
+    // Cell (j,i) = 0.5·m[j,i] + 0.5·m[i,j].
+    // IEEE 754 addition is commutative and 0.5·x is exact, so the
+    // two FMAs produce bit-identical results.
+    var prng = std.Random.DefaultPrng.init(0x5333);
+    const rng = prng.random();
+    var i: u32 = 0;
+    while (i < 30) : (i += 1) {
+        const m = linalg.Mat3.randomNormal(rng);
+        const sym = m.symmetrize();
+        try std.testing.expectEqual(sym.m[1], sym.m[3]);
+        try std.testing.expectEqual(sym.m[2], sym.m[6]);
+        try std.testing.expectEqual(sym.m[5], sym.m[7]);
+    }
+}
+
+test "Mat3.symOuter: output matrix is bit-exactly symmetric" {
+    // Per cell: (x[i]·z[j] + z[i]·x[j]) * 0.5. The (i,j) and (j,i)
+    // cells compute the same sum with summands in reverse order;
+    // IEEE 754 addition commutativity makes them bit-equal.
+    var prng = std.Random.DefaultPrng.init(0x5444);
+    const rng = prng.random();
+    var i: u32 = 0;
+    while (i < 30) : (i += 1) {
+        const x = linalg.Vec3.randomUnit(rng).scale(rng.float(f64) * 3.0);
+        const z = linalg.Vec3.randomUnit(rng).scale(rng.float(f64) * 3.0);
+        const m = linalg.Mat3.symOuter(x, z);
+        try std.testing.expectEqual(m.m[1], m.m[3]);
+        try std.testing.expectEqual(m.m[2], m.m[6]);
+        try std.testing.expectEqual(m.m[5], m.m[7]);
+    }
+}
+
+test "Mat2.addSymRank1: output matrix is bit-exactly symmetric" {
+    // Mat2 has a single mirror pair (m[1], m[2]). Same "compute
+    // upper, mirror to lower" pattern as the Mat3 versions.
+    var prng = std.Random.DefaultPrng.init(0x5555);
+    const rng = prng.random();
+    var i: u32 = 0;
+    while (i < 30) : (i += 1) {
+        var m: linalg.Mat2 = .{ .m = .{
+            rng.floatNorm(f64), rng.floatNorm(f64),
+            rng.floatNorm(f64), rng.floatNorm(f64),
+        } };
+        const w = rng.float(f64) * 10.0 - 5.0;
+        const p = linalg.Vec2{ .m = .{
+            rng.floatNorm(f64), rng.floatNorm(f64),
+        } };
+        m.addSymRank1(w, p);
+        try std.testing.expectEqual(m.m[1], m.m[2]);
+    }
+}
