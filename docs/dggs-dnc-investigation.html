@@ -580,8 +580,8 @@ z_{bb} - z_{bt}^{\top} Z_{tt}^{-1} z_{bt}\)</span>. Then <span
 class="math inline">\(\log\det Z = \log\det(Z_{tt}) +
 \log(z_{bb}^{\text{schur}})\)</span>.</p>
 <h3
-id="cancellation-aware-pairing-dont-compute-logs-separately">Cancellation-aware
-pairing (don't compute logs separately!)</h3>
+id="cancellation-aware-pairing-via-cholesky-of-z_tt">Cancellation-aware
+pairing via Cholesky of <span class="math inline">\(Z_{tt}\)</span></h3>
 <p>A naïve assembly <span class="math inline">\(\log\det M = \log\det A
 + \log\det Z\)</span> has a <em>hidden</em> cancellation worth flagging.
 For the S2 case:</p>
@@ -596,15 +596,29 @@ cancellation</strong> between the two; individual log errors of <span
 class="math inline">\(\varepsilon\cdot 41 \approx 9\times
 10^{-15}\)</span> then bound the gap floor at <span
 class="math inline">\(\sim 2\times 10^{-14}\)</span>.</p>
-<p>We can recover the missing 2 orders of magnitude by <strong>pairing
-the terms so each piece is already small</strong>. Group
-axial-with-axial and tangent-with-tangent before taking logs:</p>
+<p>We recover the missing 2 orders of magnitude by <strong>pairing the
+terms so each piece is already small</strong>. Cholesky of <span
+class="math inline">\(Z_{tt}\)</span> gives a natural per-eigenvalue
+split: <span class="math inline">\(Z_{tt} = L_t L_t^{\top}\)</span> with
+diagonals <span class="math inline">\(l_{11}, l_{22}\)</span>, where
+<span class="math inline">\(l_{11}^2 = z_{11}\)</span> and <span
+class="math inline">\(l_{22}^2 = z_{22} - l_{21}^2\)</span>. So</p>
 <p><span class="math display">\[
-\log\det M \;=\;
-\underbrace{\log\!\bigl(\mathrm{SIGMA}_0\,\cdot\,z_{bb}^{\text{schur}}\bigr)}_{\to\,\log
-1\,=\,0} \;+\; \underbrace{\log\!\bigl(\sigma_1\sigma_2\,\cdot\,\det
-Z_{tt}\bigr)}_{\to\,\log 1\,=\,0}.
+\log\det Z_{tt} \;=\; \log l_{11}^2 + \log l_{22}^2 \;=\; \log z_{11} +
+\log l_{22}^2.
 \]</span></p>
+<p>Pair the three structural terms with their cancellation partners:</p>
+<p><span class="math display">\[
+\log\det M \;=\; \underbrace{\log\!\bigl(\mathrm{SIGMA}_0 \cdot
+z_{bb}^{\text{schur}}\bigr)}_{\to\,\log 1\,=\,0} \;+\;
+\underbrace{\log\!\bigl(\sigma_1 \cdot z_{11}\bigr)}_{\to\,\log 1\,=\,0}
+\;+\; \underbrace{\log\!\bigl(\sigma_2 \cdot l_{22}^2\bigr)}_{\to\,\log
+1\,=\,0}.
+\]</span></p>
+<p>(At convergence <span class="math inline">\(z_{11} \to
+1/\sigma_1\)</span> and <span class="math inline">\(l_{22}^2 \to
+1/\sigma_2\)</span>, so each <span class="math inline">\(\sigma_i \cdot
+l_{ii}^2 \to 1\)</span>.)</p>
 <p>Each argument is <span class="math inline">\(1 + \delta\)</span> with
 <span class="math inline">\(\delta\)</span> small. Use
 <code>log1p</code> on the deviation — it preserves full relative
@@ -613,41 +627,40 @@ precision in <span class="math inline">\(\delta\)</span> where naïve
 class="math inline">\(1\)</span>:</p>
 <p><span class="math display">\[
 \boxed{\;\log\det M \;=\; \mathrm{log1p}\bigl(\mathrm{SIGMA}_0 \cdot
-z_{bb}^{\text{schur}} - 1\bigr) \;+\;
-\mathrm{log1p}\bigl(\sigma_1\sigma_2 \cdot \det Z_{tt} - 1\bigr).\;}
+z_{bb}^{\text{schur}} - 1\bigr) \;+\; \mathrm{log1p}\bigl(\sigma_1 \cdot
+z_{11} - 1\bigr) \;+\; \mathrm{log1p}\bigl(\sigma_2 \cdot l_{22}^2 -
+1\bigr).\;}
 \]</span></p>
-<p>The two "<span class="math inline">\(\cdot{} - 1\)</span>"
-subtractions become single-rounded FMAs (<code>@mulAdd</code>) to fuse
-the multiply and subtract:</p>
+<p>Each "<span class="math inline">\(\sigma_i \cdot \text{diag} -
+1\)</span>" subtraction becomes a single-rounded FMA
+(<code>@mulAdd</code>) — no separate multiplication-then-subtraction
+step:</p>
 <p><span class="math display">\[
-\mathrm{ax} \;=\; \mathrm{fma}\!\bigl(\mathrm{SIGMA}_0,\;
-z_{bb}^{\text{schur}},\; -1\bigr), \qquad \mathrm{bx} \;=\;
-\mathrm{fma}\!\bigl(\sigma_1,\; \sigma_2 \cdot \det Z_{tt},\; -1\bigr).
+\mathrm{ax} = \mathrm{fma}(\mathrm{SIGMA}_0,\, z_{bb}^{\text{schur}},\,
+-1), \quad \mathrm{bx_1} = \mathrm{fma}(\sigma_1,\, z_{11},\, -1), \quad
+\mathrm{bx_2} = \mathrm{fma}(\sigma_2,\, l_{22}^2,\, -1).
 \]</span></p>
-<p>Two more micro-decisions:</p>
-<ul>
-<li><strong>Order intermediates to avoid large transients.</strong>
-<span class="math inline">\(\sigma_1\sigma_2\)</span> has magnitude
-<span class="math inline">\(\sim 10^{18}\)</span>; the product <span
-class="math inline">\(\sigma_2 \cdot \det Z_{tt}\)</span> alone is <span
-class="math inline">\(\sim 10^{-9}\)</span> (≈ <span
-class="math inline">\(1/\sigma_1\)</span>). Form the small product
-first, then FMA with <span class="math inline">\(\sigma_1\)</span> and
-<span class="math inline">\(-1\)</span>.</li>
-<li><strong>Route every 2×2 piece through
-<code>diff_of_products</code></strong> (<code>src/linalg.zig:20</code>,
-Kahan's compensated FMA scheme). <code>det Z_{tt}</code> and the two
-2×2-solve numerators (<span class="math inline">\(z_{22}\,z_{b1} -
-z_{12}\,z_{b2}\)</span>, <span class="math inline">\(z_{11}\,z_{b2} -
-z_{12}\,z_{b1}\)</span>) are exactly the near-cancellation cases the
-helper was written for.</li>
-</ul>
+<h3 id="schur-scalar-via-norm-squared">Schur scalar via
+norm-squared</h3>
+<p>Cholesky gives an additional gift: the bilinear form <span
+class="math inline">\(z_{bt}^{\top} Z_{tt}^{-1} z_{bt}\)</span>
+collapses to a norm-squared after one forward solve, <strong>eliminating
+the back-solve entirely</strong> and making the result structurally
+non-negative:</p>
+<p><span class="math display">\[
+z_{bt}^{\top} Z_{tt}^{-1} z_{bt} \;=\; z_{bt}^{\top} L_t^{-\top}
+L_t^{-1} z_{bt} \;=\; \|L_t^{-1} z_{bt}\|^2 \;=\; y_1^2 + y_2^2,
+\]</span></p>
+<p>where <span class="math inline">\(L_t\, y = z_{bt}\)</span>. This
+guarantees <span class="math inline">\(y_1^2 + y_2^2 \geq 0\)</span> by
+construction, so any noise in the Schur scalar's sign
+(<code>schur ≤ 0</code> indef-dual case) is a real PD violation of <span
+class="math inline">\(Z_{tt}\)</span>, not a rounding artifact.</p>
 <h3 id="final-gap-formula">Final gap formula</h3>
 <p><span class="math display">\[
 \boxed{\;\mathrm{gap} \;=\; \|w_{\text{sum}}\| \;-\; 3 \;-\;
-\mathrm{log1p}\!\bigl(\mathrm{SIGMA}_0\cdot z_{bb}^{\text{schur}} -
-1\bigr) \;-\; \mathrm{log1p}\!\bigl(\sigma_1 \cdot \sigma_2\,\det Z_{tt}
-- 1\bigr).\;}
+\mathrm{log1p}(\mathrm{ax}) \;-\; \mathrm{log1p}(\mathrm{bx_1}) \;-\;
+\mathrm{log1p}(\mathrm{bx_2}).\;}
 \]</span></p>
 <h3 id="why-this-beats-the-current-path">Why this beats the current
 path</h3>
@@ -663,52 +676,66 @@ directly</em>, with single-rounding FMA wherever possible:</p>
 </thead>
 <tbody>
 <tr>
-<td><span class="math inline">\(z_{bb},\,z_{bt},\,Z_{tt}\)</span></td>
+<td><span class="math inline">\(z_{bb},\,z_{bt},\,Z_{tt}\)</span>
+entries</td>
 <td>six quadratic forms <span class="math inline">\(v_i^{\top} Z
 v_j\)</span> (FMA-chained <code>Vec3.dot</code>)</td>
 <td style="text-align: right;"><span
 class="math inline">\(\varepsilon\)</span> relative per entry</td>
 </tr>
 <tr>
-<td><span class="math inline">\(\det Z_{tt}\)</span></td>
-<td><code>diff_of_products(z_{11}, z_{22}, z_{12}, z_{12})</code></td>
-<td style="text-align: right;"><span class="math inline">\(\sim
-2\varepsilon\)</span> relative</td>
-</tr>
-<tr>
-<td>2×2 solve numerators</td>
-<td>two <code>diff_of_products</code> calls / <code>det_tt</code></td>
-<td style="text-align: right;"><span class="math inline">\(\sim
-2\varepsilon\)</span> relative</td>
-</tr>
-<tr>
-<td><span class="math inline">\(z_{bb}^{\text{schur}}\)</span></td>
-<td><code>z_bb − @mulAdd(z_b1, inv_x, z_b2 * inv_y)</code></td>
+<td>Cholesky <span class="math inline">\(l_{11}, l_{21},
+l_{22\text{sq}}\)</span></td>
+<td><span class="math inline">\(\sqrt{z_{11}}\)</span>, <span
+class="math inline">\(z_{12}/l_{11}\)</span>, FMA'd <span
+class="math inline">\(z_{22} - l_{21}^2\)</span></td>
 <td style="text-align: right;"><span class="math inline">\(\sim
 \varepsilon\)</span> relative</td>
 </tr>
 <tr>
-<td><span class="math inline">\(\mathrm{ax},\,\mathrm{bx}\)</span> (the
-"<span class="math inline">\(\cdot - 1\)</span>" residuals)</td>
+<td>forward solve <span class="math inline">\(y_1, y_2\)</span></td>
+<td><span class="math inline">\(z_{b1}/l_{11}\)</span>, FMA'd <span
+class="math inline">\((z_{b2} - l_{21}\,y_1)/l_{22}\)</span></td>
+<td style="text-align: right;"><span class="math inline">\(\sim
+\varepsilon\)</span> relative</td>
+</tr>
+<tr>
+<td><span class="math inline">\(z_{bt}^{\top} Z_{tt}^{-1} z_{bt} = y_1^2
++ y_2^2\)</span></td>
+<td>FMA'd; non-negative by construction</td>
+<td style="text-align: right;"><span class="math inline">\(\sim
+\varepsilon\)</span> relative</td>
+</tr>
+<tr>
+<td><span class="math inline">\(z_{bb}^{\text{schur}}\)</span></td>
+<td><span class="math inline">\(z_{bb} - (y_1^2 + y_2^2)\)</span></td>
+<td style="text-align: right;">inherits <span class="math inline">\(\sim
+\varepsilon\)</span></td>
+</tr>
+<tr>
+<td><span
+class="math inline">\(\mathrm{ax},\,\mathrm{bx_1},\,\mathrm{bx_2}\)</span>
+("<span class="math inline">\(\sigma_i \cdot \text{diag} - 1\)</span>"
+residuals)</td>
 <td>single-rounded FMA each</td>
 <td style="text-align: right;"><span class="math inline">\(\sim
 \varepsilon\)</span> <strong>absolute</strong></td>
 </tr>
 <tr>
-<td><code>log1p(ax)</code>, <code>log1p(bx)</code></td>
+<td>three <code>log1p</code> calls</td>
 <td>full relative precision on small inputs</td>
 <td style="text-align: right;"><span class="math inline">\(\sim
-\varepsilon\)</span> <strong>absolute</strong></td>
+\varepsilon\)</span> <strong>absolute</strong> each</td>
 </tr>
 <tr>
 <td>sum + <span class="math inline">\(|w_{\text{sum}}| - 3\)</span></td>
-<td>three subtractions; observed bit-exact for the primal term</td>
+<td>observed bit-exact for the primal term in the trace</td>
 <td style="text-align: right;">inherits <span class="math inline">\(\sim
-2\varepsilon\)</span></td>
+3\varepsilon\)</span></td>
 </tr>
 </tbody>
 </table>
-<p>Final gap floor: <span class="math inline">\(\sim 4\times
+<p>Final gap floor: <span class="math inline">\(\sim 7\times
 10^{-16}\)</span>, i.e., <strong>bit-precision</strong>. Default
 <code>gap_tol = 1e-6</code> is ten <em>billion</em> times above the
 floor.</p>
@@ -752,97 +779,105 @@ path's <span class="math inline">\(10^{-3}\)</span>.</li>
 path <em>and</em> the rejected plain-Z path. No hybrid switching, no
 scale predicate, no regime detection.</p>
 <h3
-id="implementation-sketch-30-40-lines-no-new-linalg-primitives">Implementation
-sketch (~30-40 lines, no new linalg primitives)</h3>
+id="implementation-sketch-25-30-lines-no-new-linalg-primitives">Implementation
+sketch (~25-30 lines, no new linalg primitives)</h3>
 <p>Inside <code>dualityGapConstructed</code>, after
 <code>eig2(A_perp)</code> builds <span class="math inline">\(V =
 [b\,|\,v_1\,|\,v_2]\)</span> at lines 410-422. Skip materializing <span
 class="math inline">\(V^{\top} Z V\)</span> — project <span
 class="math inline">\(Z\)</span> onto the basis vectors directly via six
-quadratic forms:</p>
+quadratic forms, then Cholesky <span
+class="math inline">\(Z_{tt}\)</span> for the back-solve, log-det, and
+PD guard all at once:</p>
 <div class="sourceCode" id="cb2"><pre
 class="sourceCode zig"><code class="sourceCode zig"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Project Z onto A&#39;s eigenbasis: six FMA-chained quadratic forms.</span></span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="co">// Z.apply(v) is one matvec; vN.dot(...) is one FMA-chained dot.</span></span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> Zb  <span class="op">=</span> Z<span class="op">.</span>apply(b);</span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> Zv1 <span class="op">=</span> Z<span class="op">.</span>apply(v1);</span>
-<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> Zv2 <span class="op">=</span> Z<span class="op">.</span>apply(v2);</span>
-<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> z_bb <span class="op">=</span> b<span class="op">.</span>dot(Zb);</span>
-<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> z_b1 <span class="op">=</span> b<span class="op">.</span>dot(Zv1);</span>
-<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> z_b2 <span class="op">=</span> b<span class="op">.</span>dot(Zv2);</span>
-<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> z_11 <span class="op">=</span> v1<span class="op">.</span>dot(Zv1);</span>
-<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> z_12 <span class="op">=</span> v1<span class="op">.</span>dot(Zv2);</span>
-<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> z_22 <span class="op">=</span> v2<span class="op">.</span>dot(Zv2);</span>
-<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="co">// 2x2 tangent determinant — Kahan-compensated subtraction of products.</span></span>
-<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> det_tt <span class="op">=</span> diff_of_products(z_11<span class="op">,</span> z_22<span class="op">,</span> z_12<span class="op">,</span> z_12);</span>
-<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (det_tt <span class="op">&lt;=</span> <span class="dv">0</span>) <span class="cf">return</span> <span class="op">/*</span> indefinite<span class="op">-</span>dual guard<span class="op">,</span> gap <span class="op">=</span> <span class="fl">1e30</span> <span class="op">*/</span>;</span>
-<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a><span class="co">// Z_tt^{-1} z_bt via Cramer&#39;s rule; both numerators use diff_of_products.</span></span>
-<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> num_x <span class="op">=</span> diff_of_products(z_22<span class="op">,</span> z_b1<span class="op">,</span> z_12<span class="op">,</span> z_b2);</span>
-<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> num_y <span class="op">=</span> diff_of_products(z_11<span class="op">,</span> z_b2<span class="op">,</span> z_12<span class="op">,</span> z_b1);</span>
-<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> inv_x <span class="op">=</span> num_x <span class="op">/</span> det_tt;</span>
-<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> inv_y <span class="op">=</span> num_y <span class="op">/</span> det_tt;</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> Zb  <span class="op">=</span> Z<span class="op">.</span>apply(b);</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> Zv1 <span class="op">=</span> Z<span class="op">.</span>apply(v1);</span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> Zv2 <span class="op">=</span> Z<span class="op">.</span>apply(v2);</span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> z_bb <span class="op">=</span> b<span class="op">.</span>dot(Zb);</span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> z_b1 <span class="op">=</span> b<span class="op">.</span>dot(Zv1);</span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> z_b2 <span class="op">=</span> b<span class="op">.</span>dot(Zv2);</span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> z_11 <span class="op">=</span> v1<span class="op">.</span>dot(Zv1);</span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> z_12 <span class="op">=</span> v1<span class="op">.</span>dot(Zv2);</span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> z_22 <span class="op">=</span> v2<span class="op">.</span>dot(Zv2);</span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a><span class="co">// Cholesky of Z_tt = L L^T (2x2 SPD). Three quantities serve double duty:</span></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="co">//   l_11^2 = z_11        → tangent residual 1</span></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a><span class="co">//   l_22_sq = z_22 - l_21^2 → tangent residual 2, also PD guard</span></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a><span class="co">//   l_11, l_22           → forward solve for the Schur scalar</span></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (z_11 <span class="op">&lt;=</span> <span class="dv">0</span>) <span class="cf">return</span> <span class="op">/*</span> indef<span class="op">-</span>dual guard<span class="op">,</span> gap <span class="op">=</span> <span class="fl">1e30</span> <span class="op">*/</span>;</span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> l_11 <span class="op">=</span> <span class="bu">@sqrt</span>(z_11);</span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> l_21 <span class="op">=</span> z_12 <span class="op">/</span> l_11;</span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> l_22_sq <span class="op">=</span> <span class="bu">@mulAdd</span>(<span class="dt">f64</span><span class="op">,</span> <span class="op">-</span>l_21<span class="op">,</span> l_21<span class="op">,</span> z_22);  <span class="co">// single-rounded z_22 - l_21^2</span></span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (l_22_sq <span class="op">&lt;=</span> <span class="dv">0</span>) <span class="cf">return</span> <span class="op">/*</span> indef<span class="op">-</span>dual guard<span class="op">,</span> Z_tt not PD <span class="op">*/</span>;</span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> l_22 <span class="op">=</span> <span class="bu">@sqrt</span>(l_22_sq);</span>
 <span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a><span class="co">// Schur complement of M_tt in M_rot (equivalent to SIGMA_0 · z_bb^schur):</span></span>
-<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a><span class="co">//   schur = z_bb - z_bt^T Z_tt^{-1} z_bt</span></span>
-<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a><span class="co">//         = z_bb - (z_b1 * inv_x + z_b2 * inv_y)        ← FMA-fused inner sub</span></span>
-<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> z_bt_dot <span class="op">=</span> <span class="bu">@mulAdd</span>(<span class="dt">f64</span><span class="op">,</span> z_b1<span class="op">,</span> inv_x<span class="op">,</span> z_b2 <span class="op">*</span> inv_y);</span>
-<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> schur <span class="op">=</span> z_bb <span class="op">-</span> z_bt_dot;</span>
-<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (schur <span class="op">&lt;=</span> <span class="dv">0</span>) <span class="cf">return</span> <span class="op">/*</span> indefinite<span class="op">-</span>dual guard<span class="op">,</span> gap <span class="op">=</span> <span class="fl">1e30</span> <span class="op">*/</span>;</span>
-<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a><span class="co">// Axial residual: SIGMA_0 · schur - 1, single-rounded.</span></span>
-<span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> ax <span class="op">=</span> <span class="bu">@mulAdd</span>(<span class="dt">f64</span><span class="op">,</span> SIGMA_0<span class="op">,</span> schur<span class="op">,</span> <span class="op">-</span><span class="fl">1.0</span>);</span>
-<span id="cb2-32"><a href="#cb2-32" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-33"><a href="#cb2-33" aria-hidden="true" tabindex="-1"></a><span class="co">// Tangent residual: σ_1 · σ_2 · det_tt - 1. Form the small intermediate</span></span>
-<span id="cb2-34"><a href="#cb2-34" aria-hidden="true" tabindex="-1"></a><span class="co">// first (σ_2 · det_tt ≈ 1/σ_1, not the giant σ_1·σ_2 ≈ 1e18), then FMA.</span></span>
-<span id="cb2-35"><a href="#cb2-35" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> sigma2_det_tt <span class="op">=</span> sigma[<span class="dv">1</span>] <span class="op">*</span> det_tt;</span>
-<span id="cb2-36"><a href="#cb2-36" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> bx <span class="op">=</span> <span class="bu">@mulAdd</span>(<span class="dt">f64</span><span class="op">,</span> sigma[<span class="dv">0</span>]<span class="op">,</span> sigma2_det_tt<span class="op">,</span> <span class="op">-</span><span class="fl">1.0</span>);</span>
-<span id="cb2-37"><a href="#cb2-37" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-38"><a href="#cb2-38" aria-hidden="true" tabindex="-1"></a><span class="co">// log1p preserves precision when ax, bx are small (the convergence regime).</span></span>
-<span id="cb2-39"><a href="#cb2-39" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> log_det_M <span class="op">=</span> @log1p(ax) <span class="op">+</span> @log1p(bx);</span>
-<span id="cb2-40"><a href="#cb2-40" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> gap <span class="op">=</span> w_sum<span class="op">.</span>norm() <span class="op">-</span> <span class="fl">3.0</span> <span class="op">-</span> log_det_M;</span></code></pre></div>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a><span class="co">// Schur scalar via norm-squared. z_bt^T Z_tt^{-1} z_bt = ||L^{-1} z_bt||^2.</span></span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a><span class="co">// One forward solve L y = z_bt; result is non-negative by construction.</span></span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> y_1 <span class="op">=</span> z_b1 <span class="op">/</span> l_11;</span>
+<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> y_2 <span class="op">=</span> <span class="bu">@mulAdd</span>(<span class="dt">f64</span><span class="op">,</span> <span class="op">-</span>l_21<span class="op">,</span> y_1<span class="op">,</span> z_b2) <span class="op">/</span> l_22;   <span class="co">// (z_b2 - l_21·y_1)/l_22</span></span>
+<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> yy  <span class="op">=</span> <span class="bu">@mulAdd</span>(<span class="dt">f64</span><span class="op">,</span> y_1<span class="op">,</span> y_1<span class="op">,</span> y_2 <span class="op">*</span> y_2);</span>
+<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> schur <span class="op">=</span> z_bb <span class="op">-</span> yy;</span>
+<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (schur <span class="op">&lt;=</span> <span class="dv">0</span>) <span class="cf">return</span> <span class="op">/*</span> indef<span class="op">-</span>dual guard <span class="op">*/</span>;</span>
+<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a><span class="co">// Three log1p residuals: axial + two tangent (per Cholesky diagonal).</span></span>
+<span id="cb2-32"><a href="#cb2-32" aria-hidden="true" tabindex="-1"></a><span class="co">// Each is &quot;σ · (diagonal entry) - 1&quot; fused into one FMA, single-rounded.</span></span>
+<span id="cb2-33"><a href="#cb2-33" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> ax  <span class="op">=</span> <span class="bu">@mulAdd</span>(<span class="dt">f64</span><span class="op">,</span> SIGMA_0<span class="op">,</span> schur<span class="op">,</span>  <span class="op">-</span><span class="fl">1.0</span>);   <span class="co">// SIGMA_0 · schur − 1</span></span>
+<span id="cb2-34"><a href="#cb2-34" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> bx1 <span class="op">=</span> <span class="bu">@mulAdd</span>(<span class="dt">f64</span><span class="op">,</span> sigma[<span class="dv">0</span>]<span class="op">,</span> z_11<span class="op">,</span>   <span class="op">-</span><span class="fl">1.0</span>);  <span class="co">// σ_1 · z_11 − 1</span></span>
+<span id="cb2-35"><a href="#cb2-35" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> bx2 <span class="op">=</span> <span class="bu">@mulAdd</span>(<span class="dt">f64</span><span class="op">,</span> sigma[<span class="dv">1</span>]<span class="op">,</span> l_22_sq<span class="op">,</span> <span class="op">-</span><span class="fl">1.0</span>); <span class="co">// σ_2 · l_22² − 1</span></span>
+<span id="cb2-36"><a href="#cb2-36" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-37"><a href="#cb2-37" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> log_det_M <span class="op">=</span> @log1p(ax) <span class="op">+</span> @log1p(bx1) <span class="op">+</span> @log1p(bx2);</span>
+<span id="cb2-38"><a href="#cb2-38" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> gap <span class="op">=</span> w_sum<span class="op">.</span>norm() <span class="op">-</span> <span class="fl">3.0</span> <span class="op">-</span> log_det_M;</span></code></pre></div>
 <p>No new helper types or primitives needed: <code>Vec3.apply</code> /
 <code>Vec3.dot</code> already exist and are FMA-chained,
-<code>diff_of_products</code> already exists at
-<code>src/linalg.zig:20</code>, <code>@mulAdd</code> and
-<code>@log1p</code> are Zig builtins. The 3×3 path through
-<code>Cholesky</code>, the explicit <span
+<code>@mulAdd</code>, <code>@log1p</code>, and <code>@sqrt</code> are
+Zig builtins. The 3×3 path through the existing <code>Cholesky</code> on
+<span class="math inline">\(M\)</span>, the explicit <span
 class="math inline">\(L\)</span>, and the <span
 class="math inline">\(L^{\top} Z L\)</span> symmetric similarity all
-disappear from <code>dualityGapConstructed</code>.</p>
+disappear from <code>dualityGapConstructed</code>. The 2×2 Cholesky of
+<span class="math inline">\(Z_{tt}\)</span> is the only matrix
+factorization that remains.</p>
 <h3 id="risks-worth-empirical-checks-before-locking-in">Risks worth
 empirical checks before locking in</h3>
 <ol type="1">
-<li><strong>Two new indefinite-dual guards</strong> (<span
-class="math inline">\(\det Z_{tt} \leq 0\)</span> and <span
+<li><strong>Three new indefinite-dual guards</strong> (<span
+class="math inline">\(z_{11} \leq 0\)</span>, <span
+class="math inline">\(l_{22}^2 \leq 0\)</span>, <span
 class="math inline">\(\mathrm{schur} \leq 0\)</span>) replace the
 current single <code>cholesky() orelse</code> guard on <span
 class="math inline">\(M\)</span>. Algebraically these are equivalent
-(<span class="math inline">\(M\)</span> is PD iff both hold), but the
-<em>frequency</em> with which each fires on the existing 48-case suite +
-DGGS survey is worth measuring — divergence from the current guard's hit
-rate could indicate a numerical regime worth understanding.</li>
+(collectively they encode "<span class="math inline">\(Z\)</span> is
+PD"), but the <em>frequency</em> with which each fires on the existing
+48-case suite + DGGS survey is worth measuring — divergence from the
+current guard's hit rate could indicate a numerical regime worth
+understanding.</li>
 <li><strong><span class="math inline">\(z_{bt}\)</span>-magnitude
 assumption.</strong> The "bit-precision floor" estimate assumes the
 iterate drives <span class="math inline">\(z_{bt} \to 0\)</span>
 proportionally with iterate quality, so <span
-class="math inline">\(z_{bt}^{\top} Z_{tt}^{-1} z_{bt}\)</span> stays
-small relative to <span class="math inline">\(z_{bb}\)</span>. If <span
+class="math inline">\(\|L_t^{-1} z_{bt}\|^2\)</span> stays small
+relative to <span class="math inline">\(z_{bb}\)</span>. If <span
 class="math inline">\(z_{bt}\)</span> stalls at some larger noise level
 (independent of iterate quality), the Schur scalar's error inherits that
 noise. One per-iter trace pass against the failing DGGS tests will
 confirm whether <span class="math inline">\(z_{bt}\)</span> shrinks as
 expected.</li>
-<li><strong>The <span class="math inline">\(\sim 4\times
+<li><strong>The <span class="math inline">\(\sim 7\times
 10^{-16}\)</span> floor is a theoretical best-case under benign
 rounding.</strong> Real-world likely loses 1-2 orders to compounding;
 even at <span class="math inline">\(10^{-13}\)</span>, we're 7 orders
 below default <code>gap_tol</code>.</li>
-<li><strong><code>@log1p</code> performance.</strong> Slightly slower
-per call than <code>@log</code> (extra Taylor-series step for the
-near-zero regime). Two <code>@log1p</code> calls vs three
-<code>@log</code> calls — net per-gap cost is roughly the same. Measure
-with <code>just bench</code> before/after if curious.</li>
+<li><strong>Performance trade-off vs <code>diff_of_products</code>
+form.</strong> Cholesky adds 2 sqrts + 1 extra <code>@log1p</code> call
+vs a <code>det Z_{tt}</code> + single tangent-<code>log1p</code>
+variant. Net: roughly 5-10% slower per gap evaluation. Negligible at the
+solver level (<code>dualityGapConstructed</code> is called ~10× per
+<code>solve</code>). The clarity wins — natural-non-negative Schur
+scalar, structural PD guard via <span
+class="math inline">\(l_{22}^2\)</span>, three identical <span
+class="math inline">\(\sigma_i \cdot \text{diag} - 1\)</span> residuals
+— easily justify it.</li>
 </ol>
 <h2 id="other-fix-directions-considered-alternatives">Other fix
 directions considered (alternatives)</h2>
@@ -901,13 +936,14 @@ class="math inline">\(10^{-6}\)</span></td>
 <td>~30 lines</td>
 </tr>
 <tr>
-<td><strong>Schur + log1p + FMA + diff_of_products
+<td><strong>Schur + Cholesky(<span
+class="math inline">\(Z_{tt}\)</span>) + 3×log1p
 (recommended)</strong></td>
-<td style="text-align: right;"><span class="math inline">\(\sim 4\times
+<td style="text-align: right;"><span class="math inline">\(\sim 7\times
 10^{-16}\)</span></td>
 <td style="text-align: right;"><span class="math inline">\(\sim
 10^{-9}\)</span></td>
-<td>~35 lines</td>
+<td>~25 lines</td>
 </tr>
 <tr>
 <td>double-double arithmetic in current <span
