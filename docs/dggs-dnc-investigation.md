@@ -107,34 +107,68 @@ $$
 \det Z \;=\; \det(Z_{tt})\,\cdot\,\bigl(z_{bb} \;-\; z_{bt}^{\top}\, Z_{tt}^{-1}\, z_{bt}\bigr).
 $$
 
-Taking logs:
+Write $z_{bb}^{\text{schur}} \;\equiv\; z_{bb} - z_{bt}^{\top} Z_{tt}^{-1} z_{bt}$. Then $\log\det Z = \log\det(Z_{tt}) + \log(z_{bb}^{\text{schur}})$.
+
+### Cancellation-aware pairing (don't compute logs separately!)
+
+A naïve assembly $\log\det M = \log\det A + \log\det Z$ has a *hidden* cancellation worth flagging. For the S2 case:
 
 $$
-\log\det Z \;=\; \log\det(Z_{tt}) \;+\; \log\!\bigl(z_{bb} - z_{bt}^{\top} Z_{tt}^{-1} z_{bt}\bigr).
+\log\det A \;=\; \log\mathrm{SIGMA}_0 + \log\sigma_1 + \log\sigma_2 \;\approx\; -0.55 + 20.60 + 20.79 \;=\; 40.84,
 $$
+
+and at convergence $\log\det Z \to -40.84$. Summing them gives $0$ with **~14 digits of cancellation** between the two; individual log errors of $\varepsilon\cdot 41 \approx 9\times 10^{-15}$ then bound the gap floor at $\sim 2\times 10^{-14}$.
+
+We can recover the missing 2 orders of magnitude by **pairing the terms so each piece is already small**. Group axial-with-axial and tangent-with-tangent before taking logs:
+
+$$
+\log\det M \;=\; \underbrace{\log\!\bigl(\mathrm{SIGMA}_0\,\cdot\,z_{bb}^{\text{schur}}\bigr)}_{\to\,\log 1\,=\,0} \;+\; \underbrace{\log\!\bigl(\sigma_1\sigma_2\,\cdot\,\det Z_{tt}\bigr)}_{\to\,\log 1\,=\,0}.
+$$
+
+Each argument is $1 + \delta$ with $\delta$ small. Use `log1p` on the deviation — it preserves full relative precision in $\delta$ where naïve `log(1 + δ)` would lose the small bits to the leading $1$:
+
+$$
+\boxed{\;\log\det M \;=\; \mathrm{log1p}\bigl(\mathrm{SIGMA}_0 \cdot z_{bb}^{\text{schur}} - 1\bigr) \;+\; \mathrm{log1p}\bigl(\sigma_1\sigma_2 \cdot \det Z_{tt} - 1\bigr).\;}
+$$
+
+The two "$\cdot{} - 1$" subtractions become single-rounded FMAs (`@mulAdd`) to fuse the multiply and subtract:
+
+$$
+\mathrm{ax} \;=\; \mathrm{fma}\!\bigl(\mathrm{SIGMA}_0,\; z_{bb}^{\text{schur}},\; -1\bigr), \qquad \mathrm{bx} \;=\; \mathrm{fma}\!\bigl(\sigma_1,\; \sigma_2 \cdot \det Z_{tt},\; -1\bigr).
+$$
+
+Two more micro-decisions:
+
+- **Order intermediates to avoid large transients.** $\sigma_1\sigma_2$ has magnitude $\sim 10^{18}$; the product $\sigma_2 \cdot \det Z_{tt}$ alone is $\sim 10^{-9}$ (≈ $1/\sigma_1$). Form the small product first, then FMA with $\sigma_1$ and $-1$.
+- **Route every 2×2 piece through `diff_of_products`** (`src/linalg.zig:20`, Kahan's compensated FMA scheme). `det Z_{tt}` and the two 2×2-solve numerators ($z_{22}\,z_{b1} - z_{12}\,z_{b2}$, $z_{11}\,z_{b2} - z_{12}\,z_{b1}$) are exactly the near-cancellation cases the helper was written for.
 
 ### Final gap formula
 
-Combine with the bit-perfect $\log\det A$ and the existing $\|w_{\text{sum}}\|$ term:
-
 $$
-\boxed{\;\mathrm{gap} \;=\; \|w_{\text{sum}}\|\;-\;3\;-\;\bigl(\log\mathrm{SIGMA}_0 + \log\sigma_1 + \log\sigma_2\bigr)\;-\;\log\det(Z_{tt})\;-\;\log\!\bigl(z_{bb} - z_{bt}^{\top} Z_{tt}^{-1} z_{bt}\bigr).\;}
+\boxed{\;\mathrm{gap} \;=\; \|w_{\text{sum}}\| \;-\; 3 \;-\; \mathrm{log1p}\!\bigl(\mathrm{SIGMA}_0\cdot z_{bb}^{\text{schur}} - 1\bigr) \;-\; \mathrm{log1p}\!\bigl(\sigma_1 \cdot \sigma_2\,\det Z_{tt} - 1\bigr).\;}
 $$
 
 ### Why this beats the current path
 
-Each piece is computed in its own well-conditioned scale, with **no cross-scale matrix products**:
+Each input to `log1p` is computed *as a small number directly*, with single-rounding FMA wherever possible:
 
-| piece | computation | scale | expected error |
-|---|---|---|---|
-| $\|w_{\text{sum}}\|$ | (unchanged) | $O(1)$ | already bit-exact in trace |
-| $\log\det A$ | $\sum_i \log \Lambda_i$ on the existing eigenvalues | $\lvert\log\Lambda_i\rvert \sim 21$ | $\varepsilon \cdot 21 \approx 5\times 10^{-15}$ |
-| $\log\det(Z_{tt})$ | `Mat2.det` then `@log`, or Cholesky-then-log | entries $\sim 10^{-9}$, but $\kappa(Z_{tt}) \sim 1$ | $\varepsilon \cdot 41 \approx 9\times 10^{-15}$ |
-| $\log(\text{Schur})$ | scalar; at convergence $\approx \log z_{bb}$ | $O(1)$ | $\varepsilon \approx 2\times 10^{-16}$ |
+| piece | computation | absolute error |
+|---|---|---:|
+| $z_{bb},\,z_{bt},\,Z_{tt}$ | six quadratic forms $v_i^{\top} Z v_j$ (FMA-chained `Vec3.dot`) | $\varepsilon$ relative per entry |
+| $\det Z_{tt}$ | `diff_of_products(z_{11}, z_{22}, z_{12}, z_{12})` | $\sim 2\varepsilon$ relative |
+| 2×2 solve numerators | two `diff_of_products` calls / `det_tt` | $\sim 2\varepsilon$ relative |
+| $z_{bb}^{\text{schur}}$ | `z_bb − @mulAdd(z_b1, inv_x, z_b2 * inv_y)` | $\sim \varepsilon$ relative |
+| $\mathrm{ax},\,\mathrm{bx}$ (the "$\cdot - 1$" residuals) | single-rounded FMA each | $\sim \varepsilon$ **absolute** |
+| `log1p(ax)`, `log1p(bx)` | full relative precision on small inputs | $\sim \varepsilon$ **absolute** |
+| sum + $\|w_{\text{sum}}\| - 3$ | three subtractions; observed bit-exact for the primal term | inherits $\sim 2\varepsilon$ |
 
-Sum: $\mathrm{error} \sim \varepsilon \cdot \max\bigl(|\log\Lambda_i|\bigr) \approx 10^{-14}$.
+Final gap floor: $\sim 4\times 10^{-16}$, i.e., **bit-precision**. Default `gap_tol = 1e-6` is ten *billion* times above the floor.
 
-**$\sim 8$ orders of magnitude improvement** over the current $10^{-6}$ floor at $\kappa(A) \sim 10^{9}$. Default `gap_tol = 1e-6` becomes deeply attainable.
+### Why this beats the naïve Schur
+
+For comparison, naïve Schur (`@log(det_tt) + @log(schur) + @log(SIGMA_0) + @log(sigma[0]) + @log(sigma[1])`, then sum) sits at $\sim 2\times 10^{-14}$ because of the ~14-digit cancellation between $\log\det A \approx +41$ and $\log\det Z \approx -41$. The log1p pairing dodges it entirely.
+
+**$\sim 10$ orders of magnitude improvement** over the current $10^{-6}$ floor at $\kappa(A) \sim 10^{9}$. **2 orders** beyond the naïve Schur.
 
 ### Bonus: also dominates the historical hex-degenerate case
 
@@ -145,47 +179,61 @@ The src/skar.zig:482-487 comment rejected the plain $\log\det Z$ path because $\
 
 So Schur **strictly improves on both** the current M path *and* the rejected plain-Z path. No hybrid switching, no scale predicate, no regime detection.
 
-### Implementation sketch (~40 lines, no new linalg primitives)
+### Implementation sketch (~30-40 lines, no new linalg primitives)
 
-Inside `dualityGapConstructed`, after `eig2(A_perp)` builds $V$ at lines 410-422:
+Inside `dualityGapConstructed`, after `eig2(A_perp)` builds $V = [b\,|\,v_1\,|\,v_2]$ at lines 410-422. Skip materializing $V^{\top} Z V$ — project $Z$ onto the basis vectors directly via six quadratic forms:
 
 ```zig
-// Rotate Z to A's eigenbasis: Z_rot = V^T Z V. V's columns are
-// {b, v1, v2}; use existing Mat3.fromCols + Mat3.mul + transpose.
-const V = Mat3.fromCols(b, v1, v2);
-const Z_rot = V.transpose().mul(Z).mul(V).symmetrize();
+// Project Z onto A's eigenbasis: six FMA-chained quadratic forms.
+// Z.apply(v) is one matvec; vN.dot(...) is one FMA-chained dot.
+const Zb  = Z.apply(b);
+const Zv1 = Z.apply(v1);
+const Zv2 = Z.apply(v2);
+const z_bb = b.dot(Zb);
+const z_b1 = b.dot(Zv1);
+const z_b2 = b.dot(Zv2);
+const z_11 = v1.dot(Zv1);
+const z_12 = v1.dot(Zv2);
+const z_22 = v2.dot(Zv2);
 
-// Block: z_bb (scalar), z_bt (2-vec), Z_tt (2x2 symmetric).
-const z_bb = Z_rot.m[0];
-const z_bt = Vec2{ .m = .{ Z_rot.m[1], Z_rot.m[2] } };
-const Z_tt = Mat2{ .m = .{ Z_rot.m[4], Z_rot.m[5], Z_rot.m[7], Z_rot.m[8] } };
+// 2x2 tangent determinant — Kahan-compensated subtraction of products.
+const det_tt = diff_of_products(z_11, z_22, z_12, z_12);
+if (det_tt <= 0) return /* indefinite-dual guard, gap = 1e30 */;
 
-// Z_tt determinant via existing diff_of_products inside Mat2.det.
-const det_tt = Z_tt.det();
-if (det_tt <= 0) return /* indefinite-dual guard */;
+// Z_tt^{-1} z_bt via Cramer's rule; both numerators use diff_of_products.
+const num_x = diff_of_products(z_22, z_b1, z_12, z_b2);
+const num_y = diff_of_products(z_11, z_b2, z_12, z_b1);
+const inv_x = num_x / det_tt;
+const inv_y = num_y / det_tt;
 
-// 2x2 linear solve for Z_tt^{-1} z_bt — closed-form, ~6 ops.
-const z_tt_inv_z_bt = Z_tt.solve(z_bt);
-const schur = z_bb - z_bt.dot(z_tt_inv_z_bt);
-if (schur <= 0) return /* indefinite-dual guard */;
+// Schur complement of M_tt in M_rot (equivalent to SIGMA_0 · z_bb^schur):
+//   schur = z_bb - z_bt^T Z_tt^{-1} z_bt
+//         = z_bb - (z_b1 * inv_x + z_b2 * inv_y)        ← FMA-fused inner sub
+const z_bt_dot = @mulAdd(f64, z_b1, inv_x, z_b2 * inv_y);
+const schur = z_bb - z_bt_dot;
+if (schur <= 0) return /* indefinite-dual guard, gap = 1e30 */;
 
-const log_det_Z = @log(det_tt) + @log(schur);
-const log_det_A = @log(SIGMA_0) + @log(sigma[0]) + @log(sigma[1]);
-const gap = w_sum.norm() - 3.0 - log_det_A - log_det_Z;
+// Axial residual: SIGMA_0 · schur - 1, single-rounded.
+const ax = @mulAdd(f64, SIGMA_0, schur, -1.0);
+
+// Tangent residual: σ_1 · σ_2 · det_tt - 1. Form the small intermediate
+// first (σ_2 · det_tt ≈ 1/σ_1, not the giant σ_1·σ_2 ≈ 1e18), then FMA.
+const sigma2_det_tt = sigma[1] * det_tt;
+const bx = @mulAdd(f64, sigma[0], sigma2_det_tt, -1.0);
+
+// log1p preserves precision when ax, bx are small (the convergence regime).
+const log_det_M = @log1p(ax) + @log1p(bx);
+const gap = w_sum.norm() - 3.0 - log_det_M;
 ```
 
-New helpers needed:
-
-- `Mat2.solve(b: Vec2) Vec2` — one closed-form expression, ~6 floating-point ops.
-- Possibly a `Vec2` type if it doesn't exist (likely does — `eig2` returns 2-vectors).
-
-The 3×3 path through `Cholesky`, the explicit `L`, and the $L^{\top} Z L$ symmetric similarity all disappear from `dualityGapConstructed`.
+No new helper types or primitives needed: `Vec3.apply` / `Vec3.dot` already exist and are FMA-chained, `diff_of_products` already exists at `src/linalg.zig:20`, `@mulAdd` and `@log1p` are Zig builtins. The 3×3 path through `Cholesky`, the explicit $L$, and the $L^{\top} Z L$ symmetric similarity all disappear from `dualityGapConstructed`.
 
 ### Risks worth empirical checks before locking in
 
-1. **Two new indefinite-dual guards** ($\det Z_{tt} \leq 0$ and Schur scalar $\leq 0$) replace the current single `cholesky() orelse` guard on $M$. The existing `gap = 1e30` fallback pattern extends to both cleanly, but the *frequency* with which each fires on the existing 48-case suite + DGGS survey is worth measuring — could indicate a regime where iterate quality is worse than predicted.
-2. **$z_{bt}$-magnitude assumption.** The error analysis above assumes the iterate drives $z_{bt} \to 0$ proportionally with iterate quality. If $z_{bt}$ stalls at some larger noise level (independent of iterate accuracy), the Schur scalar's error inherits that noise. One per-iter trace pass against the failing DGGS tests will confirm whether $z_{bt}$ shrinks as expected.
-3. **The $10^{-14}$ floor is a theoretical best-case under benign rounding.** Real-world likely loses 1-2 orders to compounding; even at $10^{-12}$, we're 6 orders below default `gap_tol`.
+1. **Two new indefinite-dual guards** ($\det Z_{tt} \leq 0$ and $\mathrm{schur} \leq 0$) replace the current single `cholesky() orelse` guard on $M$. Algebraically these are equivalent ($M$ is PD iff both hold), but the *frequency* with which each fires on the existing 48-case suite + DGGS survey is worth measuring — divergence from the current guard's hit rate could indicate a numerical regime worth understanding.
+2. **$z_{bt}$-magnitude assumption.** The "bit-precision floor" estimate assumes the iterate drives $z_{bt} \to 0$ proportionally with iterate quality, so $z_{bt}^{\top} Z_{tt}^{-1} z_{bt}$ stays small relative to $z_{bb}$. If $z_{bt}$ stalls at some larger noise level (independent of iterate quality), the Schur scalar's error inherits that noise. One per-iter trace pass against the failing DGGS tests will confirm whether $z_{bt}$ shrinks as expected.
+3. **The $\sim 4\times 10^{-16}$ floor is a theoretical best-case under benign rounding.** Real-world likely loses 1-2 orders to compounding; even at $10^{-13}$, we're 7 orders below default `gap_tol`.
+4. **`@log1p` performance.** Slightly slower per call than `@log` (extra Taylor-series step for the near-zero regime). Two `@log1p` calls vs three `@log` calls — net per-gap cost is roughly the same. Measure with `just bench` before/after if curious.
 
 ## Other fix directions considered (alternatives)
 
@@ -195,6 +243,15 @@ These remain viable as backups or supplements if Schur turns out to have unfores
 2. **Scale-aware `gap_tol`** — auto-relax the convergence test to $\max(\text{user\_tol},\, \sigma_{\max}(A) \cdot \varepsilon_{\text{mach}} \cdot C)$. Cheapest possible fix; doesn't move the floor, just stops the DNC reporting. Suitable as a belt-and-suspenders complement.
 3. **Input pre-rescaling at the API layer** — detect tiny-cell inputs (max pairwise vertex distance below threshold), rescale before solving, transform the output back. Pragmatic workaround; doesn't touch the solver internals at all.
 4. **$\mathrm{tr}(AZ) - 3$ as second-tier convergence check** — cheaper than $\log\det M$, has the same fixed-point property. Not the canonical duality gap, so not theoretically tight as a stopping criterion, but useful as a noise-floor escape valve.
+
+### Quick comparison
+
+| approach | gap floor at $\kappa(A)=10^9$ | gap floor at hex $\kappa(Z)=10^7$ | impl cost |
+|---|---:|---:|---|
+| current $L^{\top} Z L$ + Cholesky + log | $10^{-6}$ | $\sim 10^{-7}$ | baseline |
+| naïve Schur (separate logs, sum) | $\sim 10^{-14}$ | $\sim 10^{-9}$ | ~30 lines |
+| **Schur + log1p + FMA + diff_of_products (recommended)** | $\sim 4\times 10^{-16}$ | $\sim 10^{-9}$ | ~35 lines |
+| double-double arithmetic in current $L^{\top} Z L$ chain | $\sim 10^{-23}$ | $\sim 10^{-23}$ | ~100 lines |
 
 ## Investigation artifacts (reverted before commit)
 
