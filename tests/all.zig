@@ -9,4 +9,5 @@ comptime {
     _ = @import("cap_test.zig");
     _ = @import("stretched_cap_test.zig");
     _ = @import("linalg_test.zig");
+    _ = @import("dggs_dnc_test.zig");
 }

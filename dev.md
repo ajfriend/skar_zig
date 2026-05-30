@@ -124,6 +124,7 @@ re-exporting them through the public API.
 | `tests/cases/cases.zig` | Comptime manifest over `tests/cases/zon/*.zon` — defines the `Case` schema and the `all` list. Exposed as the `cases` build module; imported by tests / bench / the `ex-cases` example. |
 | `tests/cases/cases_test.zig` | Tests driven by the case manifest: cases.byName lookup, per-case outcome dispatch, Q/sigma shape invariants on np100. Lives next to `cases.zig` but is not part of the cases module compilation. |
 | `tests/cases/zon/*.zon` | Per-case fixture: description + tags + points + expected outcome. |
+| `tests/dggs_dnc_test.zig` | Regression tests pinning DGGS cells at finest resolution that DNC at default options. Currently FAIL; see `docs/dggs-dnc-investigation.md` for the diagnosis. |
 
 To add a new test file: create `tests/<name>_test.zig`, then add
 `_ = @import("<name>_test.zig");` to `tests/all.zig`. The test
