@@ -619,27 +619,54 @@ z_{bb}^{\text{schur}}\bigr)}_{\to\,\log 1\,=\,0} \;+\;
 1/\sigma_1\)</span> and <span class="math inline">\(l_{22}^2 \to
 1/\sigma_2\)</span>, so each <span class="math inline">\(\sigma_i \cdot
 l_{ii}^2 \to 1\)</span>.)</p>
-<p>Each argument is <span class="math inline">\(1 + \delta\)</span> with
-<span class="math inline">\(\delta\)</span> small. Use
-<code>log1p</code> on the deviation — it preserves full relative
-precision in <span class="math inline">\(\delta\)</span> where naïve
-<code>log(1 + δ)</code> would lose the small bits to the leading <span
-class="math inline">\(1\)</span>:</p>
+<p>Each argument is <span class="math inline">\(\approx 1\)</span> at
+convergence, so each log is <span class="math inline">\(\approx
+0\)</span>. The three small terms sum to <span
+class="math inline">\(\approx 0\)</span> directly — no cancellation
+between large opposite-signed pieces.</p>
+<p>For the inner subtraction we use FMA (<code>@mulAdd</code>) and
+<code>log1p</code>:</p>
 <p><span class="math display">\[
 \boxed{\;\log\det M \;=\; \mathrm{log1p}\bigl(\sigma_0 \cdot
 z_{bb}^{\text{schur}} - 1\bigr) \;+\; \mathrm{log1p}\bigl(\sigma_1 \cdot
 z_{11} - 1\bigr) \;+\; \mathrm{log1p}\bigl(\sigma_2 \cdot l_{22}^2 -
-1\bigr).\;}
+1\bigr),\;}
 \]</span></p>
-<p>Each "<span class="math inline">\(\sigma_i \cdot \text{diag} -
-1\)</span>" subtraction becomes a single-rounded FMA
-(<code>@mulAdd</code>) — no separate multiplication-then-subtraction
-step:</p>
+<p>with each residual computed as a single-rounded FMA:</p>
 <p><span class="math display">\[
 \mathrm{ax} = \mathrm{fma}(\sigma_0,\, z_{bb}^{\text{schur}},\, -1),
 \quad \mathrm{bx_1} = \mathrm{fma}(\sigma_1,\, z_{11},\, -1), \quad
 \mathrm{bx_2} = \mathrm{fma}(\sigma_2,\, l_{22}^2,\, -1).
 \]</span></p>
+<p><strong>Honest note on <code>log1p</code>+FMA vs plain
+<code>log</code>.</strong> The textbook win of <code>log1p(δ)</code>
+over <code>log(1+δ)</code> requires <span
+class="math inline">\(\delta\)</span> to be supplied at precision finer
+than <span class="math inline">\(\mathrm{ulp}(1)\)</span>. In our
+pipeline <span class="math inline">\(z_{11}\)</span>, <span
+class="math inline">\(l_{22}^2\)</span>, and <span
+class="math inline">\(z_{bb}^{\text{schur}}\)</span> all carry <span
+class="math inline">\(\sim \varepsilon\)</span> <em>relative</em> error
+from the FMA-chained quadratic forms used to build them, which becomes
+<span class="math inline">\(\sim \mathrm{ulp}(1)\)</span>
+<em>absolute</em> error once scaled by <span
+class="math inline">\(\sigma_i \sim 10^9\)</span>. That input noise sets
+the floor regardless of whether we end with <code>log(σ_i·diag)</code>
+or <code>log1p(fma(σ_i, diag, -1))</code>. So the dramatic gain over the
+current path comes from <strong>the pairing</strong>, not from
+<code>log1p</code> per se. We still use <code>log1p</code>+FMA for two
+minor reasons:</p>
+<ol type="1">
+<li><strong>Reads as "this should be ≈ 0".</strong> The small-residual
+structure is visible at the call site; future readers don't have to
+recognize the cancellation pattern.</li>
+<li><strong>Defensive against future precision improvements.</strong> If
+<code>Z.apply</code>/<code>Vec3.dot</code> are ever upgraded to
+compensated arithmetic (e.g., double-double internally), the input noise
+drops below <span class="math inline">\(\mathrm{ulp}(1)\)</span> and the
+<code>log1p</code>+FMA path immediately captures the additional digits —
+no formula revision needed.</li>
+</ol>
 <h3 id="schur-scalar-via-norm-squared">Schur scalar via
 norm-squared</h3>
 <p>Cholesky gives an additional gift: the bilinear form <span
@@ -664,8 +691,8 @@ class="math inline">\(Z_{tt}\)</span>, not a rounding artifact.</p>
 \]</span></p>
 <h3 id="why-this-beats-the-current-path">Why this beats the current
 path</h3>
-<p>Each input to <code>log1p</code> is computed <em>as a small number
-directly</em>, with single-rounding FMA wherever possible:</p>
+<p>Per-stage error, dominated by the input noise that propagates through
+the pipeline:</p>
 <table>
 <thead>
 <tr>
@@ -710,49 +737,63 @@ class="math inline">\((z_{b2} - l_{21}\,y_1)/l_{22}\)</span></td>
 <td><span class="math inline">\(z_{bb}^{\text{schur}}\)</span></td>
 <td><span class="math inline">\(z_{bb} - (y_1^2 + y_2^2)\)</span></td>
 <td style="text-align: right;">inherits <span class="math inline">\(\sim
-\varepsilon\)</span></td>
+\varepsilon\)</span> relative</td>
 </tr>
 <tr>
 <td><span
 class="math inline">\(\mathrm{ax},\,\mathrm{bx_1},\,\mathrm{bx_2}\)</span>
 ("<span class="math inline">\(\sigma_i \cdot \text{diag} - 1\)</span>"
 residuals)</td>
-<td>single-rounded FMA each</td>
+<td>FMA-fused; input <span class="math inline">\(\varepsilon\)</span>
+relative becomes <span class="math inline">\(\mathrm{ulp}(1) \approx
+2.2\times 10^{-16}\)</span> absolute after scale-up by <span
+class="math inline">\(\sigma_i\)</span></td>
 <td style="text-align: right;"><span class="math inline">\(\sim
-\varepsilon\)</span> <strong>absolute</strong></td>
+\mathrm{ulp}(1)\)</span> absolute</td>
 </tr>
 <tr>
 <td>three <code>log1p</code> calls</td>
-<td>full relative precision on small inputs</td>
+<td>for inputs near zero, <code>log1p(x) ≈ x</code> and inherits the
+input error</td>
 <td style="text-align: right;"><span class="math inline">\(\sim
-\varepsilon\)</span> <strong>absolute</strong> each</td>
+\mathrm{ulp}(1)\)</span> absolute each</td>
 </tr>
 <tr>
 <td>sum + <span class="math inline">\(|w_{\text{sum}}| - 3\)</span></td>
 <td>observed bit-exact for the primal term in the trace</td>
 <td style="text-align: right;">inherits <span class="math inline">\(\sim
-3\varepsilon\)</span></td>
+3\,\mathrm{ulp}(1)\)</span></td>
 </tr>
 </tbody>
 </table>
-<p>Final gap floor: <span class="math inline">\(\sim 7\times
-10^{-16}\)</span>, i.e., <strong>bit-precision</strong>. Default
-<code>gap_tol = 1e-6</code> is ten <em>billion</em> times above the
-floor.</p>
+<p>Final gap floor: <span class="math inline">\(\sim 3\,\mathrm{ulp}(1)
+\approx 7\times 10^{-16}\)</span>, set by the per-entry noise in <span
+class="math inline">\(z_{ii}\)</span> rather than by anything
+log-related. Default <code>gap_tol = 1e-6</code> is ten <em>billion</em>
+times above the floor.</p>
 <h3 id="why-this-beats-the-naïve-schur">Why this beats the naïve
 Schur</h3>
 <p>For comparison, naïve Schur
 (<code>@log(det_tt) + @log(schur) + @log(SIGMA_0) + @log(sigma[0]) + @log(sigma[1])</code>,
-then sum) sits at <span class="math inline">\(\sim 2\times
-10^{-14}\)</span> because of the ~14-digit cancellation between <span
-class="math inline">\(\log\det A \approx +41\)</span> and <span
-class="math inline">\(\log\det Z \approx -41\)</span>. The log1p pairing
-dodges it entirely.</p>
-<p><strong><span class="math inline">\(\sim 10\)</span> orders of
+then sum) suffers a different problem: each <span
+class="math inline">\(\log\)</span> has <em>relative</em> error <span
+class="math inline">\(\varepsilon\)</span> at its own scale, so absolute
+error <span class="math inline">\(\varepsilon \cdot |\log\Lambda_i|
+\approx 9\times 10^{-15}\)</span> each. Summing four such terms
+expecting them to cancel to 0 leaves the gap floor at <span
+class="math inline">\(\sim 2\times 10^{-14}\)</span>.</p>
+<p>The pairing eliminates this entirely: each paired log is
+<em>itself</em> <span class="math inline">\(\approx 0\)</span> at
+convergence with error only <span class="math inline">\(\mathrm{ulp}(1)
+\approx 2.2\times 10^{-16}\)</span>, so summing three of them gives
+<span class="math inline">\(\sim 7\times 10^{-16}\)</span>.</p>
+<p><strong><span class="math inline">\(\sim 9\)</span> orders of
 magnitude improvement</strong> over the current <span
 class="math inline">\(10^{-6}\)</span> floor at <span
-class="math inline">\(\kappa(A) \sim 10^{9}\)</span>. <strong>2
-orders</strong> beyond the naïve Schur.</p>
+class="math inline">\(\kappa(A) \sim 10^{9}\)</span>. <strong>~1.5
+orders</strong> beyond the naïve Schur — modest in the grand scheme, but
+it makes the floor input-precision-limited rather than
+cancellation-limited (a more principled place to stop).</p>
 <h3 id="bonus-also-dominates-the-historical-hex-degenerate-case">Bonus:
 also dominates the historical hex-degenerate case</h3>
 <p>The src/skar.zig:482-487 comment rejected the plain <span
@@ -929,7 +970,7 @@ class="math inline">\(10^{-6}\)</span></td>
 </tr>
 <tr>
 <td>naïve Schur (separate logs, sum)</td>
-<td style="text-align: right;"><span class="math inline">\(\sim
+<td style="text-align: right;"><span class="math inline">\(\sim 2\times
 10^{-14}\)</span></td>
 <td style="text-align: right;"><span class="math inline">\(\sim
 10^{-9}\)</span></td>
@@ -946,16 +987,22 @@ class="math inline">\(Z_{tt}\)</span>) + 3×log1p
 <td>~25 lines</td>
 </tr>
 <tr>
-<td>double-double arithmetic in current <span
-class="math inline">\(L^{\top} Z L\)</span> chain</td>
+<td>above + double-double in <code>Vec3.dot</code> for <span
+class="math inline">\(Z\)</span>-projections</td>
 <td style="text-align: right;"><span class="math inline">\(\sim
-10^{-23}\)</span></td>
-<td style="text-align: right;"><span class="math inline">\(\sim
-10^{-23}\)</span></td>
-<td>~100 lines</td>
+\varepsilon^2 \approx 5\times 10^{-32}\)</span></td>
+<td style="text-align: right;">comparable</td>
+<td>~150 lines</td>
 </tr>
 </tbody>
 </table>
+<p>Floor for the recommended path is set by the absolute error of the
+six input quadratic forms (<span class="math inline">\(v_i^{\top} Z
+v_j\)</span>), not by anything log-related. Further improvement requires
+tightening <em>those</em> — e.g., switching <code>Vec3.dot</code> to a
+compensated form. Worth doing only if a user actually needs gap_tol
+<span class="math inline">\(&lt; 10^{-15}\)</span>, which no one is
+asking for.</p>
 <h2 id="investigation-artifacts-reverted-before-commit">Investigation
 artifacts (reverted before commit)</h2>
 <ul>

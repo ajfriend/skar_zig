@@ -133,17 +133,24 @@ $$
 
 (At convergence $z_{11} \to 1/\sigma_1$ and $l_{22}^2 \to 1/\sigma_2$, so each $\sigma_i \cdot l_{ii}^2 \to 1$.)
 
-Each argument is $1 + \delta$ with $\delta$ small. Use `log1p` on the deviation — it preserves full relative precision in $\delta$ where naïve `log(1 + δ)` would lose the small bits to the leading $1$:
+Each argument is $\approx 1$ at convergence, so each log is $\approx 0$. The three small terms sum to $\approx 0$ directly — no cancellation between large opposite-signed pieces.
+
+For the inner subtraction we use FMA (`@mulAdd`) and `log1p`:
 
 $$
-\boxed{\;\log\det M \;=\; \mathrm{log1p}\bigl(\sigma_0 \cdot z_{bb}^{\text{schur}} - 1\bigr) \;+\; \mathrm{log1p}\bigl(\sigma_1 \cdot z_{11} - 1\bigr) \;+\; \mathrm{log1p}\bigl(\sigma_2 \cdot l_{22}^2 - 1\bigr).\;}
+\boxed{\;\log\det M \;=\; \mathrm{log1p}\bigl(\sigma_0 \cdot z_{bb}^{\text{schur}} - 1\bigr) \;+\; \mathrm{log1p}\bigl(\sigma_1 \cdot z_{11} - 1\bigr) \;+\; \mathrm{log1p}\bigl(\sigma_2 \cdot l_{22}^2 - 1\bigr),\;}
 $$
 
-Each "$\sigma_i \cdot \text{diag} - 1$" subtraction becomes a single-rounded FMA (`@mulAdd`) — no separate multiplication-then-subtraction step:
+with each residual computed as a single-rounded FMA:
 
 $$
 \mathrm{ax} = \mathrm{fma}(\sigma_0,\, z_{bb}^{\text{schur}},\, -1), \quad \mathrm{bx_1} = \mathrm{fma}(\sigma_1,\, z_{11},\, -1), \quad \mathrm{bx_2} = \mathrm{fma}(\sigma_2,\, l_{22}^2,\, -1).
 $$
+
+**Honest note on `log1p`+FMA vs plain `log`.** The textbook win of `log1p(δ)` over `log(1+δ)` requires $\delta$ to be supplied at precision finer than $\mathrm{ulp}(1)$. In our pipeline $z_{11}$, $l_{22}^2$, and $z_{bb}^{\text{schur}}$ all carry $\sim \varepsilon$ *relative* error from the FMA-chained quadratic forms used to build them, which becomes $\sim \mathrm{ulp}(1)$ *absolute* error once scaled by $\sigma_i \sim 10^9$. That input noise sets the floor regardless of whether we end with `log(σ_i·diag)` or `log1p(fma(σ_i, diag, -1))`. So the dramatic gain over the current path comes from **the pairing**, not from `log1p` per se. We still use `log1p`+FMA for two minor reasons:
+
+1. **Reads as "this should be ≈ 0".** The small-residual structure is visible at the call site; future readers don't have to recognize the cancellation pattern.
+2. **Defensive against future precision improvements.** If `Z.apply`/`Vec3.dot` are ever upgraded to compensated arithmetic (e.g., double-double internally), the input noise drops below $\mathrm{ulp}(1)$ and the `log1p`+FMA path immediately captures the additional digits — no formula revision needed.
 
 ### Schur scalar via norm-squared
 
@@ -163,7 +170,7 @@ $$
 
 ### Why this beats the current path
 
-Each input to `log1p` is computed *as a small number directly*, with single-rounding FMA wherever possible:
+Per-stage error, dominated by the input noise that propagates through the pipeline:
 
 | piece | computation | absolute error |
 |---|---|---:|
@@ -171,18 +178,20 @@ Each input to `log1p` is computed *as a small number directly*, with single-roun
 | Cholesky $l_{11}, l_{21}, l_{22\text{sq}}$ | $\sqrt{z_{11}}$, $z_{12}/l_{11}$, FMA'd $z_{22} - l_{21}^2$ | $\sim \varepsilon$ relative |
 | forward solve $y_1, y_2$ | $z_{b1}/l_{11}$, FMA'd $(z_{b2} - l_{21}\,y_1)/l_{22}$ | $\sim \varepsilon$ relative |
 | $z_{bt}^{\top} Z_{tt}^{-1} z_{bt} = y_1^2 + y_2^2$ | FMA'd; non-negative by construction | $\sim \varepsilon$ relative |
-| $z_{bb}^{\text{schur}}$ | $z_{bb} - (y_1^2 + y_2^2)$ | inherits $\sim \varepsilon$ |
-| $\mathrm{ax},\,\mathrm{bx_1},\,\mathrm{bx_2}$ ("$\sigma_i \cdot \text{diag} - 1$" residuals) | single-rounded FMA each | $\sim \varepsilon$ **absolute** |
-| three `log1p` calls | full relative precision on small inputs | $\sim \varepsilon$ **absolute** each |
-| sum + $\|w_{\text{sum}}\| - 3$ | observed bit-exact for the primal term in the trace | inherits $\sim 3\varepsilon$ |
+| $z_{bb}^{\text{schur}}$ | $z_{bb} - (y_1^2 + y_2^2)$ | inherits $\sim \varepsilon$ relative |
+| $\mathrm{ax},\,\mathrm{bx_1},\,\mathrm{bx_2}$ ("$\sigma_i \cdot \text{diag} - 1$" residuals) | FMA-fused; input $\varepsilon$ relative becomes $\mathrm{ulp}(1) \approx 2.2\times 10^{-16}$ absolute after scale-up by $\sigma_i$ | $\sim \mathrm{ulp}(1)$ absolute |
+| three `log1p` calls | for inputs near zero, `log1p(x) ≈ x` and inherits the input error | $\sim \mathrm{ulp}(1)$ absolute each |
+| sum + $\|w_{\text{sum}}\| - 3$ | observed bit-exact for the primal term in the trace | inherits $\sim 3\,\mathrm{ulp}(1)$ |
 
-Final gap floor: $\sim 7\times 10^{-16}$, i.e., **bit-precision**. Default `gap_tol = 1e-6` is ten *billion* times above the floor.
+Final gap floor: $\sim 3\,\mathrm{ulp}(1) \approx 7\times 10^{-16}$, set by the per-entry noise in $z_{ii}$ rather than by anything log-related. Default `gap_tol = 1e-6` is ten *billion* times above the floor.
 
 ### Why this beats the naïve Schur
 
-For comparison, naïve Schur (`@log(det_tt) + @log(schur) + @log(SIGMA_0) + @log(sigma[0]) + @log(sigma[1])`, then sum) sits at $\sim 2\times 10^{-14}$ because of the ~14-digit cancellation between $\log\det A \approx +41$ and $\log\det Z \approx -41$. The log1p pairing dodges it entirely.
+For comparison, naïve Schur (`@log(det_tt) + @log(schur) + @log(SIGMA_0) + @log(sigma[0]) + @log(sigma[1])`, then sum) suffers a different problem: each $\log$ has *relative* error $\varepsilon$ at its own scale, so absolute error $\varepsilon \cdot |\log\Lambda_i| \approx 9\times 10^{-15}$ each. Summing four such terms expecting them to cancel to 0 leaves the gap floor at $\sim 2\times 10^{-14}$.
 
-**$\sim 10$ orders of magnitude improvement** over the current $10^{-6}$ floor at $\kappa(A) \sim 10^{9}$. **2 orders** beyond the naïve Schur.
+The pairing eliminates this entirely: each paired log is *itself* $\approx 0$ at convergence with error only $\mathrm{ulp}(1) \approx 2.2\times 10^{-16}$, so summing three of them gives $\sim 7\times 10^{-16}$.
+
+**$\sim 9$ orders of magnitude improvement** over the current $10^{-6}$ floor at $\kappa(A) \sim 10^{9}$. **~1.5 orders** beyond the naïve Schur — modest in the grand scheme, but it makes the floor input-precision-limited rather than cancellation-limited (a more principled place to stop).
 
 ### Bonus: also dominates the historical hex-degenerate case
 
@@ -261,9 +270,11 @@ These remain viable as backups or supplements if Schur turns out to have unfores
 | approach | gap floor at $\kappa(A)=10^9$ | gap floor at hex $\kappa(Z)=10^7$ | impl cost |
 |---|---:|---:|---|
 | current $L^{\top} Z L$ + Cholesky + log | $10^{-6}$ | $\sim 10^{-7}$ | baseline |
-| naïve Schur (separate logs, sum) | $\sim 10^{-14}$ | $\sim 10^{-9}$ | ~30 lines |
+| naïve Schur (separate logs, sum) | $\sim 2\times 10^{-14}$ | $\sim 10^{-9}$ | ~30 lines |
 | **Schur + Cholesky($Z_{tt}$) + 3×log1p (recommended)** | $\sim 7\times 10^{-16}$ | $\sim 10^{-9}$ | ~25 lines |
-| double-double arithmetic in current $L^{\top} Z L$ chain | $\sim 10^{-23}$ | $\sim 10^{-23}$ | ~100 lines |
+| above + double-double in `Vec3.dot` for $Z$-projections | $\sim \varepsilon^2 \approx 5\times 10^{-32}$ | comparable | ~150 lines |
+
+Floor for the recommended path is set by the absolute error of the six input quadratic forms ($v_i^{\top} Z v_j$), not by anything log-related. Further improvement requires tightening *those* — e.g., switching `Vec3.dot` to a compensated form. Worth doing only if a user actually needs gap_tol $< 10^{-15}$, which no one is asking for.
 
 ## Investigation artifacts (reverted before commit)
 
