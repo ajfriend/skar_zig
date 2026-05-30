@@ -861,6 +861,41 @@ scale predicate, no regime detection.</p>
 <h3
 id="implementation-sketch-25-30-lines-no-new-linalg-primitives">Implementation
 sketch (~25-30 lines, no new linalg primitives)</h3>
+<h4 id="helper-log_product_near_one">Helper:
+<code>log_product_near_one</code></h4>
+<p>The three log1p calls in the gap formula all have the same shape:
+<span class="math inline">\(\log(a\cdot b)\)</span> where <span
+class="math inline">\(a\cdot b \approx 1\)</span> is the structural
+expectation. Wrap that in a single inlined helper so we can flip the
+implementation in one place — useful for empirically A/B testing whether
+the log1p+FMA form actually buys us anything in practice (per the
+<em>Honest note</em> above, it shouldn't in the current pipeline, but
+the helper makes the test cheap).</p>
+<p>Sibling to <code>diff_of_products</code> in
+<code>src/linalg.zig</code>:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode zig"><code class="sourceCode zig"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">/// log(a * b), evaluated under the expectation a*b ≈ 1.</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="co">///</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="co">/// Mathematically just `@log(a * b)`. The default implementation uses</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="co">/// `@log1p(fma(a, b, -1))` so that when the input quadratic forms feeding</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="co">/// `a` and `b` are computed to better-than-ulp(1) precision (e.g., via a</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="co">/// future compensated `Vec3.dot`), the bits below ulp(1) survive the</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="co">/// multiply-then-subtract step.</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="co">///</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a><span class="co">/// In the current pipeline, `a` and `b` themselves carry ~ε relative</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a><span class="co">/// error from FMA-chained dots, so log1p+FMA and the naive form give</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a><span class="co">/// equivalent precision — keep both implementations and switch via the</span></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a><span class="co">/// `comptime` flag if you want to verify this empirically.</span></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">inline</span> <span class="kw">fn</span> log_product_near_one(a<span class="op">:</span> <span class="dt">f64</span><span class="op">,</span> b<span class="op">:</span> <span class="dt">f64</span>) <span class="dt">f64</span> {</span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>    <span class="at">const</span> use_log1p_fma <span class="op">=</span> <span class="cn">true</span>;</span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (use_log1p_fma) {</span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> @log1p(<span class="bu">@mulAdd</span>(<span class="dt">f64</span><span class="op">,</span> a<span class="op">,</span> b<span class="op">,</span> <span class="op">-</span><span class="fl">1.0</span>));</span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">else</span> {</span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="bu">@log</span>(a <span class="op">*</span> b);</span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h4 id="the-gap-computation-end-to-end">The gap computation,
+end-to-end</h4>
 <p>Inside <code>dualityGapConstructed</code>, after
 <code>eig2(A_perp)</code> builds <span class="math inline">\(V =
 [b\,|\,v_1\,|\,v_2]\)</span> at lines 410-422. Skip materializing <span
@@ -869,46 +904,46 @@ class="math inline">\(Z\)</span> onto the basis vectors directly via six
 quadratic forms, then Cholesky <span
 class="math inline">\(Z_{tt}\)</span> for the back-solve, log-det, and
 PD guard all at once:</p>
-<div class="sourceCode" id="cb2"><pre
-class="sourceCode zig"><code class="sourceCode zig"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Project Z onto A&#39;s eigenbasis: six FMA-chained quadratic forms.</span></span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> Zb  <span class="op">=</span> Z<span class="op">.</span>apply(b);</span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> Zv1 <span class="op">=</span> Z<span class="op">.</span>apply(v1);</span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> Zv2 <span class="op">=</span> Z<span class="op">.</span>apply(v2);</span>
-<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> z_bb <span class="op">=</span> b<span class="op">.</span>dot(Zb);</span>
-<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> z_b1 <span class="op">=</span> b<span class="op">.</span>dot(Zv1);</span>
-<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> z_b2 <span class="op">=</span> b<span class="op">.</span>dot(Zv2);</span>
-<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> z_11 <span class="op">=</span> v1<span class="op">.</span>dot(Zv1);</span>
-<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> z_12 <span class="op">=</span> v1<span class="op">.</span>dot(Zv2);</span>
-<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> z_22 <span class="op">=</span> v2<span class="op">.</span>dot(Zv2);</span>
-<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a><span class="co">// Cholesky of Z_tt = L L^T (2x2 SPD). Three quantities serve double duty:</span></span>
-<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="co">//   l_11^2 = z_11        → tangent residual 1</span></span>
-<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a><span class="co">//   l_22_sq = z_22 - l_21^2 → tangent residual 2, also PD guard</span></span>
-<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a><span class="co">//   l_11, l_22           → forward solve for the Schur scalar</span></span>
-<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (z_11 <span class="op">&lt;=</span> <span class="dv">0</span>) <span class="cf">return</span> <span class="op">/*</span> indef<span class="op">-</span>dual guard<span class="op">,</span> gap <span class="op">=</span> <span class="fl">1e30</span> <span class="op">*/</span>;</span>
-<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> l_11 <span class="op">=</span> <span class="bu">@sqrt</span>(z_11);</span>
-<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> l_21 <span class="op">=</span> z_12 <span class="op">/</span> l_11;</span>
-<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> l_22_sq <span class="op">=</span> <span class="bu">@mulAdd</span>(<span class="dt">f64</span><span class="op">,</span> <span class="op">-</span>l_21<span class="op">,</span> l_21<span class="op">,</span> z_22);  <span class="co">// single-rounded z_22 - l_21^2</span></span>
-<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (l_22_sq <span class="op">&lt;=</span> <span class="dv">0</span>) <span class="cf">return</span> <span class="op">/*</span> indef<span class="op">-</span>dual guard<span class="op">,</span> Z_tt not PD <span class="op">*/</span>;</span>
-<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> l_22 <span class="op">=</span> <span class="bu">@sqrt</span>(l_22_sq);</span>
-<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a><span class="co">// Schur scalar via norm-squared. z_bt^T Z_tt^{-1} z_bt = ||L^{-1} z_bt||^2.</span></span>
-<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a><span class="co">// One forward solve L y = z_bt; result is non-negative by construction.</span></span>
-<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> y_1 <span class="op">=</span> z_b1 <span class="op">/</span> l_11;</span>
-<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> y_2 <span class="op">=</span> <span class="bu">@mulAdd</span>(<span class="dt">f64</span><span class="op">,</span> <span class="op">-</span>l_21<span class="op">,</span> y_1<span class="op">,</span> z_b2) <span class="op">/</span> l_22;   <span class="co">// (z_b2 - l_21·y_1)/l_22</span></span>
-<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> yy  <span class="op">=</span> <span class="bu">@mulAdd</span>(<span class="dt">f64</span><span class="op">,</span> y_1<span class="op">,</span> y_1<span class="op">,</span> y_2 <span class="op">*</span> y_2);</span>
-<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> schur <span class="op">=</span> z_bb <span class="op">-</span> yy;</span>
-<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (schur <span class="op">&lt;=</span> <span class="dv">0</span>) <span class="cf">return</span> <span class="op">/*</span> indef<span class="op">-</span>dual guard <span class="op">*/</span>;</span>
-<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a><span class="co">// Three log1p residuals: axial + two tangent (per Cholesky diagonal).</span></span>
-<span id="cb2-32"><a href="#cb2-32" aria-hidden="true" tabindex="-1"></a><span class="co">// Each is &quot;σ · (diagonal entry) - 1&quot; fused into one FMA, single-rounded.</span></span>
-<span id="cb2-33"><a href="#cb2-33" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> ax  <span class="op">=</span> <span class="bu">@mulAdd</span>(<span class="dt">f64</span><span class="op">,</span> SIGMA_0<span class="op">,</span> schur<span class="op">,</span>  <span class="op">-</span><span class="fl">1.0</span>);   <span class="co">// SIGMA_0 · schur − 1</span></span>
-<span id="cb2-34"><a href="#cb2-34" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> bx1 <span class="op">=</span> <span class="bu">@mulAdd</span>(<span class="dt">f64</span><span class="op">,</span> sigma[<span class="dv">0</span>]<span class="op">,</span> z_11<span class="op">,</span>   <span class="op">-</span><span class="fl">1.0</span>);  <span class="co">// σ_1 · z_11 − 1</span></span>
-<span id="cb2-35"><a href="#cb2-35" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> bx2 <span class="op">=</span> <span class="bu">@mulAdd</span>(<span class="dt">f64</span><span class="op">,</span> sigma[<span class="dv">1</span>]<span class="op">,</span> l_22_sq<span class="op">,</span> <span class="op">-</span><span class="fl">1.0</span>); <span class="co">// σ_2 · l_22² − 1</span></span>
-<span id="cb2-36"><a href="#cb2-36" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-37"><a href="#cb2-37" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> log_det_M <span class="op">=</span> @log1p(ax) <span class="op">+</span> @log1p(bx1) <span class="op">+</span> @log1p(bx2);</span>
-<span id="cb2-38"><a href="#cb2-38" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> gap <span class="op">=</span> w_sum<span class="op">.</span>norm() <span class="op">-</span> <span class="fl">3.0</span> <span class="op">-</span> log_det_M;</span></code></pre></div>
-<p>No new helper types or primitives needed: <code>Vec3.apply</code> /
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode zig"><code class="sourceCode zig"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Project Z onto A&#39;s eigenbasis: six FMA-chained quadratic forms.</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> Zb  <span class="op">=</span> Z<span class="op">.</span>apply(b);</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> Zv1 <span class="op">=</span> Z<span class="op">.</span>apply(v1);</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> Zv2 <span class="op">=</span> Z<span class="op">.</span>apply(v2);</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> z_bb <span class="op">=</span> b<span class="op">.</span>dot(Zb);</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> z_b1 <span class="op">=</span> b<span class="op">.</span>dot(Zv1);</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> z_b2 <span class="op">=</span> b<span class="op">.</span>dot(Zv2);</span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> z_11 <span class="op">=</span> v1<span class="op">.</span>dot(Zv1);</span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> z_12 <span class="op">=</span> v1<span class="op">.</span>dot(Zv2);</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> z_22 <span class="op">=</span> v2<span class="op">.</span>dot(Zv2);</span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a><span class="co">// Cholesky of Z_tt = L L^T (2x2 SPD). Three quantities serve double duty:</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a><span class="co">//   l_11^2 = z_11        → tangent residual 1</span></span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a><span class="co">//   l_22_sq = z_22 - l_21^2 → tangent residual 2, also PD guard</span></span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a><span class="co">//   l_11, l_22           → forward solve for the Schur scalar</span></span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (z_11 <span class="op">&lt;=</span> <span class="dv">0</span>) <span class="cf">return</span> <span class="op">/*</span> indef<span class="op">-</span>dual guard<span class="op">,</span> gap <span class="op">=</span> <span class="fl">1e30</span> <span class="op">*/</span>;</span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> l_11 <span class="op">=</span> <span class="bu">@sqrt</span>(z_11);</span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> l_21 <span class="op">=</span> z_12 <span class="op">/</span> l_11;</span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> l_22_sq <span class="op">=</span> <span class="bu">@mulAdd</span>(<span class="dt">f64</span><span class="op">,</span> <span class="op">-</span>l_21<span class="op">,</span> l_21<span class="op">,</span> z_22);  <span class="co">// single-rounded z_22 - l_21^2</span></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (l_22_sq <span class="op">&lt;=</span> <span class="dv">0</span>) <span class="cf">return</span> <span class="op">/*</span> indef<span class="op">-</span>dual guard<span class="op">,</span> Z_tt not PD <span class="op">*/</span>;</span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> l_22 <span class="op">=</span> <span class="bu">@sqrt</span>(l_22_sq);</span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a><span class="co">// Schur scalar via norm-squared. z_bt^T Z_tt^{-1} z_bt = ||L^{-1} z_bt||^2.</span></span>
+<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a><span class="co">// One forward solve L y = z_bt; result is non-negative by construction.</span></span>
+<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> y_1 <span class="op">=</span> z_b1 <span class="op">/</span> l_11;</span>
+<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> y_2 <span class="op">=</span> <span class="bu">@mulAdd</span>(<span class="dt">f64</span><span class="op">,</span> <span class="op">-</span>l_21<span class="op">,</span> y_1<span class="op">,</span> z_b2) <span class="op">/</span> l_22;   <span class="co">// (z_b2 - l_21·y_1)/l_22</span></span>
+<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> yy  <span class="op">=</span> <span class="bu">@mulAdd</span>(<span class="dt">f64</span><span class="op">,</span> y_1<span class="op">,</span> y_1<span class="op">,</span> y_2 <span class="op">*</span> y_2);</span>
+<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> schur <span class="op">=</span> z_bb <span class="op">-</span> yy;</span>
+<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> (schur <span class="op">&lt;=</span> <span class="dv">0</span>) <span class="cf">return</span> <span class="op">/*</span> indef<span class="op">-</span>dual guard <span class="op">*/</span>;</span>
+<span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a><span class="co">// Three independent &quot;σ_i · pivot_i → 1&quot; log-of-1 checks, summed.</span></span>
+<span id="cb3-32"><a href="#cb3-32" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> log_det_M <span class="op">=</span></span>
+<span id="cb3-33"><a href="#cb3-33" aria-hidden="true" tabindex="-1"></a>    log_product_near_one(SIGMA_0<span class="op">,</span>  schur) <span class="op">+</span></span>
+<span id="cb3-34"><a href="#cb3-34" aria-hidden="true" tabindex="-1"></a>    log_product_near_one(sigma[<span class="dv">0</span>]<span class="op">,</span> z_11)  <span class="op">+</span></span>
+<span id="cb3-35"><a href="#cb3-35" aria-hidden="true" tabindex="-1"></a>    log_product_near_one(sigma[<span class="dv">1</span>]<span class="op">,</span> l_22_sq);</span>
+<span id="cb3-36"><a href="#cb3-36" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-37"><a href="#cb3-37" aria-hidden="true" tabindex="-1"></a><span class="at">const</span> gap <span class="op">=</span> w_sum<span class="op">.</span>norm() <span class="op">-</span> <span class="fl">3.0</span> <span class="op">-</span> log_det_M;</span></code></pre></div>
+<p>No new helper types or primitives needed beyond
+<code>log_product_near_one</code>: <code>Vec3.apply</code> /
 <code>Vec3.dot</code> already exist and are FMA-chained,
 <code>@mulAdd</code>, <code>@log1p</code>, and <code>@sqrt</code> are
 Zig builtins. The 3×3 path through the existing <code>Cholesky</code> on

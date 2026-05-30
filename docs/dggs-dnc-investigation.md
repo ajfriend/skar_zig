@@ -212,6 +212,37 @@ So Schur **strictly improves on both** the current M path *and* the rejected pla
 
 ### Implementation sketch (~25-30 lines, no new linalg primitives)
 
+#### Helper: `log_product_near_one`
+
+The three log1p calls in the gap formula all have the same shape: $\log(a\cdot b)$ where $a\cdot b \approx 1$ is the structural expectation. Wrap that in a single inlined helper so we can flip the implementation in one place — useful for empirically A/B testing whether the log1p+FMA form actually buys us anything in practice (per the *Honest note* above, it shouldn't in the current pipeline, but the helper makes the test cheap).
+
+Sibling to `diff_of_products` in `src/linalg.zig`:
+
+```zig
+/// log(a * b), evaluated under the expectation a*b ≈ 1.
+///
+/// Mathematically just `@log(a * b)`. The default implementation uses
+/// `@log1p(fma(a, b, -1))` so that when the input quadratic forms feeding
+/// `a` and `b` are computed to better-than-ulp(1) precision (e.g., via a
+/// future compensated `Vec3.dot`), the bits below ulp(1) survive the
+/// multiply-then-subtract step.
+///
+/// In the current pipeline, `a` and `b` themselves carry ~ε relative
+/// error from FMA-chained dots, so log1p+FMA and the naive form give
+/// equivalent precision — keep both implementations and switch via the
+/// `comptime` flag if you want to verify this empirically.
+pub inline fn log_product_near_one(a: f64, b: f64) f64 {
+    const use_log1p_fma = true;
+    if (use_log1p_fma) {
+        return @log1p(@mulAdd(f64, a, b, -1.0));
+    } else {
+        return @log(a * b);
+    }
+}
+```
+
+#### The gap computation, end-to-end
+
 Inside `dualityGapConstructed`, after `eig2(A_perp)` builds $V = [b\,|\,v_1\,|\,v_2]$ at lines 410-422. Skip materializing $V^{\top} Z V$ — project $Z$ onto the basis vectors directly via six quadratic forms, then Cholesky $Z_{tt}$ for the back-solve, log-det, and PD guard all at once:
 
 ```zig
@@ -245,17 +276,16 @@ const yy  = @mulAdd(f64, y_1, y_1, y_2 * y_2);
 const schur = z_bb - yy;
 if (schur <= 0) return /* indef-dual guard */;
 
-// Three log1p residuals: axial + two tangent (per Cholesky diagonal).
-// Each is "σ · (diagonal entry) - 1" fused into one FMA, single-rounded.
-const ax  = @mulAdd(f64, SIGMA_0, schur,  -1.0);   // SIGMA_0 · schur − 1
-const bx1 = @mulAdd(f64, sigma[0], z_11,   -1.0);  // σ_1 · z_11 − 1
-const bx2 = @mulAdd(f64, sigma[1], l_22_sq, -1.0); // σ_2 · l_22² − 1
+// Three independent "σ_i · pivot_i → 1" log-of-1 checks, summed.
+const log_det_M =
+    log_product_near_one(SIGMA_0,  schur) +
+    log_product_near_one(sigma[0], z_11)  +
+    log_product_near_one(sigma[1], l_22_sq);
 
-const log_det_M = @log1p(ax) + @log1p(bx1) + @log1p(bx2);
 const gap = w_sum.norm() - 3.0 - log_det_M;
 ```
 
-No new helper types or primitives needed: `Vec3.apply` / `Vec3.dot` already exist and are FMA-chained, `@mulAdd`, `@log1p`, and `@sqrt` are Zig builtins. The 3×3 path through the existing `Cholesky` on $M$, the explicit $L$, and the $L^{\top} Z L$ symmetric similarity all disappear from `dualityGapConstructed`. The 2×2 Cholesky of $Z_{tt}$ is the only matrix factorization that remains.
+No new helper types or primitives needed beyond `log_product_near_one`: `Vec3.apply` / `Vec3.dot` already exist and are FMA-chained, `@mulAdd`, `@log1p`, and `@sqrt` are Zig builtins. The 3×3 path through the existing `Cholesky` on $M$, the explicit $L$, and the $L^{\top} Z L$ symmetric similarity all disappear from `dualityGapConstructed`. The 2×2 Cholesky of $Z_{tt}$ is the only matrix factorization that remains.
 
 ### Risks worth empirical checks before locking in
 
