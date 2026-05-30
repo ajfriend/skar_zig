@@ -72,6 +72,25 @@ pub fn build(b: *std.Build) void {
     addExample(b, skar_mod, cases_mod, target, optimize, "status", null, "Run examples/status.zig (full Outcome branching)");
     addExample(b, skar_mod, cases_mod, target, optimize, "cases", null, "Run examples/cases.zig (run a named case or --all)");
     addExample(b, skar_mod, cases_mod, target, optimize, "bench", .ReleaseFast, "Run examples/bench.zig (per-case timing, release-built)");
+
+    // DGGS aspect-ratio survey (see docs/dggs-aspect-survey-plan.md
+    // and scripts/dggs/). Standalone exec, not an example: lives under
+    // scripts/, force-built ReleaseFast (30k solves per run), and uses
+    // CWD-relative paths so it must be launched from the repo root.
+    const dggs_aspect_mod = b.createModule(.{
+        .root_source_file = b.path("scripts/dggs/aspect.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    dggs_aspect_mod.addImport("skar", skar_mod);
+    const dggs_aspect_exe = b.addExecutable(.{
+        .name = "skar-dggs-aspect",
+        .root_module = dggs_aspect_mod,
+    });
+    const run_dggs_aspect = b.addRunArtifact(dggs_aspect_exe);
+    run_dggs_aspect.setCwd(b.path(""));
+    const dggs_aspect_step = b.step("dggs-aspect", "Run scripts/dggs/aspect.zig over data/{h3,s2,a5}.json");
+    dggs_aspect_step.dependOn(&run_dggs_aspect.step);
 }
 
 fn addExample(

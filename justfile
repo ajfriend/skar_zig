@@ -40,6 +40,17 @@ ex-status:
 bench:
     zig build ex-bench
 
-# Remove build artifacts and coverage output.
+# Generate DGGS cell boundary data (H3/S2/A5) under scripts/dggs/data/.
+# Output is gitignored; regenerate any time via this target.
+# Edit constants (N, SEED, resolutions) at the top of gen_cells.py.
+dggs-gen:
+    uv run scripts/dggs/gen_cells.py
+
+# Run skar over every generated DGGS cell; writes scripts/dggs/data/aspect.json.
+# Depends on `just dggs-gen` having run first.
+dggs-aspect:
+    zig build dggs-aspect
+
+# Remove build artifacts, coverage output, and generated DGGS data.
 clean:
-    rm -rf zig-out .zig-cache coverage
+    rm -rf zig-out .zig-cache coverage scripts/dggs/data
