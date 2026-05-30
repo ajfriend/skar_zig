@@ -81,7 +81,7 @@ Confirms the floor is dominated by input-scale-dependent precision loss in M, no
 
 Use the algebraic identity $\log\det M = \log\det A + \log\det Z$ to eliminate the $L^{\top} Z L$ matrix product (the amplifier), and compute $\log\det Z$ via a block decomposition along the structural axial-vs-tangent split of $A$. Each piece then lives in its own naturally-conditioned scale.
 
-The eigendecomposition $V = [\,b\;|\;v_1\;|\;v_2\,]$, $\Lambda = \mathrm{diag}(\mathrm{SIGMA}_0,\,\sigma_1,\,\sigma_2)$ is *already computed* at `src/skar.zig:410-422` — no new factorizations needed.
+The eigendecomposition $V = [\,b\;|\;v_1\;|\;v_2\,]$, $\Lambda = \mathrm{diag}(\sigma_0,\,\sigma_1,\,\sigma_2)$ is *already computed* at `src/skar.zig:410-422` — no new factorizations needed.
 
 ### Block structure of $Z$ in $A$'s eigenbasis
 
@@ -96,7 +96,7 @@ with $z_{bb} \in \mathbb{R}$, $z_{bt} \in \mathbb{R}^{2}$, $Z_{tt} \in \mathbb{R
 At convergence $Z = A^{-1}$, so in this basis $Z_{\text{rot}} = \Lambda^{-1}$ — strictly diagonal:
 
 $$
-z_{bb} \to \frac{1}{\mathrm{SIGMA}_0} \approx 1.73, \qquad z_{bt} \to 0, \qquad Z_{tt} \to \mathrm{diag}\!\bigl(1/\sigma_1,\, 1/\sigma_2\bigr).
+z_{bb} \to \frac{1}{\sigma_0} \approx 1.73, \qquad z_{bt} \to 0, \qquad Z_{tt} \to \mathrm{diag}\!\bigl(1/\sigma_1,\, 1/\sigma_2\bigr).
 $$
 
 For DGGS-tiny cells the tangent block has entries $\sim 10^{-9}$, but its own conditioning $\kappa(Z_{tt}) = \sigma_2/\sigma_1$ is $O(1)$ — only the *scale* is small, not the *ratio*.
@@ -114,7 +114,7 @@ Write $z_{bb}^{\text{schur}} \;\equiv\; z_{bb} - z_{bt}^{\top} Z_{tt}^{-1} z_{bt
 A naïve assembly $\log\det M = \log\det A + \log\det Z$ has a *hidden* cancellation worth flagging. For the S2 case:
 
 $$
-\log\det A \;=\; \log\mathrm{SIGMA}_0 + \log\sigma_1 + \log\sigma_2 \;\approx\; -0.55 + 20.60 + 20.79 \;=\; 40.84,
+\log\det A \;=\; \log\sigma_0 + \log\sigma_1 + \log\sigma_2 \;\approx\; -0.55 + 20.60 + 20.79 \;=\; 40.84,
 $$
 
 and at convergence $\log\det Z \to -40.84$. Summing them gives $0$ with **~14 digits of cancellation** between the two; individual log errors of $\varepsilon\cdot 41 \approx 9\times 10^{-15}$ then bound the gap floor at $\sim 2\times 10^{-14}$.
@@ -128,7 +128,7 @@ $$
 Pair the three structural terms with their cancellation partners:
 
 $$
-\log\det M \;=\; \underbrace{\log\!\bigl(\mathrm{SIGMA}_0 \cdot z_{bb}^{\text{schur}}\bigr)}_{\to\,\log 1\,=\,0} \;+\; \underbrace{\log\!\bigl(\sigma_1 \cdot z_{11}\bigr)}_{\to\,\log 1\,=\,0} \;+\; \underbrace{\log\!\bigl(\sigma_2 \cdot l_{22}^2\bigr)}_{\to\,\log 1\,=\,0}.
+\log\det M \;=\; \underbrace{\log\!\bigl(\sigma_0 \cdot z_{bb}^{\text{schur}}\bigr)}_{\to\,\log 1\,=\,0} \;+\; \underbrace{\log\!\bigl(\sigma_1 \cdot z_{11}\bigr)}_{\to\,\log 1\,=\,0} \;+\; \underbrace{\log\!\bigl(\sigma_2 \cdot l_{22}^2\bigr)}_{\to\,\log 1\,=\,0}.
 $$
 
 (At convergence $z_{11} \to 1/\sigma_1$ and $l_{22}^2 \to 1/\sigma_2$, so each $\sigma_i \cdot l_{ii}^2 \to 1$.)
@@ -136,13 +136,13 @@ $$
 Each argument is $1 + \delta$ with $\delta$ small. Use `log1p` on the deviation — it preserves full relative precision in $\delta$ where naïve `log(1 + δ)` would lose the small bits to the leading $1$:
 
 $$
-\boxed{\;\log\det M \;=\; \mathrm{log1p}\bigl(\mathrm{SIGMA}_0 \cdot z_{bb}^{\text{schur}} - 1\bigr) \;+\; \mathrm{log1p}\bigl(\sigma_1 \cdot z_{11} - 1\bigr) \;+\; \mathrm{log1p}\bigl(\sigma_2 \cdot l_{22}^2 - 1\bigr).\;}
+\boxed{\;\log\det M \;=\; \mathrm{log1p}\bigl(\sigma_0 \cdot z_{bb}^{\text{schur}} - 1\bigr) \;+\; \mathrm{log1p}\bigl(\sigma_1 \cdot z_{11} - 1\bigr) \;+\; \mathrm{log1p}\bigl(\sigma_2 \cdot l_{22}^2 - 1\bigr).\;}
 $$
 
 Each "$\sigma_i \cdot \text{diag} - 1$" subtraction becomes a single-rounded FMA (`@mulAdd`) — no separate multiplication-then-subtraction step:
 
 $$
-\mathrm{ax} = \mathrm{fma}(\mathrm{SIGMA}_0,\, z_{bb}^{\text{schur}},\, -1), \quad \mathrm{bx_1} = \mathrm{fma}(\sigma_1,\, z_{11},\, -1), \quad \mathrm{bx_2} = \mathrm{fma}(\sigma_2,\, l_{22}^2,\, -1).
+\mathrm{ax} = \mathrm{fma}(\sigma_0,\, z_{bb}^{\text{schur}},\, -1), \quad \mathrm{bx_1} = \mathrm{fma}(\sigma_1,\, z_{11},\, -1), \quad \mathrm{bx_2} = \mathrm{fma}(\sigma_2,\, l_{22}^2,\, -1).
 $$
 
 ### Schur scalar via norm-squared

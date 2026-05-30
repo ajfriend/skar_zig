@@ -542,8 +542,8 @@ via a block decomposition along the structural axial-vs-tangent split of
 naturally-conditioned scale.</p>
 <p>The eigendecomposition <span class="math inline">\(V =
 [\,b\;|\;v_1\;|\;v_2\,]\)</span>, <span class="math inline">\(\Lambda =
-\mathrm{diag}(\mathrm{SIGMA}_0,\,\sigma_1,\,\sigma_2)\)</span> is
-<em>already computed</em> at <code>src/skar.zig:410-422</code> — no new
+\mathrm{diag}(\sigma_0,\,\sigma_1,\,\sigma_2)\)</span> is <em>already
+computed</em> at <code>src/skar.zig:410-422</code> — no new
 factorizations needed.</p>
 <h3 id="block-structure-of-z-in-as-eigenbasis">Block structure of <span
 class="math inline">\(Z\)</span> in <span
@@ -562,8 +562,8 @@ symmetric.</p>
 this basis <span class="math inline">\(Z_{\text{rot}} =
 \Lambda^{-1}\)</span> — strictly diagonal:</p>
 <p><span class="math display">\[
-z_{bb} \to \frac{1}{\mathrm{SIGMA}_0} \approx 1.73, \qquad z_{bt} \to 0,
-\qquad Z_{tt} \to \mathrm{diag}\!\bigl(1/\sigma_1,\, 1/\sigma_2\bigr).
+z_{bb} \to \frac{1}{\sigma_0} \approx 1.73, \qquad z_{bt} \to 0, \qquad
+Z_{tt} \to \mathrm{diag}\!\bigl(1/\sigma_1,\, 1/\sigma_2\bigr).
 \]</span></p>
 <p>For DGGS-tiny cells the tangent block has entries <span
 class="math inline">\(\sim 10^{-9}\)</span>, but its own conditioning
@@ -586,8 +586,8 @@ pairing via Cholesky of <span class="math inline">\(Z_{tt}\)</span></h3>
 + \log\det Z\)</span> has a <em>hidden</em> cancellation worth flagging.
 For the S2 case:</p>
 <p><span class="math display">\[
-\log\det A \;=\; \log\mathrm{SIGMA}_0 + \log\sigma_1 + \log\sigma_2
-\;\approx\; -0.55 + 20.60 + 20.79 \;=\; 40.84,
+\log\det A \;=\; \log\sigma_0 + \log\sigma_1 + \log\sigma_2 \;\approx\;
+-0.55 + 20.60 + 20.79 \;=\; 40.84,
 \]</span></p>
 <p>and at convergence <span class="math inline">\(\log\det Z \to
 -40.84\)</span>. Summing them gives <span
@@ -609,7 +609,7 @@ class="math inline">\(l_{22}^2 = z_{22} - l_{21}^2\)</span>. So</p>
 \]</span></p>
 <p>Pair the three structural terms with their cancellation partners:</p>
 <p><span class="math display">\[
-\log\det M \;=\; \underbrace{\log\!\bigl(\mathrm{SIGMA}_0 \cdot
+\log\det M \;=\; \underbrace{\log\!\bigl(\sigma_0 \cdot
 z_{bb}^{\text{schur}}\bigr)}_{\to\,\log 1\,=\,0} \;+\;
 \underbrace{\log\!\bigl(\sigma_1 \cdot z_{11}\bigr)}_{\to\,\log 1\,=\,0}
 \;+\; \underbrace{\log\!\bigl(\sigma_2 \cdot l_{22}^2\bigr)}_{\to\,\log
@@ -626,7 +626,7 @@ precision in <span class="math inline">\(\delta\)</span> where naïve
 <code>log(1 + δ)</code> would lose the small bits to the leading <span
 class="math inline">\(1\)</span>:</p>
 <p><span class="math display">\[
-\boxed{\;\log\det M \;=\; \mathrm{log1p}\bigl(\mathrm{SIGMA}_0 \cdot
+\boxed{\;\log\det M \;=\; \mathrm{log1p}\bigl(\sigma_0 \cdot
 z_{bb}^{\text{schur}} - 1\bigr) \;+\; \mathrm{log1p}\bigl(\sigma_1 \cdot
 z_{11} - 1\bigr) \;+\; \mathrm{log1p}\bigl(\sigma_2 \cdot l_{22}^2 -
 1\bigr).\;}
@@ -636,8 +636,8 @@ z_{11} - 1\bigr) \;+\; \mathrm{log1p}\bigl(\sigma_2 \cdot l_{22}^2 -
 (<code>@mulAdd</code>) — no separate multiplication-then-subtraction
 step:</p>
 <p><span class="math display">\[
-\mathrm{ax} = \mathrm{fma}(\mathrm{SIGMA}_0,\, z_{bb}^{\text{schur}},\,
--1), \quad \mathrm{bx_1} = \mathrm{fma}(\sigma_1,\, z_{11},\, -1), \quad
+\mathrm{ax} = \mathrm{fma}(\sigma_0,\, z_{bb}^{\text{schur}},\, -1),
+\quad \mathrm{bx_1} = \mathrm{fma}(\sigma_1,\, z_{11},\, -1), \quad
 \mathrm{bx_2} = \mathrm{fma}(\sigma_2,\, l_{22}^2,\, -1).
 \]</span></p>
 <h3 id="schur-scalar-via-norm-squared">Schur scalar via
