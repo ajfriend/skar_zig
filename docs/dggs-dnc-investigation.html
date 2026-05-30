@@ -607,6 +607,20 @@ class="math inline">\(l_{22}^2 = z_{22} - l_{21}^2\)</span>. So</p>
 \log\det Z_{tt} \;=\; \log l_{11}^2 + \log l_{22}^2 \;=\; \log z_{11} +
 \log l_{22}^2.
 \]</span></p>
+<blockquote>
+<p><strong>Notation note.</strong> Throughout this section <span
+class="math inline">\(l_{22}^2\)</span> refers to the
+<strong>pre-sqrt</strong> Cholesky entry <span
+class="math inline">\((L_t L_t^{\top})_{22} = z_{22} -
+l_{21}^2\)</span>, computed once via a single FMA-rounded subtraction
+(<code>l_22_sq</code> in the implementation). It is <em>not</em>
+obtained by squaring <span class="math inline">\(l_{22} =
+\sqrt{l_{22}^2}\)</span> — that would invite a sqrt-then-square
+round-trip. The implementation stores <code>l_22_sq</code> first and
+reuses it directly for the <code>bx_2</code> residual; the
+<code>l_22</code> value is computed only for the forward-solve
+divisor.</p>
+</blockquote>
 <p>Pair the three structural terms with their cancellation partners:</p>
 <p><span class="math display">\[
 \log\det M \;=\; \underbrace{\log\!\bigl(\sigma_0 \cdot

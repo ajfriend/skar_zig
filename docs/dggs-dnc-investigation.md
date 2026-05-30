@@ -125,6 +125,8 @@ $$
 \log\det Z_{tt} \;=\; \log l_{11}^2 + \log l_{22}^2 \;=\; \log z_{11} + \log l_{22}^2.
 $$
 
+> **Notation note.** Throughout this section $l_{22}^2$ refers to the **pre-sqrt** Cholesky entry $(L_t L_t^{\top})_{22} = z_{22} - l_{21}^2$, computed once via a single FMA-rounded subtraction (`l_22_sq` in the implementation). It is *not* obtained by squaring $l_{22} = \sqrt{l_{22}^2}$ — that would invite a sqrt-then-square round-trip. The implementation stores `l_22_sq` first and reuses it directly for the `bx_2` residual; the `l_22` value is computed only for the forward-solve divisor.
+
 Pair the three structural terms with their cancellation partners:
 
 $$
