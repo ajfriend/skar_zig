@@ -149,6 +149,12 @@ $$
 \mathrm{ax} = \mathrm{fma}(\sigma_0,\, z_{bb}^{\text{schur}},\, -1), \quad \mathrm{bx_1} = \mathrm{fma}(\sigma_1,\, z_{11},\, -1), \quad \mathrm{bx_2} = \mathrm{fma}(\sigma_2,\, l_{22}^2,\, -1).
 $$
 
+### Why the three-way symmetry is the whole point
+
+Each of the three pieces is a one-dimensional "$\sigma_i \cdot \text{pivot}_i \to 1$" check: the axial pivot $z_{bb}^{\text{schur}}$ is the Schur scalar of the 1×1 axial block after the tangent has been deflated; the two tangent pivots $z_{11}$ and $l_{22}^2$ are the diagonal entries of the Cholesky of $Z_{tt}$ (which is itself a sequence of Schur complements). So the gap formula reduces to **three independent one-dimensional log-of-1 problems**, summed.
+
+There is no cross-dimensional product to amplify $\kappa(A)$ — that's the whole point. The current path's $M = L^{\top} Z L \to \text{Cholesky} \to \log$ couples all three directions into a single matrix product before taking the log, which is exactly what allows a per-dimension error of $\varepsilon$ to be amplified to $\kappa(A) \cdot \varepsilon$ in the final result. Decoupling the dimensions removes that amplification entirely; each direction contributes its own $\mathrm{ulp}(1)$ noise independently, summing linearly.
+
 **Honest note on `log1p`+FMA vs plain `log`.** The textbook win of `log1p(δ)` over `log(1+δ)` requires $\delta$ to be supplied at precision finer than $\mathrm{ulp}(1)$. In our pipeline $z_{11}$, $l_{22}^2$, and $z_{bb}^{\text{schur}}$ all carry $\sim \varepsilon$ *relative* error from the FMA-chained quadratic forms used to build them, which becomes $\sim \mathrm{ulp}(1)$ *absolute* error once scaled by $\sigma_i \sim 10^9$. That input noise sets the floor regardless of whether we end with `log(σ_i·diag)` or `log1p(fma(σ_i, diag, -1))`. So the dramatic gain over the current path comes from **the pairing**, not from `log1p` per se. We still use `log1p`+FMA for two minor reasons:
 
 1. **Reads as "this should be ≈ 0".** The small-residual structure is visible at the call site; future readers don't have to recognize the cancellation pattern.

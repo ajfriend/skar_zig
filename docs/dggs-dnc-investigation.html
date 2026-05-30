@@ -652,6 +652,31 @@ z_{11} - 1\bigr) \;+\; \mathrm{log1p}\bigl(\sigma_2 \cdot l_{22}^2 -
 \quad \mathrm{bx_1} = \mathrm{fma}(\sigma_1,\, z_{11},\, -1), \quad
 \mathrm{bx_2} = \mathrm{fma}(\sigma_2,\, l_{22}^2,\, -1).
 \]</span></p>
+<h3 id="why-the-three-way-symmetry-is-the-whole-point">Why the three-way
+symmetry is the whole point</h3>
+<p>Each of the three pieces is a one-dimensional "<span
+class="math inline">\(\sigma_i \cdot \text{pivot}_i \to 1\)</span>"
+check: the axial pivot <span
+class="math inline">\(z_{bb}^{\text{schur}}\)</span> is the Schur scalar
+of the 1×1 axial block after the tangent has been deflated; the two
+tangent pivots <span class="math inline">\(z_{11}\)</span> and <span
+class="math inline">\(l_{22}^2\)</span> are the diagonal entries of the
+Cholesky of <span class="math inline">\(Z_{tt}\)</span> (which is itself
+a sequence of Schur complements). So the gap formula reduces to
+<strong>three independent one-dimensional log-of-1 problems</strong>,
+summed.</p>
+<p>There is no cross-dimensional product to amplify <span
+class="math inline">\(\kappa(A)\)</span> — that's the whole point. The
+current path's <span class="math inline">\(M = L^{\top} Z L \to
+\text{Cholesky} \to \log\)</span> couples all three directions into a
+single matrix product before taking the log, which is exactly what
+allows a per-dimension error of <span
+class="math inline">\(\varepsilon\)</span> to be amplified to <span
+class="math inline">\(\kappa(A) \cdot \varepsilon\)</span> in the final
+result. Decoupling the dimensions removes that amplification entirely;
+each direction contributes its own <span
+class="math inline">\(\mathrm{ulp}(1)\)</span> noise independently,
+summing linearly.</p>
 <p><strong>Honest note on <code>log1p</code>+FMA vs plain
 <code>log</code>.</strong> The textbook win of <code>log1p(δ)</code>
 over <code>log(1+δ)</code> requires <span
