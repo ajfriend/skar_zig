@@ -40,6 +40,7 @@ SYSTEMS = ["h3", "s2", "a5"]
 SYS_LABEL = {"h3": "H3 r15", "s2": "S2 L30", "a5": "A5 r30"}
 SYS_COLOR = {"h3": "C0", "s2": "C1", "a5": "C2"}
 EARTH_R_M = 6_371_008.8  # scale gnomonic (dimensionless) coords to metres
+DPI = 200
 # -------------------------------------------------------------------------
 
 
@@ -100,7 +101,7 @@ def main() -> None:
                  fontsize=13)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     out = DATA_DIR / "extremes.png"
-    fig.savefig(out, dpi=120)
+    fig.savefig(out, dpi=DPI)
     plt.close(fig)
     print(f"wrote {out}")
     for s in SYSTEMS:

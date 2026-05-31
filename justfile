@@ -51,6 +51,16 @@ dggs-gen:
 dggs-aspect:
     zig build dggs-aspect
 
+# Plot the survey: per-system AR histograms + the best/worst enclosing-ellipse
+# grid. Depends on `just dggs-aspect` having written aspect.json.
+dggs-plots:
+    uv run scripts/dggs/histogram.py
+    uv run scripts/dggs/extremes_plot.py
+
+# Full survey pipeline in one command: generate cells -> solve -> plot.
+# Use after changing N/SEED at the top of gen_cells.py.
+dggs-all: dggs-gen dggs-aspect dggs-plots
+
 # Remove build artifacts, coverage output, and generated DGGS data.
 clean:
     rm -rf zig-out .zig-cache coverage scripts/dggs/data

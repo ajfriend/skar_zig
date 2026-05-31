@@ -97,6 +97,32 @@ pub fn main() !void {
 
     try writeOutput(allocator, &results);
     printSummary(&results);
+    checkConvergence(&results);
+}
+
+/// Verify the survey got full convergence: at gap_tol = 1e-3 every
+/// finest-resolution cell should converge to a usable AR. Any non-converged
+/// outcome (DNC / infeasible / input_error) means the distribution is
+/// incomplete — print a per-system breakdown and exit non-zero so the
+/// pipeline (`just dggs-all`) fails loudly instead of silently dropping cells.
+fn checkConvergence(results: *const [SYSTEMS.len]SystemResult) void {
+    var total_bad: u64 = 0;
+    for (results, 0..) |r, i| {
+        const c = r.counts;
+        const bad = c.did_not_converge + c.infeasible + c.input_error;
+        if (bad > 0) {
+            std.debug.print(
+                "  non-converged [{s}]: {d}/{d} (DNC {d}, infeasible {d}, input_error {d})\n",
+                .{ SYSTEMS[i], bad, r.n_total, c.did_not_converge, c.infeasible, c.input_error },
+            );
+        }
+        total_bad += bad;
+    }
+    if (total_bad > 0) {
+        std.debug.print("\nFAIL: {d} cell(s) did not converge — survey AR distribution is incomplete.\n", .{total_bad});
+        std.process.exit(1);
+    }
+    std.debug.print("\nconvergence: OK — every cell converged in all systems.\n", .{});
 }
 
 fn processSystem(

@@ -35,6 +35,7 @@ import numpy as np
 DATA_DIR = Path(__file__).resolve().parent / "data"
 ASPECT_JSON = DATA_DIR / "aspect.json"
 N_BINS = 60
+DPI = 200
 SYSTEMS = ["h3", "s2", "a5"]
 SYS_LABEL = {"h3": "H3 r15", "s2": "S2 L30", "a5": "A5 r30"}
 SYS_COLOR = {"h3": "C0", "s2": "C1", "a5": "C2"}
@@ -88,7 +89,7 @@ def main() -> None:
         ax.grid(True, alpha=0.3)
         fig.tight_layout()
         out = DATA_DIR / f"hist_{s}.png"
-        fig.savefig(out, dpi=120)
+        fig.savefig(out, dpi=DPI)
         plt.close(fig)
         print(f"wrote {out}")
 
@@ -106,7 +107,7 @@ def main() -> None:
     fig.suptitle("DGGS finest-resolution aspect-ratio distributions", fontsize=12)
     fig.tight_layout()
     out = DATA_DIR / "hist_combined.png"
-    fig.savefig(out, dpi=120)
+    fig.savefig(out, dpi=DPI)
     plt.close(fig)
     print(f"wrote {out}")
 
