@@ -17,6 +17,17 @@ const INPUT_DIR = "scripts/dggs/data";
 const OUTPUT_PATH = "scripts/dggs/data/aspect.json";
 const SYSTEMS = [_][]const u8{ "h3", "s2", "a5" };
 
+// The survey solves at gap_tol = 1e-3, NOT skar's strict 1e-6 default. At
+// finest resolution the S2/A5 cells (sub-meter scatters, κ(A) ~ σ_max ~ 1e9)
+// hit an f64 duality-gap floor of ~1e-4–1e-3 and return `.did_not_converge`
+// at 1e-6 — correctly, since f64 can't certify a tighter bound. But their
+// aspect ratios are accurate regardless of the gap (input-precision-limited,
+// ~7 digits). Running at 1e-3 lets every cell converge, so the AR
+// distribution (step 3 histograms) is complete rather than silently dropping
+// ~22% of S2 and ~47% of A5. See tests/dggs_dnc_test.zig and
+// SolveOptions.gap_tol for the floor's derivation.
+const SURVEY_GAP_TOL: f64 = 1e-3;
+
 /// Shape of one input file (scripts/dggs/data/<sys>.json).
 const InputJson = struct {
     system: []const u8,
@@ -41,10 +52,10 @@ const Counts = struct {
     input_error: u32 = 0,
 };
 
-/// Full details for one cell — only kept for the worst-AR converged
-/// cell per system, since step 4 needs `b`, `A`, and the vertices to
-/// project + draw the enclosing ellipse.
-const WorstCase = struct {
+/// Full details for one converged cell — kept for the best- and worst-AR
+/// cells per system, since step 4 needs `b`, `A`, and the vertices to
+/// project + draw the enclosing-cone cross-section.
+const CellDetail = struct {
     id: []const u8,
     ar: f64,
     b: [3]f64,
@@ -61,7 +72,10 @@ const SystemResult = struct {
     /// AR values for converged cells, in input order. Length ==
     /// `counts.converged`. No ids — the histogram doesn't need them.
     ars: []f64,
-    worst: ?WorstCase,
+    /// Smallest-AR (most circular) and largest-AR converged cell — the
+    /// two columns of the step-4 extremes plot.
+    best: ?CellDetail,
+    worst: ?CellDetail,
 };
 
 pub fn main() !void {
@@ -111,12 +125,13 @@ fn processSystem(
 
     var counts: Counts = .{};
     var ars = try std.ArrayListUnmanaged(f64).initCapacity(out_alloc, input.cells.len);
-    var worst: ?WorstCase = null;
+    var best: ?CellDetail = null;
+    var worst: ?CellDetail = null;
     var first_dnc_printed = false;
 
     const t0 = std.time.milliTimestamp();
     for (input.cells) |cell| {
-        const outcome_or_err = skar.solve(gpa, cell.vertices, .{});
+        const outcome_or_err = skar.solve(gpa, cell.vertices, .{ .gap_tol = SURVEY_GAP_TOL });
         var outcome = outcome_or_err catch |err| switch (err) {
             error.InsufficientPoints, error.CoplanarInput, error.InvalidTolerance => {
                 counts.input_error += 1;
@@ -132,7 +147,10 @@ fn processSystem(
                 const ar = c.aspectRatio();
                 try ars.append(out_alloc, ar);
                 if (worst == null or ar > worst.?.ar) {
-                    worst = try captureWorst(out_alloc, cell, c);
+                    worst = try captureDetail(out_alloc, cell, c);
+                }
+                if (best == null or ar < best.?.ar) {
+                    best = try captureDetail(out_alloc, cell, c);
                 }
             },
             .infeasible => counts.infeasible += 1,
@@ -152,6 +170,7 @@ fn processSystem(
         .n_total = @intCast(input.cells.len),
         .counts = counts,
         .ars = ars.items,
+        .best = best,
         .worst = worst,
     };
 }
@@ -168,11 +187,11 @@ fn dumpDnc(sys: []const u8, cell: InputCell) void {
     std.debug.print("}};\n\n", .{});
 }
 
-fn captureWorst(
+fn captureDetail(
     out_alloc: std.mem.Allocator,
     cell: InputCell,
     c: skar.Converged,
-) !WorstCase {
+) !CellDetail {
     const id_copy = try out_alloc.dupe(u8, cell.id);
     const verts_copy = try out_alloc.dupe([3]f64, cell.vertices);
 

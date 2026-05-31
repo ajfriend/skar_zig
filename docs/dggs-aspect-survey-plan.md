@@ -78,8 +78,19 @@ unit sphere.
 **Deliverable:** `scripts/dggs/aspect.zig`, wired as a build step;
 output is `data/aspect.json`.
 
+**Solve tolerance:** the survey passes `gap_tol = 1e-3`, *not* skar's
+strict 1e-6 default. At finest resolution the S2/A5 cells are sub-meter
+scatters at an O(1) point on the sphere, so κ(A) ~ σ_max ~ 1e9 and the
+duality gap has an f64 floor of ~1e-4–1e-3 (the optimal cone axis is a
+sub-ulp rotation from the best representable `b`). At 1e-6 ~22% of S2 and
+~47% of A5 cells correctly return `.did_not_converge` — but their aspect
+ratios are accurate regardless of the gap (input-precision-limited, ~7
+digits). Solving at 1e-3 lets every cell converge so the step-3 AR
+distribution is *complete* rather than silently dropping those cells. See
+`tests/dggs_dnc_test.zig` and `SolveOptions.gap_tol` for the floor.
+
 For each system's cell list, call `skar.solve(allocator, vertices,
-.{})` and capture:
+.{ .gap_tol = 1e-3 })` and capture:
 
 - `outcome` tag (`converged` / `infeasible` / `did_not_converge`)
 - on `converged`: `aspectRatio()`, `b()` (axis), and the `A` matrix
@@ -108,41 +119,55 @@ prints a one-line summary per system (`h3: 10000 converged, 0
 infeasible, 0 did_not_converge`). A non-zero non-converged count is
 not a failure of the script — it's a finding to surface.
 
-## Step 3 — per-system histograms
+## Step 3 — per-system histograms — DONE
 
-**Deliverable:** `scripts/dggs/histogram.py`; writes three PNGs into
-`data/` (`hist_h3.png`, `hist_s2.png`, `hist_a5.png`) and optionally a
-combined panel.
+**Deliverable:** `scripts/dggs/histogram.py`; writes `hist_h3.png`,
+`hist_s2.png`, `hist_a5.png`, and a combined panel `hist_combined.png`
+into `data/`.
 
-Load `data/aspect.json`, drop non-converged entries (count them in the
-title), and plot the AR distribution per system with shared bins for
-easy comparison. Print summary stats (min, median, p99, max,
-non-converged count) to stdout.
+Loads `data/aspect.json`, plots the AR distribution per system with shared
+bins (log-count y-axis — AR clusters near the low end with a thin tail) for
+easy comparison, and prints summary stats (min, median, p99, max,
+converged/DNC counts) to stdout. Because step 2 solves at `gap_tol = 1e-3`,
+every cell converges, so the histograms are the complete distribution
+(non-converged count is 0); the `did_not_converge` count is still surfaced
+in each title in case a future tolerance change reintroduces it.
 
-**Done when:** the three PNGs exist and the stats table is printed.
+Observed (N=10_000, seed 0xC0FFEE): H3 r15 median 1.05 / max 1.25; S2 L30
+median 1.22 / max 1.72; A5 r30 is tightly clustered around 2.0–2.32
+(median 2.13, min 1.99) — A5 cells are inherently ~2:1 elongated.
 
-## Step 4 — worst-case 2D plot with enclosing ellipse
+**Done when:** the four PNGs exist and the stats table is printed. ✅
 
-**Deliverable:** `scripts/dggs/worst_plot.py`; writes
-`data/worst_<system>.png` for each system.
+## Step 4 — best/worst 2D plots with enclosing ellipse — DONE
 
-For each system, pick the converged result with the largest aspect
-ratio. Then:
+**Deliverable:** `scripts/dggs/extremes_plot.py`; writes a single 3×2 grid
+`data/extremes.png` — one row per system (H3, S2, A5), left column = the
+best-AR (most circular) converged cell, right column = the worst-AR cell.
+Step 2 records both extremes per system (`best`/`worst` in `aspect.json`,
+each carrying axis `b`, cone matrix `A`, and boundary vertices).
 
-1. Project the cell's boundary vertices into the tangent plane at the
-   cone axis `b` (gnomonic projection: `u = (x - (b·x)b) / (b·x)` in a
-   2D basis orthogonal to `b`).
-2. Project the `A` quadratic form into the same 2D basis. With `U =
-   [u1 u2]` (3×2 orthonormal columns spanning the tangent plane), the
-   enclosing-cone boundary in tangent coords is the ellipse
-   `{y : yᵀ (Uᵀ A U) y = (bᵀ A b)}` (drop the constant from the
-   identity `xᵀAx = (b·x)² bᵀAb + …` — confirm derivation in
-   implementation; small standalone proof goes in a comment).
-3. Plot the projected vertices as a closed polygon and the ellipse as
-   its boundary contour. Title with system, cell id, AR.
+Per panel:
 
-**Done when:** the three PNGs exist and visually show vertices
-contained inside their ellipse.
+1. Gnomonic-project the boundary vertices into the tangent plane at `b`:
+   `y = Uᵀx / (b·x)`, with `U = [u1 u2]` orthonormal columns ⊥ `b`.
+2. Overlay the enclosing-cone cross-section. **Correction to the original
+   sketch:** skar's cone is the *second-order* cone `{x : ‖A x‖ ≤ b·x}`
+   (`checkFeasibility` measures `‖A·x‖ − b·x`), so the relevant form is
+   `A²`, not `A`. Since `A b = σ0 b`, `bᵀA U = 0` and
+   `‖Ax‖²/(b·x)² = σ0² + yᵀ(UᵀA²U)y`; the cross-section is therefore
+   `{ y : yᵀ (UᵀA² U) y = 1 − σ0² = 2/3 }` (the budget). Its geometric
+   axis ratio is `σ2/σ1` — exactly the reported AR. The original
+   `{yᵀ(UᵀAU)y = bᵀAb}` was the unconfirmed *linear* form and yields a
+   √-rounded ellipse (axis ratio √AR), so it was wrong; use `A²`.
+3. Rotate each panel into `M2`'s eigenframe so the ellipse's major axis is
+   horizontal (minor vertical); `set_aspect("equal")`, axes in metres
+   (×Earth radius). Annotate each panel with its AR + cell id.
+
+**Done when:** `extremes.png` exists; every panel shows the cell enclosed by
+its ellipse, farthest vertex on the boundary (`max yᵀM2y = 2/3`). ✅
+best/worst AR — H3 1.000/1.250, S2 1.001/1.718, A5 1.990/2.319 (A5 is never
+circular: even its best cell is ~2:1).
 
 ## Open questions to resolve as we go
 
