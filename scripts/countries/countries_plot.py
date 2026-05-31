@@ -3,7 +3,7 @@
 # dependencies = ["numpy", "matplotlib"]
 # ///
 """
-Step 3 of the top-100-countries aspect-ratio example
+Step 3 of the countries aspect-ratio example
 (mirrors scripts/states/states_plot.py).
 
 Reads scripts/countries/data/countries.json (per-ring lon/lat outlines) and

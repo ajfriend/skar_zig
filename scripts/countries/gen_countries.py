@@ -3,11 +3,11 @@
 # dependencies = ["geopandas", "pyogrio"]
 # ///
 """
-Step 1 of the top-100-countries aspect-ratio example (mirrors
+Step 1 of the countries aspect-ratio example (mirrors
 scripts/states/gen_states.py).
 
 Fetches the Natural Earth 110m admin-0 countries GeoJSON, ranks every feature by
-equal-area area, keeps the largest N_TOP, and writes
+equal-area area, keeps all of them (or the largest N_TOP if set), and writes
 scripts/countries/data/countries.json with, per country:
   - `vertices`: the flat union of every ring's corners as unit 3-vectors
     (the format `skar.solve` consumes — for the aspect ratio the input is just
@@ -41,7 +41,7 @@ SOURCE_URL = (
     "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/"
     "master/geojson/ne_110m_admin_0_countries.geojson"
 )
-N_TOP = 100
+N_TOP = None  # None → every country; or an int to keep only the N largest by area
 # World Cylindrical Equal Area — any global equal-area CRS works; the exact
 # choice doesn't change the top-N cut, only the absolute area numbers.
 EQUAL_AREA_CRS = "EPSG:6933"
@@ -102,7 +102,8 @@ def main() -> None:
     # Rank by equal-area area; reproject a copy just to measure (keep the
     # original 4326 geometry for the vertex/ring extraction below).
     gdf["_area"] = gdf.to_crs(EQUAL_AREA_CRS).area
-    top = gdf.sort_values("_area", ascending=False).head(N_TOP)
+    ranked = gdf.sort_values("_area", ascending=False)
+    top = ranked if N_TOP is None else ranked.head(N_TOP)
 
     countries = []
     for _, row in top.iterrows():

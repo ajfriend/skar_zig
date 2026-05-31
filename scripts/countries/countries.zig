@@ -1,4 +1,4 @@
-//! Step 2 of the top-100-countries aspect-ratio example
+//! Step 2 of the countries aspect-ratio example
 //! (mirrors scripts/states/states.zig).
 //!
 //! Reads scripts/countries/data/countries.json (produced by step 1), calls

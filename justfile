@@ -80,7 +80,7 @@ states-plot:
 states-all: states-gen states-aspect states-plot
 
 # Fetch + cache the Natural Earth countries GeoJSON, rank by area, and write
-# scripts/countries/data/countries.json (top 100). Output is gitignored.
+# scripts/countries/data/countries.json (all countries). Output is gitignored.
 countries-gen:
     uv run scripts/countries/gen_countries.py
 
@@ -98,6 +98,15 @@ countries-plot:
 # Full countries example in one command: fetch -> solve -> plot.
 countries-all: countries-gen countries-aspect countries-plot
 
-# Remove build artifacts, coverage output, and generated DGGS / states / countries data.
+# Build the standalone interactive globe page (scripts/globe/index.html) from the
+# countries + states aspect data. Open the generated index.html in a browser.
+# Depends on the countries and states gen+aspect steps having run first.
+globe:
+    uv run scripts/globe/gen_globe.py
+
+# Build everything the globe needs from scratch, then the globe page itself.
+globe-all: countries-gen countries-aspect states-gen states-aspect globe
+
+# Remove build artifacts, coverage output, and generated data + globe page.
 clean:
-    rm -rf zig-out .zig-cache coverage scripts/dggs/data scripts/states/data scripts/countries/data
+    rm -rf zig-out .zig-cache coverage scripts/dggs/data scripts/states/data scripts/countries/data scripts/globe/index.html

@@ -4,4 +4,5 @@ coverage/
 scripts/dggs/data/
 scripts/states/data/
 scripts/countries/data/
+scripts/globe/index.html
 .claude/
