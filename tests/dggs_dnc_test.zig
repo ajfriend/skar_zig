@@ -26,6 +26,7 @@
 
 const std = @import("std");
 const skar = @import("../src/root.zig");
+const cases = @import("cases"); // bundled case manifest (for the H3 r15 fixture)
 
 // Tolerance that f64 can certify for finest-resolution DGGS cells (the
 // gap floor is ~3.4e-4 at A5 r30; 1e-3 covers the class with headroom).
@@ -48,6 +49,16 @@ const S2_CELL = [_][3]f64{
     .{ -6.84434007909358400e-1, 7.11477104143007500e-1, 1.59218149397022360e-1 },
     .{ -6.84434007784890200e-1, 7.11477104013621300e-1, 1.59218150510246930e-1 },
     .{ -6.84434006859140100e-1, 7.11477104861711600e-1, 1.59218150700037110e-1 },
+};
+
+// A second A5 r30 cell (id bac84da19e50dc29) — the rare case that needs more
+// outer iterations (4, vs 2-3 for the bulk of A5). Used by the canary below.
+const A5_CELL_4ITER = [_][3]f64{
+    .{ 4.07328516791610530e-1, -5.01584867128560500e-1, 7.63214321456280700e-1 },
+    .{ 4.07328517328366060e-1, -5.01584866612700500e-1, 7.63214321508837000e-1 },
+    .{ 4.07328516822916650e-1, -5.01584866460808700e-1, 7.63214321878419400e-1 },
+    .{ 4.07328516196555300e-1, -5.01584866834068200e-1, 7.63214321967403000e-1 },
+    .{ 4.07328516148072970e-1, -5.01584867409401800e-1, 7.63214321615168600e-1 },
 };
 
 test "A5 r30 cell certifies at an f64-achievable tolerance (cell 2a08d74e8e79123c)" {
@@ -89,4 +100,61 @@ test "A5/S2 finest cells correctly DNC at the strict 1e-6 default" {
     var os = try skar.solve(allocator, &S2_CELL, .{});
     defer os.deinit();
     try std.testing.expect(std.meta.activeTag(os) == .did_not_converge);
+}
+
+// ── Outer-iteration CANARIES (informational, NOT hard requirements) ──────
+//
+// These pin the exact/near-exact outer-iteration count on a few cells. They
+// are deliberately brittle: their job is to *flag the developer* when a
+// solver/algorithm change shifts how many iterations these inputs take —
+// the same spirit as a bit-exact snapshot. A trip here is NOT a failure to
+// force-fix; it's a signal to (a) understand what changed and (b) update the
+// expected value if the change is intended. The b-iterate reaches its fixed
+// point almost immediately, so at an achievable tolerance these cells settle
+// in very few iterations (the work per cell is tiny); the counts below are
+// from the N=10_000 survey. Tolerance distinction: H3 r15 hits no f64 gap
+// floor so it converges at the strict 1e-6 default; S2/A5 use the achievable
+// DGGS_GAP_TOL (they DNC at 1e-6, per the tests above).
+//
+// If you are updating these expected counts: that means solver behaviour
+// changed — call it out explicitly rather than quietly bumping the number.
+
+test "CANARY: H3 r15 cell converges in 1 outer iteration (strict default)" {
+    const allocator = std.testing.allocator;
+    const h3 = cases.byName("h3_r15_equator").?.points;
+    var outcome = try skar.solve(allocator, h3, .{}); // default gap_tol = 1e-6
+    defer outcome.deinit();
+
+    try std.testing.expect(std.meta.activeTag(outcome) == .converged);
+    try std.testing.expectEqual(@as(u32, 1), outcome.converged.outer_iters);
+}
+
+test "CANARY: S2 L30 cell converges in 1 outer iteration" {
+    const allocator = std.testing.allocator;
+    var outcome = try skar.solve(allocator, &S2_CELL, .{ .gap_tol = DGGS_GAP_TOL });
+    defer outcome.deinit();
+
+    try std.testing.expect(std.meta.activeTag(outcome) == .converged);
+    try std.testing.expectEqual(@as(u32, 1), outcome.converged.outer_iters);
+}
+
+test "CANARY: a common A5 r30 cell converges in exactly 2 outer iterations" {
+    const allocator = std.testing.allocator;
+    var outcome = try skar.solve(allocator, &A5_CELL, .{ .gap_tol = DGGS_GAP_TOL });
+    defer outcome.deinit();
+
+    try std.testing.expect(std.meta.activeTag(outcome) == .converged);
+    try std.testing.expectEqual(@as(u32, 2), outcome.converged.outer_iters);
+}
+
+test "CANARY: a harder A5 r30 cell takes more than 2 outer iterations" {
+    // This cell currently takes 4 (the rare tail of the A5 distribution);
+    // we only assert > 2 so the canary is about "demonstrably more work than
+    // the common case", not the exact tail value.
+    const allocator = std.testing.allocator;
+    var outcome = try skar.solve(allocator, &A5_CELL_4ITER, .{ .gap_tol = DGGS_GAP_TOL });
+    defer outcome.deinit();
+
+    try std.testing.expect(std.meta.activeTag(outcome) == .converged);
+    try std.testing.expect(outcome.converged.outer_iters > 2);
 }
