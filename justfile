@@ -79,6 +79,25 @@ states-plot:
 # Full states example in one command: fetch -> solve -> plot.
 states-all: states-gen states-aspect states-plot
 
-# Remove build artifacts, coverage output, and generated DGGS / states data.
+# Fetch + cache the Natural Earth countries GeoJSON, rank by area, and write
+# scripts/countries/data/countries.json (top 100). Output is gitignored.
+countries-gen:
+    uv run scripts/countries/gen_countries.py
+
+# Run skar over every country; writes scripts/countries/data/countries_aspect.json.
+# Countries that exceed a hemisphere are reported and skipped (not a failure).
+# Depends on `just countries-gen` having run first.
+countries-aspect:
+    zig build countries-aspect
+
+# Plot one PNG per converged country (boundary + enclosing-cone ellipse).
+# Depends on `just countries-aspect` having written countries_aspect.json.
+countries-plot:
+    uv run scripts/countries/countries_plot.py
+
+# Full countries example in one command: fetch -> solve -> plot.
+countries-all: countries-gen countries-aspect countries-plot
+
+# Remove build artifacts, coverage output, and generated DGGS / states / countries data.
 clean:
-    rm -rf zig-out .zig-cache coverage scripts/dggs/data scripts/states/data
+    rm -rf zig-out .zig-cache coverage scripts/dggs/data scripts/states/data scripts/countries/data

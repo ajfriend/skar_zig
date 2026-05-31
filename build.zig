@@ -109,6 +109,23 @@ pub fn build(b: *std.Build) void {
     run_states_aspect.setCwd(b.path(""));
     const states_aspect_step = b.step("states-aspect", "Run scripts/states/states.zig over data/states.json");
     states_aspect_step.dependOn(&run_states_aspect.step);
+
+    // Top-100-countries aspect-ratio example (see scripts/countries/). Same
+    // standalone-exec pattern as the states example above.
+    const countries_aspect_mod = b.createModule(.{
+        .root_source_file = b.path("scripts/countries/countries.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    countries_aspect_mod.addImport("skar", skar_mod);
+    const countries_aspect_exe = b.addExecutable(.{
+        .name = "skar-countries-aspect",
+        .root_module = countries_aspect_mod,
+    });
+    const run_countries_aspect = b.addRunArtifact(countries_aspect_exe);
+    run_countries_aspect.setCwd(b.path(""));
+    const countries_aspect_step = b.step("countries-aspect", "Run scripts/countries/countries.zig over data/countries.json");
+    countries_aspect_step.dependOn(&run_countries_aspect.step);
 }
 
 fn addExample(

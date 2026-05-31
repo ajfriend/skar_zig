@@ -3,4 +3,5 @@ zig-out/
 coverage/
 scripts/dggs/data/
 scripts/states/data/
+scripts/countries/data/
 .claude/
