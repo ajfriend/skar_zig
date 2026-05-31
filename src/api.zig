@@ -103,6 +103,16 @@ pub const InputError = error{
 pub const SolveOptions = struct {
     /// Convergence threshold on the duality gap. Must be finite and
     /// positive. Smaller = tighter solution but more iterations.
+    ///
+    /// Conditioning floor: the gap has an f64 precision floor at
+    /// O(κ(A)·ε) ≈ O(σ_max·ε). For well-conditioned inputs this is far
+    /// below the 1e-6 default. But very small, far-from-origin scatters
+    /// (e.g. sub-meter DGGS cells at finest resolution, where σ_max ~ 1e9)
+    /// floor at ~1e-4–1e-3 and will return `.did_not_converge` at the
+    /// default — correctly, since f64 cannot certify a tighter bound
+    /// (the optimal cone axis is a sub-ulp rotation away). Pass a looser
+    /// `gap_tol` (e.g. 1e-3) for such inputs; the aspect ratio is
+    /// input-precision-limited and accurate regardless of the gap.
     gap_tol: f64 = 1e-6,
 
     /// Convex-hull preprocessing threshold. If `X.len > n_hull`,
