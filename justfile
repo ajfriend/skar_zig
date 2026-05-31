@@ -61,6 +61,24 @@ dggs-plots:
 # Use after changing N/SEED at the top of gen_cells.py.
 dggs-all: dggs-gen dggs-aspect dggs-plots
 
-# Remove build artifacts, coverage output, and generated DGGS data.
+# Fetch + cache the US-states GeoJSON and write scripts/states/data/states.json.
+# Output is gitignored; the GeoJSON is cached after the first run.
+states-gen:
+    uv run scripts/states/gen_states.py
+
+# Run skar over every US state; writes scripts/states/data/states_aspect.json.
+# Depends on `just states-gen` having run first.
+states-aspect:
+    zig build states-aspect
+
+# Plot one PNG per state (boundary + enclosing-cone ellipse) into the data dir.
+# Depends on `just states-aspect` having written states_aspect.json.
+states-plot:
+    uv run scripts/states/states_plot.py
+
+# Full states example in one command: fetch -> solve -> plot.
+states-all: states-gen states-aspect states-plot
+
+# Remove build artifacts, coverage output, and generated DGGS / states data.
 clean:
-    rm -rf zig-out .zig-cache coverage scripts/dggs/data
+    rm -rf zig-out .zig-cache coverage scripts/dggs/data scripts/states/data

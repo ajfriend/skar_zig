@@ -91,6 +91,24 @@ pub fn build(b: *std.Build) void {
     run_dggs_aspect.setCwd(b.path(""));
     const dggs_aspect_step = b.step("dggs-aspect", "Run scripts/dggs/aspect.zig over data/{h3,s2,a5}.json");
     dggs_aspect_step.dependOn(&run_dggs_aspect.step);
+
+    // US-states aspect-ratio example (see scripts/states/). Same standalone-
+    // exec pattern as the DGGS survey above: ReleaseFast, CWD-relative paths,
+    // launched from the repo root.
+    const states_aspect_mod = b.createModule(.{
+        .root_source_file = b.path("scripts/states/states.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    states_aspect_mod.addImport("skar", skar_mod);
+    const states_aspect_exe = b.addExecutable(.{
+        .name = "skar-states-aspect",
+        .root_module = states_aspect_mod,
+    });
+    const run_states_aspect = b.addRunArtifact(states_aspect_exe);
+    run_states_aspect.setCwd(b.path(""));
+    const states_aspect_step = b.step("states-aspect", "Run scripts/states/states.zig over data/states.json");
+    states_aspect_step.dependOn(&run_states_aspect.step);
 }
 
 fn addExample(
