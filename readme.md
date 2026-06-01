@@ -4,9 +4,7 @@ Spherical aspect-ratio solver. Given a point set on the unit sphere,
 finds the tightest ellipsoidal cone enclosing it (parameterized by a
 PSD matrix `A` and unit axis `b`) and returns the cone's axis ratio.
 
-Extracted from the Zig solver in
-[`2025-09-29_conic_aspect_ratio`](../2025-09-29_conic_aspect_ratio) as a
-standalone, std-only Zig package.
+A standalone, std-only Zig package — no third-party dependencies.
 
 ## Quick start
 
@@ -72,3 +70,7 @@ zig build test         # runs tests under kcov via `just test`; see dev.md
 Equivalent `just` targets are in `justfile`. The `test` recipe
 enforces 100% line coverage via kcov (see `dev.md` for the full
 workflow).
+
+## License
+
+MIT — see [LICENSE](LICENSE).

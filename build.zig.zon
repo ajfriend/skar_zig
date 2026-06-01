@@ -1,6 +1,6 @@
 .{
     .name = .skar,
-    .version = "0.0.0",
+    .version = "0.1.0",
     .fingerprint = 0xdea1be595fe97874,
     .minimum_zig_version = "0.15.2",
     .dependencies = .{},
@@ -12,5 +12,6 @@
         "test_root.zig",
         "examples",
         "readme.md",
+        "LICENSE",
     },
 }
