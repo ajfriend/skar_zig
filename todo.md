@@ -29,3 +29,6 @@
 
   Parameterize the float type rather than hard-swapping so `f64` stays the
   default.
+
+
+- can we generalize FW to work directly in 3D cone space?
