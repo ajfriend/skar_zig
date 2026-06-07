@@ -745,6 +745,15 @@ pub fn solve(
     //    Loop invariant: on entry to each cycle, P_buf/Ps/s_scale correspond
     //    to the current (b, Q). The accepted b-update at cycle end also
     //    produces the next cycle's projection in one sweep.
+    // Inner-FW budget, gated on working-set size: small inputs keep the
+    // 1-step interleaved schedule (bit-identical to the pre-gate solver);
+    // larger/denser inputs get a real budget so the active set drains within
+    // the first outer iteration. See `algo.INNER_FW_BOOST_MIN_POINTS` for the
+    // full rationale (this is the a5_res0 DNC fix).
+    const inner_fw_boost = nw > algo.INNER_FW_BOOST_MIN_POINTS;
+    const inner_fw_iters: u32 = if (inner_fw_boost) algo.INNER_FW_BOOST_ITERS else 1;
+    const inner_fw_tol: f64 = if (inner_fw_boost) algo.INNER_FW_BOOST_TOL else 0.0;
+
     var outer: u32 = 0;
     outer_loop: while (outer < opts.max_outer) : (outer += 1) {
         outer_count += 1;
@@ -752,7 +761,7 @@ pub fn solve(
         while (cycle < algo.FW_PER_NEWTON) : (cycle += 1) {
             const is_full = (cycle == algo.FW_PER_NEWTON - 1);
 
-            mveeFw(wb.Ps, 1, 0.0, wb.Ql, wb.w);
+            mveeFw(wb.Ps, inner_fw_iters, inner_fw_tol, wb.Ql, wb.w);
 
             if (is_full) {
                 if (!newtonPolish(wb.Ql, wb.w, algo.ACTIVE_THRESH, 20, tol.NEWTON_INNER, &wb.newton_scratch)) {

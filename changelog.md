@@ -5,6 +5,18 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-06-07
+
+All 12 A5 resolution-0 cells now converge at the strict default
+`gap_tol = 1e-6`. Their dense `cell_to_boundary` polygons (~320 near-cocircular
+points) made the outer-iteration count scale with the point count and overrun
+`max_outer`; the inner Frank–Wolfe weight solve now gets a real per-cycle budget
+when the working set is large (`algo.INNER_FW_BOOST_*`), draining the active set
+in the first outer iteration (~145 → ~6 iters, ≈500× faster). Small inputs keep
+the bit-identical 1-step path, so the genuine f64-floor finest-resolution cells
+are unaffected. Internal-only (public API unchanged). Full write-up in
+`docs/a5_res0_dnc_report.md`.
+
 ## [0.2.0] - 2026-06-06
 
 H3 r7–r10 DGGS cells now converge at the strict default `gap_tol = 1e-6` —
