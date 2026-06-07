@@ -4,6 +4,18 @@ Minimum-volume enclosing ellipsoidal-cone solver (the spherical aspect-ratio
 problem). Core: `src/skar.zig` (`solve`, the outer loop, `mveeFw` inner MVEE),
 `src/config.zig` (tuning knobs in `algo`/`tol`), `src/api.zig` (public surface).
 
+## Change workflow
+
+- Land changes via **pull requests**: branch off `main`, open a PR whose
+  description carries the *details* — what changed and why, measurements /
+  benchmarks, validation, and trade-offs. The PR body (plus any linked design
+  doc under `docs/`) is the durable record of the change.
+- `changelog.md` entries and GitHub **release notes are very short** — one or
+  two sentences on the user-visible effect, ending with a link to the **PR**
+  (or the commit, if no PR was opened). Detail lives in the PR, not here.
+- Release names are just the version (`vX.Y.Z`); detail goes in the release body
+  (which itself points to the PR).
+
 ## Build & test
 
 - `zig build test` — fast unit suite (sub-second).
