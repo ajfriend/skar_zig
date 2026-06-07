@@ -363,6 +363,20 @@ fn farthestPointSeed(P: []const [2]f64, w: []f64, k_req: usize) void {
     for (0..m) |j| w[picks[j]] = wval;
 }
 
+/// Initialize the inner-FW weight vector, choosing the regime by working-set
+/// size: large/dense inputs get a sparse farthest-point seed (so FW grows the
+/// support instead of draining it — the a5_res0 DNC fix, also faster on genuine
+/// medium/large inputs); small inputs get the uniform start (already optimal for
+/// near-circular cells, where a sparse seed would break symmetry and slow them).
+/// `P` and `w` index the same working set. See `algo.SEED_SPARSE_MIN_POINTS`.
+fn initWeights(P: []const [2]f64, w: []f64) void {
+    if (P.len > algo.SEED_SPARSE_MIN_POINTS) {
+        farthestPointSeed(P, w, algo.SEED_SPARSE_K);
+    } else {
+        uniformWeights(w);
+    }
+}
+
 // ----------------------------------------------------------------
 // Solution recovery: 2D shape M → 3D A
 // ----------------------------------------------------------------
@@ -830,16 +844,8 @@ pub fn solve(
     _ = projectGnomonic(Xw, b, Q, wb.P_buf, -std.math.inf(f64));
     var s_scale: f64 = rescaleP(wb.P_buf, wb.Ps);
 
-    // FW weight init. Large/dense inputs: a sparse farthest-point seed so the
-    // inner FW grows the support instead of draining a full active set (the
-    // a5_res0 DNC fix; also speeds genuine medium/large inputs). Small inputs:
-    // uniform 1/nw — already the symmetric optimum for near-circular cells, and
-    // a sparse seed would slow them. See `algo.SEED_SPARSE_MIN_POINTS`.
-    if (nw > algo.SEED_SPARSE_MIN_POINTS) {
-        farthestPointSeed(wb.Ps, wb.w, algo.SEED_SPARSE_K);
-    } else {
-        uniformWeights(wb.w);
-    }
+    // FW weight init (sparse seed vs uniform, chosen by size — see initWeights).
+    initWeights(wb.Ps, wb.w);
 
     // 4) Hybrid outer loop. Each outer iteration runs algo.FW_PER_NEWTON cycles
     //    of (FW + b-update); only the last cycle also runs Newton polish +
