@@ -7,37 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.0] - 2026-06-06
 
-### Fixed
-
-- DGGS cells in the **H3 r7–r10 band** (~1–3% of cells) that stalled at
-  `did_not_converge` under the strict default `gap_tol = 1e-6` now certify.
-  The certificate active-set cutoff (`algo.ACTIVE_THRESH`) was lowered from
-  `1e-6` to `1e-12`. At the old value it coincided with the default tolerance,
-  so Newton polish dropped the small-weight (~1e-7) binding constraints of
-  these near-circular degenerate D-optimal designs, flooring the duality gap
-  at ~1.7e-6. Dropping a binding constraint of dual mass `m` inflates the gap
-  by `O(m)`, so a cutoff six orders below `gap_tol` makes it numerically
-  invisible. The fix is a single internal constant; the public API is
-  unchanged.
-
-### Changed
-
-- Cells that previously returned `did_not_converge` at the strict default now
-  certify; their aspect ratio refines in roughly the 7th significant digit.
-  This is a behavior change (hence the minor bump) even though the API is the
-  same.
-- The genuine f64 duality-gap floors at the finest resolutions (S2 L30 /
-  A5 r30) are unaffected — bit-identical before and after — and still
-  correctly return `did_not_converge` at `gap_tol = 1e-6`, declining to
-  certify a bound f64 cannot deliver.
-
-### Tests
-
-- Added H3 r8/r9/r10 band regression fixtures (must certify at 1e-6), a
-  `gap_tol` scale-collision guard, and a convergence canary; the existing
-  S2/A5 finest-resolution DNC guard is unchanged. Verified empirically that
-  all H3 cells across all 16 resolutions — including pentagons and
-  icosahedron-edge cells — converge at the strict default.
+H3 r7–r10 DGGS cells now converge at the strict default `gap_tol = 1e-6` —
+lowered the certificate active-set cutoff `ACTIVE_THRESH` from 1e-6 to 1e-12.
+Internal-only (public API unchanged); the S2/A5 finest-resolution f64 gap
+floors are unaffected. Full write-up in commit
+[a9c7207](https://github.com/ajfriend/skar_zig/commit/a9c7207).
 
 ## [0.1.0] - 2026-05-31
 
