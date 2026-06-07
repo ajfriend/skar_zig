@@ -51,6 +51,45 @@ const S2_CELL = [_][3]f64{
     .{ -6.84434006859140100e-1, 7.11477104861711600e-1, 1.59218150700037110e-1 },
 };
 
+// H3 r9 cell 899f4d0cd47ffff — a near-circular hexagon (AR ~1.0195). Unlike
+// the finest-resolution S2/A5 cells above, this is NOT an f64 floor: it's a
+// mid-resolution cell whose D-optimal design is degenerate (alternating
+// vertices sit on the enclosing ellipse with true dual weight ~1e-7). It used
+// to DNC at the strict 1e-6 default because the old `ACTIVE_THRESH = 1e-6`
+// dropped those binding constraints, flooring the gap at ~1.7e-6. With
+// `ACTIVE_THRESH = 1e-12` it converges at 1e-6 (gap ~1.5e-7). See the
+// `ACTIVE_THRESH` doc-comment in src/config.zig for the full mechanism.
+const H3_R9_CELL = [_][3]f64{
+    .{ -0.8586175701975843, 0.28761239723198995, -0.42432885490673883 },
+    .{ -0.8586271933201559, 0.28762660191847433, -0.42429975342908594 },
+    .{ -0.8586197375801148, 0.2876590246563569, -0.42429286085392487 },
+    .{ -0.8586026585975493, 0.2876772430738286, -0.42431506980858175 },
+    .{ -0.8585930353179254, 0.2876630384891841, -0.42434417162336724 },
+    .{ -0.8586004911779209, 0.28763061538522544, -0.42435106414636176 },
+};
+
+// Two more cells from the same r7–r10 gap-floor band (worst-gap DNC found in
+// an 8k-cell-per-resolution survey, seed 0xC0FFEE, under the old
+// ACTIVE_THRESH = 1e-6). They broaden the regression beyond the single r9
+// cell: r8 floored at gap 2.18e-6, r10 at 2.27e-6 before the fix. Both
+// converge at the strict 1e-6 default now (r8 ~4.3e-7, r10 ~9.5e-7).
+const H3_R8_CELL = [_][3]f64{
+    .{ -0.43574038542520366, -0.7556981921521153, 0.48892796901744084 },
+    .{ -0.43566886076762934, -0.7557046846412897, 0.48898166976753316 },
+    .{ -0.4356641141281686, -0.7556581174519464, 0.4890578587344225 },
+    .{ -0.43573089096666295, -0.755605059770775, 0.4890803454507262 },
+    .{ -0.4358024132308145, -0.7555985683909756, 0.48902664556004144 },
+    .{ -0.4358071610498452, -0.7556451335830144, 0.4889504580936421 },
+};
+const H3_R10_CELL = [_][3]f64{
+    .{ 0.7971117446546273, -0.5749409727169088, -0.18454198553443296 },
+    .{ 0.7971187643188198, -0.5749339069211487, -0.18453367780224242 },
+    .{ 0.7971193129396517, -0.5749371412121672, -0.18452123073889923 },
+    .{ 0.7971128418782646, -0.5749474413348267, -0.18451709139072378 },
+    .{ 0.7971058221898187, -0.5749545071571371, -0.18452539914815702 },
+    .{ 0.7971052735870137, -0.5749512728302374, -0.18453784622852284 },
+};
+
 // A second A5 r30 cell (id bac84da19e50dc29) — the rare case that needs more
 // outer iterations (4, vs 2-3 for the bulk of A5). Used by the canary below.
 const A5_CELL_4ITER = [_][3]f64{
@@ -102,6 +141,61 @@ test "A5/S2 finest cells correctly DNC at the strict 1e-6 default" {
     try std.testing.expect(std.meta.activeTag(os) == .did_not_converge);
 }
 
+test "H3 r9 near-circular hexagon converges at the strict 1e-6 default (cell 899f4d0cd47ffff)" {
+    // Regression for the r7–r10 gap-floor bug: this cell DNC'd at 1e-6 under
+    // the old ACTIVE_THRESH = 1e-6 (gap stalled ~1.7e-6) because Newton polish
+    // zeroed the small-weight binding constraints. With ACTIVE_THRESH = 1e-12
+    // those constraints survive and the gap reaches ~1.5e-7. This is the
+    // counterpart to the S2/A5 DNC guard below: a *well-conditioned* DGGS cell
+    // must honour the strict default, while the genuine f64-floor cells must
+    // not be forced to.
+    const allocator = std.testing.allocator;
+    var outcome = try skar.solve(allocator, &H3_R9_CELL, .{}); // default gap_tol = 1e-6
+    defer outcome.deinit();
+
+    try std.testing.expect(std.meta.activeTag(outcome) == .converged);
+    try std.testing.expect(outcome.converged.gap <= 1e-6);
+    // AR is input-precision-limited (~7 digits); loose correctness guard.
+    try std.testing.expectApproxEqAbs(1.0195139, outcome.converged.aspectRatio(), 1e-4);
+}
+
+test "H3 r8 and r10 band cells converge at the strict 1e-6 default" {
+    // Breadth across the r7–r10 band (the r9 cell above is the headline; these
+    // pin the band edges). Both DNC'd under the old threshold; both must now
+    // certify the strict default.
+    const allocator = std.testing.allocator;
+    inline for (.{ &H3_R8_CELL, &H3_R10_CELL }) |cell| {
+        var o = try skar.solve(allocator, cell, .{}); // default gap_tol = 1e-6
+        defer o.deinit();
+        try std.testing.expect(std.meta.activeTag(o) == .converged);
+        try std.testing.expect(o.converged.gap <= 1e-6);
+    }
+}
+
+test "H3 r9 cell: no artificial gap floor between gap_tol and ACTIVE_THRESH" {
+    // Guards the fix's design rule (ACTIVE_THRESH = 1e-12 ≪ gap_tol). The bug
+    // was a scale collision: the certificate cutoff equalled the certified
+    // tolerance, so the active-set drop floored the gap right at gap_tol. With
+    // the cutoff six orders below, this well-conditioned cell must keep
+    // certifying as gap_tol tightens toward (but stays well above) 1e-12 — and
+    // the achieved gap must keep shrinking, not stall at a fixed floor. If a
+    // future change reintroduces a coarse cutoff, the tighter tolerances here
+    // will DNC and trip this test.
+    const allocator = std.testing.allocator;
+    const tols = [_]f64{ 1e-6, 1e-7, 1e-8, 1e-9 };
+    var prev_gap: f64 = 1e30;
+    for (tols) |t| {
+        var o = try skar.solve(allocator, &H3_R9_CELL, .{ .gap_tol = t });
+        defer o.deinit();
+        try std.testing.expect(std.meta.activeTag(o) == .converged);
+        try std.testing.expect(o.converged.gap <= t);
+        // Monotone: a tighter request yields a tighter (or equal) certificate,
+        // never a higher floor.
+        try std.testing.expect(o.converged.gap <= prev_gap);
+        prev_gap = o.converged.gap;
+    }
+}
+
 // ── Outer-iteration CANARIES (informational, NOT hard requirements) ──────
 //
 // These pin the exact/near-exact outer-iteration count on a few cells. They
@@ -127,6 +221,19 @@ test "CANARY: H3 r15 cell converges in 1 outer iteration (strict default)" {
 
     try std.testing.expect(std.meta.activeTag(outcome) == .converged);
     try std.testing.expectEqual(@as(u32, 1), outcome.converged.outer_iters);
+}
+
+test "CANARY: H3 r9 near-circular hexagon converges in 2 outer iterations (strict default)" {
+    // Sister to the r15 canary: the well-conditioned mid-resolution band now
+    // certifies the strict 1e-6 default. The degenerate design takes one extra
+    // outer iteration to refine the small-weight binding constraints (2 vs r15's
+    // 1). If this count shifts, solver behaviour changed — flag it, don't bump.
+    const allocator = std.testing.allocator;
+    var outcome = try skar.solve(allocator, &H3_R9_CELL, .{}); // default gap_tol = 1e-6
+    defer outcome.deinit();
+
+    try std.testing.expect(std.meta.activeTag(outcome) == .converged);
+    try std.testing.expectEqual(@as(u32, 2), outcome.converged.outer_iters);
 }
 
 test "CANARY: S2 L30 cell converges in 1 outer iteration" {

@@ -26,10 +26,41 @@ pub const algo = struct {
     pub const DAMP_MIN: f64 = 0.05;
     pub const DAMP_MAX: f64 = 1.0;
 
-    /// Certificate active-set cutoff: weights below this are dropped
-    /// from `Info.cert`. Distinct from (and tighter than) the FW inner
-    /// loops' `tol.WEIGHT_ACTIVE`.
-    pub const ACTIVE_THRESH: f64 = 1e-6;
+    /// Support-set membership cutoff: a point counts as active (kept in
+    /// the `Info.cert`, in the constructed dual `Z`, and — load-bearing —
+    /// in the Newton-polish active set) iff its weight exceeds this. The
+    /// infeasibility path reuses it in `buildFarkasCert` to drop near-zero
+    /// components from the Farkas witness — a sparsity cutoff with no
+    /// gap-floor role, so the DESIGN RULE below doesn't bear on that use.
+    ///
+    /// Was 1e-6, which mistook genuine small-weight *binding* constraints
+    /// for inactive ones. On near-circular DGGS hexagons (e.g. H3 r7–r10)
+    /// the D-optimal design is degenerate: alternating vertices sit on the
+    /// enclosing ellipse with true dual weight ~1e-7. At 1e-6 Newton polish
+    /// zeroed those points, so the dual certificate under-counted `Z` and
+    /// the duality gap floored at ~1.7e-6 — never reaching the strict 1e-6
+    /// default no matter how many outer iterations ran (the iterate then
+    /// oscillated as FW re-grew the weights and Newton re-zeroed them).
+    /// At 1e-12 the binding constraints are retained, those cells converge
+    /// to gap ~1.5e-7, and the genuine f64 gap floors at the finest
+    /// resolution (S2 L30 / A5 r30, κ-driven, no sub-1e-6 weights to drop)
+    /// are unaffected — they still DNC at 1e-6 as documented. 1e-12 sits
+    /// above f64 roundoff dust (~1e-15) yet well below real small weights,
+    /// matching the `tol.PSD_NEG_REL` noise-vs-signal scale. Still distinct
+    /// from (and tighter than) the FW inner loops' `tol.WEIGHT_ACTIVE`.
+    ///
+    /// DESIGN RULE — keep this ≪ any `gap_tol` you intend to certify.
+    /// Dropping a binding constraint of dual mass `m` inflates the gap by
+    /// O(m), so the cutoff induces a gap floor of O(ACTIVE_THRESH)
+    /// (measured: floor ≈ 1–2× the dropped weight). The original bug was
+    /// the scale collision ACTIVE_THRESH == the default gap_tol == 1e-6:
+    /// the certificate was as coarse as the bound it certified. At 1e-12
+    /// the floor (~1e-12) is six orders below the 1e-6 default, so the
+    /// discrete in/out switch is numerically invisible at that tolerance —
+    /// which is why a *fixed low* value (vs a relative or adaptive one)
+    /// suffices: the support is identified by optimality, and the residual
+    /// switching noise is below what any practical gap_tol resolves.
+    pub const ACTIVE_THRESH: f64 = 1e-12;
 
     /// Feasibility-cone margin for the backtracking b-update. Each
     /// outer step requires `min_i(b_new · xᵢ) ≥ FEAS_MARGIN`; α is
