@@ -266,6 +266,13 @@ fn mveeFw(
     }
 }
 
+/// Uniform FW weights `w_i = 1/len`. The maximum-entropy start, optimal for
+/// near-circular inputs whose enclosing ellipse touches every point.
+fn uniformWeights(w: []f64) void {
+    const inv = 1.0 / @as(f64, @floatFromInt(w.len));
+    for (w) |*wi| wi.* = inv;
+}
+
 /// Sparse farthest-point seed of the FW weights: pick up to `k_req` well-spread
 /// points and put weight 1/m on them (m = #picks), 0 elsewhere, so the inner FW
 /// *grows* the support instead of *draining* a full active set. The first three
@@ -276,9 +283,10 @@ fn mveeFw(
 /// degenerate. O(k·n), once. Gated on input size — see
 /// `algo.SEED_SPARSE_MIN_POINTS` for the rationale and the a5_res0 story.
 fn farthestPointSeed(P: []const [2]f64, w: []f64, k_req: usize) void {
+    const max_seeds = 16; // buffer bound; k_req is small (algo.SEED_SPARSE_K = 5)
     const n = P.len;
-    const k = @min(@min(k_req, n), 16);
-    var picks: [16]usize = undefined;
+    const k = @min(@min(k_req, n), max_seeds);
+    var picks: [max_seeds]usize = undefined;
 
     // Centroid of P.
     var c = Vec2.zero;
@@ -296,9 +304,7 @@ fn farthestPointSeed(P: []const [2]f64, w: []f64, k_req: usize) void {
         }
     }
     if (d0_max < tol.TINY or k < 3) {
-        // Degenerate (or tiny): fall back to uniform.
-        const inv_n = 1.0 / @as(f64, @floatFromInt(n));
-        for (w) |*wi| wi.* = inv_n;
+        uniformWeights(w); // degenerate (or tiny): nothing to seed
         return;
     }
     picks[0] = p0;
@@ -832,8 +838,7 @@ pub fn solve(
     if (nw > algo.SEED_SPARSE_MIN_POINTS) {
         farthestPointSeed(wb.Ps, wb.w, algo.SEED_SPARSE_K);
     } else {
-        const inv_nw = 1.0 / @as(f64, @floatFromInt(nw));
-        for (wb.w) |*wi| wi.* = inv_nw;
+        uniformWeights(wb.w);
     }
 
     // 4) Hybrid outer loop. Each outer iteration runs algo.FW_PER_NEWTON cycles
