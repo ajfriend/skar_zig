@@ -15,7 +15,8 @@ when the working set is large (`algo.INNER_FW_BOOST_*`), draining the active set
 in the first outer iteration (~145 → ~6 iters, ≈500× faster). Small inputs keep
 the bit-identical 1-step path, so the genuine f64-floor finest-resolution cells
 are unaffected. Internal-only (public API unchanged). Full write-up in
-`docs/a5_res0_dnc_report.md`.
+`docs/a5_res0_dnc_report.md` and commit
+[7dfb376](https://github.com/ajfriend/skar_zig/commit/7dfb376).
 
 ## [0.2.0] - 2026-06-06
 
