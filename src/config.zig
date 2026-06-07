@@ -79,6 +79,47 @@ pub const algo = struct {
     /// outer iterations. Easy cases (hex, most DGGS cells) converge
     /// in ≤ this, so they pay zero preconditioner overhead.
     pub const AXIS_WARMUP: u32 = 2;
+
+    /// Inner Frank-Wolfe budget for the MVEE weight solve, gated on input
+    /// size. The outer loop interleaves ONE inner FW step with a Newton
+    /// polish and a b-axis update per cycle (see the outer loop in
+    /// `skar.zig`). For small point sets that schedule is optimal: Newton
+    /// does the weight refinement and the whole solve finishes in 1–2 outer
+    /// iterations, so extra inner FW steps would be pure overhead.
+    ///
+    /// But Newton's fraction-to-boundary step can never zero a weight, so it
+    /// cannot shrink the *active set*; only an inner FW drop-step can. On
+    /// inputs with many redundant / near-cocircular boundary points (the
+    /// motivating case: A5 resolution-0 cells, whose default 320-point
+    /// `cell_to_boundary` polygon has an enclosing ellipse touching only ~5
+    /// corners) the active set then drains ~2 points per outer iteration, so
+    /// the outer-iteration count scales with the point count and overruns
+    /// `max_outer`. See `docs/a5_res0_dnc_report.md` for the full diagnosis.
+    ///
+    /// Fix: for inputs with more than `INNER_FW_BOOST_MIN_POINTS` working
+    /// points, give the inner FW a real budget (`INNER_FW_BOOST_ITERS` steps,
+    /// stopping early once the inner gap is below `INNER_FW_BOOST_TOL`) so it
+    /// drains the active set within the first outer iteration; the subsequent
+    /// Newton polishes then run on the true ~5-point support. This makes the
+    /// outer count input-size-independent (A5 res-0: ~145 → ~6 outer iters,
+    /// ≈500× faster) while leaving small inputs on the *bit-identical* 1-step
+    /// path. A blanket boost was measured and rejected: it slows near-circular
+    /// hexagons ~1.5× and worsens the genuine f64-floor finest-resolution
+    /// cells, so the size gate is load-bearing, not cosmetic.
+    ///
+    /// The threshold sits above the largest "small cell" vertex count (DGGS
+    /// cells are 4–10 points; cf. `n_hull = 10`) and far below a dense
+    /// boundary (100s). Inputs above it have active-set draining to do, where
+    /// the boost helps or is neutral; inputs below it are already near-minimal,
+    /// where it is overhead.
+    ///
+    /// FUTURE: a fully-corrective / away-step inner FW that can drive weights
+    /// to exactly zero would drain the active set without a large per-cycle
+    /// budget, unifying the two regimes and removing this branch. Not yet
+    /// attempted — this gate documents the regime split in the meantime.
+    pub const INNER_FW_BOOST_MIN_POINTS: usize = 16;
+    pub const INNER_FW_BOOST_ITERS: u32 = 100;
+    pub const INNER_FW_BOOST_TOL: f64 = 1e-9;
 };
 
 /// Numerical tolerances — the "how small is small" guards.
