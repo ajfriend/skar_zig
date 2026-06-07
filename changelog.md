@@ -5,6 +5,19 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-06-07
+
+The A5 resolution-0 fix is reimplemented as a **size-gated sparse farthest-point
+FW initialization** (`algo.SEED_SPARSE_*`), replacing the v0.3.0 inner-FW boost.
+Seeding only a handful of well-spread extreme points (instead of uniform weight
+on all) lets Frank–Wolfe grow into the support rather than draining it: a5_res0
+cells solve ~56× faster, and genuine medium/large inputs (countries, dense
+polygons) ~3–6× faster — the latter undoing a slowdown the v0.3.0 boost had
+introduced on those inputs. Small near-circular cells keep the uniform start (the
+size gate), and the finest-resolution f64 floors are unchanged. Internal-only;
+public API unchanged. Full write-up in `docs/a5_res0_dnc_report.md` and commit
+[COMMIT](https://github.com/ajfriend/skar_zig/commit/COMMIT).
+
 ## [0.3.0] - 2026-06-07
 
 All 12 A5 resolution-0 cells now converge at the strict default

@@ -3,8 +3,8 @@
 //! 320 unit vec3 points (closing duplicate removed). Test fixture for
 //! `tests/a5_res0_test.zig`. Pre-fix, ALL 12 returned .did_not_converge at
 //! skar default settings (the outer count scaled with boundary-point count,
-//! needing ~145 > the 100 cap); the gated inner-FW boost
-//! (`algo.INNER_FW_BOOST_*`) now converges them in ~6. See
+//! needing ~145 > the 100 cap); the size-gated sparse FW init
+//! (`algo.SEED_SPARSE_*`) now converges them in ~7. See
 //! docs/a5_res0_dnc_report.md. Generated from pya5 0.8.0.
 
 pub const A5_RES0_CELLS = [_][]const [3]f64{
