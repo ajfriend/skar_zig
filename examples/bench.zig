@@ -114,6 +114,15 @@ pub fn main() !void {
     // Only converged-case timings are meaningful for cross-config comparison.
     // DNC cases always hit MAX_OUTER and infeasible cases bail in halfspace
     // check — neither reflects solver inner-loop performance.
+    //
+    // CAUTION when judging a solver change: this TOTAL is a sum of wall-times,
+    // so it is dominated by the large synthetic cases (np400, ha_*). It is NOT
+    // a guard for the common/hot path — small DGGS cells (hex, h3_res*, 4–10
+    // points) that solve in ~1–2 outer iters and µs. A real regression on those
+    // hides in TOTAL, and µs-scale wall-time on a 6-point cell is mostly noise.
+    // Read the PER-CASE rows above (small vs large separately); the deterministic
+    // small-cell guard is the CANARY exact-iteration-count tests in
+    // tests/dggs_dnc_test.zig. See CLAUDE.md "Performance & regression monitoring".
     try stdout.print("----------------------  --------  --  -----  -----------  --------------\n", .{});
     try stdout.print("{s:22}  {s:8}  {d:2}  {s:5}  {d:11.2}  {d:14.2}\n", .{
         "TOTAL (converged only)", "ok", n_converged, "—",

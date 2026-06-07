@@ -266,6 +266,117 @@ fn mveeFw(
     }
 }
 
+/// Uniform FW weights `w_i = 1/len`. The maximum-entropy start, optimal for
+/// near-circular inputs whose enclosing ellipse touches every point.
+fn uniformWeights(w: []f64) void {
+    const inv = 1.0 / @as(f64, @floatFromInt(w.len));
+    for (w) |*wi| wi.* = inv;
+}
+
+/// Sparse farthest-point seed of the FW weights: pick up to `k_req` well-spread
+/// points and put weight 1/m on them (m = #picks), 0 elsewhere, so the inner FW
+/// *grows* the support instead of *draining* a full active set. The first three
+/// picks (farthest-from-centroid, farthest-from-that, farthest-from-their-line)
+/// are non-collinear given a 2D-spanning scatter — guaranteed upstream by
+/// `isCoplanarInput` — so the lifted [P;1] simplex is full rank and `mveeFw`'s
+/// first Cholesky won't break. Falls back to uniform if the scatter is
+/// degenerate. O(k·n), once. Gated on input size — see
+/// `algo.SEED_SPARSE_MIN_POINTS` for the rationale and the a5_res0 story.
+fn farthestPointSeed(P: []const [2]f64, w: []f64, k_req: usize) void {
+    const max_seeds = 16; // buffer bound; k_req is small (algo.SEED_SPARSE_K = 5)
+    const n = P.len;
+    const k = @min(@min(k_req, n), max_seeds);
+    var picks: [max_seeds]usize = undefined;
+
+    // Centroid of P.
+    var c = Vec2.zero;
+    for (P) |p| c = c.add(.{ .m = p });
+    c = c.scale(1.0 / @as(f64, @floatFromInt(n)));
+
+    // pick0: farthest from centroid.
+    var p0: usize = 0;
+    var d0_max: f64 = -1;
+    for (P, 0..) |p, i| {
+        const d = (Vec2{ .m = p }).sub(c).norm();
+        if (d > d0_max) {
+            d0_max = d;
+            p0 = i;
+        }
+    }
+    if (d0_max < tol.TINY or k < 3) {
+        uniformWeights(w); // degenerate (or tiny): nothing to seed
+        return;
+    }
+    picks[0] = p0;
+
+    // pick1: farthest from pick0.
+    const a = Vec2{ .m = P[p0] };
+    var p1: usize = p0;
+    var d1_max: f64 = -1;
+    for (P, 0..) |p, i| {
+        const d = (Vec2{ .m = p }).sub(a).norm();
+        if (d > d1_max) {
+            d1_max = d;
+            p1 = i;
+        }
+    }
+    picks[1] = p1;
+
+    // pick2: farthest (perpendicular) from the line pick0–pick1. The divisor
+    // ‖b−a‖ is constant over i, so maximizing |cross| suffices.
+    const bma = (Vec2{ .m = P[p1] }).sub(a);
+    var p2: usize = p0;
+    var cr_max: f64 = -1;
+    for (P, 0..) |p, i| {
+        const pma = (Vec2{ .m = p }).sub(a);
+        const cr = @abs(linalg.diff_of_products(bma.m[0], pma.m[1], bma.m[1], pma.m[0]));
+        if (cr > cr_max) {
+            cr_max = cr;
+            p2 = i;
+        }
+    }
+    picks[2] = p2;
+
+    // Remaining picks: farthest-from-the-chosen-set (max-min distance).
+    var m: usize = 3;
+    while (m < k) : (m += 1) {
+        var best: usize = 0;
+        var best_mindist: f64 = -1;
+        for (P, 0..) |p, i| {
+            const pv = Vec2{ .m = p };
+            var mindist: f64 = std.math.inf(f64);
+            for (0..m) |j| {
+                const d = pv.sub(.{ .m = P[picks[j]] }).norm();
+                if (d < mindist) mindist = d;
+            }
+            if (mindist > best_mindist) {
+                best_mindist = mindist;
+                best = i;
+            }
+        }
+        picks[m] = best;
+    }
+
+    // Weights: 1/m on the picks, 0 elsewhere.
+    for (w) |*wi| wi.* = 0;
+    const wval = 1.0 / @as(f64, @floatFromInt(m));
+    for (0..m) |j| w[picks[j]] = wval;
+}
+
+/// Initialize the inner-FW weight vector, choosing the regime by working-set
+/// size: large/dense inputs get a sparse farthest-point seed (so FW grows the
+/// support instead of draining it — the a5_res0 DNC fix, also faster on genuine
+/// medium/large inputs); small inputs get the uniform start (already optimal for
+/// near-circular cells, where a sparse seed would break symmetry and slow them).
+/// `P` and `w` index the same working set. See `algo.SEED_SPARSE_MIN_POINTS`.
+fn initWeights(P: []const [2]f64, w: []f64) void {
+    if (P.len > algo.SEED_SPARSE_MIN_POINTS) {
+        farthestPointSeed(P, w, algo.SEED_SPARSE_K);
+    } else {
+        uniformWeights(w);
+    }
+}
+
 // ----------------------------------------------------------------
 // Solution recovery: 2D shape M → 3D A
 // ----------------------------------------------------------------
@@ -713,9 +824,6 @@ pub fn solve(
     var cert_n: usize = 0;
     var final_gap: f64 = 1e30;
 
-    const inv_nw = 1.0 / @as(f64, @floatFromInt(nw));
-    for (wb.w) |*wi| wi.* = inv_nw;
-
     var damp = DampState{};
     var outer_count: u32 = 0;
     var converged = false;
@@ -736,6 +844,9 @@ pub fn solve(
     _ = projectGnomonic(Xw, b, Q, wb.P_buf, -std.math.inf(f64));
     var s_scale: f64 = rescaleP(wb.P_buf, wb.Ps);
 
+    // FW weight init (sparse seed vs uniform, chosen by size — see initWeights).
+    initWeights(wb.Ps, wb.w);
+
     // 4) Hybrid outer loop. Each outer iteration runs algo.FW_PER_NEWTON cycles
     //    of (FW + b-update); only the last cycle also runs Newton polish +
     //    gap check. Extra cheap cycles buy more b-motion per Newton call.
@@ -745,15 +856,6 @@ pub fn solve(
     //    Loop invariant: on entry to each cycle, P_buf/Ps/s_scale correspond
     //    to the current (b, Q). The accepted b-update at cycle end also
     //    produces the next cycle's projection in one sweep.
-    // Inner-FW budget, gated on working-set size: small inputs keep the
-    // 1-step interleaved schedule (bit-identical to the pre-gate solver);
-    // larger/denser inputs get a real budget so the active set drains within
-    // the first outer iteration. See `algo.INNER_FW_BOOST_MIN_POINTS` for the
-    // full rationale (this is the a5_res0 DNC fix).
-    const inner_fw_boost = nw > algo.INNER_FW_BOOST_MIN_POINTS;
-    const inner_fw_iters: u32 = if (inner_fw_boost) algo.INNER_FW_BOOST_ITERS else 1;
-    const inner_fw_tol: f64 = if (inner_fw_boost) algo.INNER_FW_BOOST_TOL else 0.0;
-
     var outer: u32 = 0;
     outer_loop: while (outer < opts.max_outer) : (outer += 1) {
         outer_count += 1;
@@ -761,7 +863,7 @@ pub fn solve(
         while (cycle < algo.FW_PER_NEWTON) : (cycle += 1) {
             const is_full = (cycle == algo.FW_PER_NEWTON - 1);
 
-            mveeFw(wb.Ps, inner_fw_iters, inner_fw_tol, wb.Ql, wb.w);
+            mveeFw(wb.Ps, 1, 0.0, wb.Ql, wb.w);
 
             if (is_full) {
                 if (!newtonPolish(wb.Ql, wb.w, algo.ACTIVE_THRESH, 20, tol.NEWTON_INNER, &wb.newton_scratch)) {

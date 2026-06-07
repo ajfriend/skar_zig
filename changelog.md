@@ -5,6 +5,12 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-06-07
+
+Replace the inner-FW boost with a size-gated sparse FW initialization: same
+A5 res-0 fix, ~56× faster there and ~3× faster on medium/large inputs. Internal
+only; public API unchanged. ([#2](https://github.com/ajfriend/skar_zig/pull/2))
+
 ## [0.3.0] - 2026-06-07
 
 All 12 A5 resolution-0 cells now converge at the strict default

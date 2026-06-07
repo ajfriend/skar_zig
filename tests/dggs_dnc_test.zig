@@ -201,7 +201,16 @@ test "H3 r9 cell: no artificial gap floor between gap_tol and ACTIVE_THRESH" {
 // These pin the exact/near-exact outer-iteration count on a few cells. They
 // are deliberately brittle: their job is to *flag the developer* when a
 // solver/algorithm change shifts how many iterations these inputs take —
-// the same spirit as a bit-exact snapshot. A trip here is NOT a failure to
+// the same spirit as a bit-exact snapshot.
+//
+// They are also the project's PERFORMANCE-regression guard for the hot/common
+// path: small DGGS cells (4–10 points) solve in µs, where wall-time bench
+// (`examples/bench.zig`, esp. its `TOTAL`) can't resolve a regression and
+// over-indexes on the large synthetic cases. Iteration count is the
+// deterministic signal — these canaries are how a small-cell slowdown gets
+// caught (see CLAUDE.md "Performance & regression monitoring").
+//
+// A trip here is NOT a failure to
 // force-fix; it's a signal to (a) understand what changed and (b) update the
 // expected value if the change is intended. The b-iterate reaches its fixed
 // point almost immediately, so at an achievable tolerance these cells settle

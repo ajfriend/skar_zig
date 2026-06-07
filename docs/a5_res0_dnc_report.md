@@ -1,11 +1,13 @@
 # A5 resolution-0 cells DNC at default settings (outer-iteration count scales with boundary point count)
 
-**Status:** **FIXED 2026-06-06** — point-count-gated inner-FW boost
-(`algo.INNER_FW_BOOST_*` in `src/config.zig`, applied in `src/skar.zig`;
-regression tests in `tests/a5_res0_test.zig`). A blanket boost was tried and
-refuted by the DGGS survey first. See **Implemented** below for the final shape;
-**Investigation** / **Survey validation** for how we got there; original bug
-report retained from **Evidence** onward.
+**Status:** **FIXED.** Shipped mechanism (v0.4.0): **size-gated sparse
+farthest-point FW init** (`algo.SEED_SPARSE_*` in `src/config.zig`,
+`farthestPointSeed` in `src/skar.zig`; tests in `tests/a5_res0_test.zig`). This
+*superseded* the v0.3.0 inner-FW boost — same a5_res0 fix but ~56× faster and
+~3–6× faster on genuine medium/large inputs (which the boost had slowed). See
+**Implemented (v0.4.0)** below for the shipped fix and the boost-vs-sparse data;
+the earlier sections record how we got here (boost → survey → sparse), and the
+original bug report is retained from **Evidence** onward.
 **Found:** 2026-06-07, sweeping S2/A5 across all resolutions from skar_py
 (`scripts/dggs/dnc_sweep.py`).
 **Summary:** All **12 A5 resolution-0 base cells** (the largest A5 cells, ~70°
@@ -171,7 +173,57 @@ the boost. Measured:
 The gate is the recommended shape: it fixes a5_res0 with **zero** change to every
 already-working case.
 
-## Implemented (2026-06-06): point-count-gated inner-FW boost
+## Implemented (v0.4.0, 2026-06-07): size-gated sparse FW init
+
+This is the **shipped** fix; it replaced the v0.3.0 boost (below) after the
+follow-up experiment showed sparse init strictly dominates it.
+
+The MVEE inner solve lets Frank–Wolfe move weight onto the support. FW *grows*
+the support well but *prunes* it poorly (only a drop-step removes a point;
+Newton can't zero a weight). So the uniform start `w_i = 1/nw` is the worst case
+when the support is a small subset — a slow drain. **Fix:** for `nw >
+SEED_SPARSE_MIN_POINTS` (16), seed only `SEED_SPARSE_K` (5) well-spread extreme
+points (`farthestPointSeed`, greedy farthest-point) so FW grows *into* the
+support. Small inputs keep the uniform start (optimal for near-circular cells).
+The per-cycle inner FW returns to the plain 1-step schedule for everyone — the
+boost machinery is gone.
+
+**Measured (boost C0 vs sparse C3; a5_res0 at 50-rep µs, medium/large at 100-rep
+bench):**
+
+| metric                        | v0.3.0 boost | v0.4.0 sparse        |
+|-------------------------------|--------------|----------------------|
+| a5_res0 µs/solve              | 4055         | **74** (~56×)        |
+| bench TOTAL µs (medium/large) | 1121         | **332** (~3.4×)      |
+| a5_res0 converged             | 12/12        | 12/12                |
+| finest f64 floor (s2/a5 DNC)  | 2173 / 4739  | 2173 / 4739 (held)   |
+| h3 mean outer iters           | 1.0          | 1.0 (gate → uniform) |
+| aspect ratios                 | —            | unchanged            |
+
+So the v0.3.0 boost had a hidden cost: its `nw>16` gate also caught *genuine*
+large polygons (countries, np400, ha_*) and ran 100 wasteful inner-FW steps on
+them — sparse init undoes that while fixing a5_res0 better. The size gate is
+load-bearing for the same reason as before: ungated sparse *slows* small
+near-circular cells (h3 1 → ~11 iters) because uniform is already their optimum.
+
+- **`src/config.zig`** — `algo.SEED_SPARSE_MIN_POINTS = 16`, `SEED_SPARSE_K = 5`
+  (replaced `INNER_FW_BOOST_*`), full doc-comment.
+- **`src/skar.zig`** — `farthestPointSeed` + gated init before the outer loop;
+  `mveeFw` back to `(…, 1, 0.0, …)`.
+- **`tests/a5_res0_test.zig`** — unchanged structure; iter ceilings hold
+  (dense ≤ 20, sparse ≤ 4).
+- **Validation:** full `zig build test -Dslow=true` green (no CANARY shifts —
+  small cells bit-identical); DGGS @1e-6 floor unchanged; states/countries ARs
+  unchanged. Full C0–C5 study lives on the experiment branch
+  `exp/fw-sparse-init` (its copy of this report).
+
+---
+
+## (superseded) Implemented (2026-06-06): point-count-gated inner-FW boost
+
+> Shipped in v0.3.0, replaced by the sparse FW init above in v0.4.0. Retained as
+> history. The boost fixed a5_res0 but ran a per-cycle inner-FW budget that
+> slowed genuine medium/large inputs ~3–6×.
 
 The fix is the gated form of option 1 below.
 
@@ -230,27 +282,28 @@ the `INNER_FW_BOOST_*` doc-comment.
 
 ## Done / not-doing
 
-- ✅ **Gated fix implemented** (`algo.INNER_FW_BOOST_*`) — see **Implemented**.
-- ✅ **Regression tests added** — dense 320-pt (all 12) + sparse 5-corner, each
+- ✅ **Shipped: size-gated sparse FW init** (`algo.SEED_SPARSE_*`, v0.4.0) —
+  see **Implemented (v0.4.0)**. Replaced the v0.3.0 inner-FW boost.
+- ✅ **Regression tests** — dense 320-pt (all 12) + sparse 5-corner, each
   asserting convergence at the strict default **and** an outer-iteration ceiling
-  (dense ≤ 20, observed 7; sparse ≤ 4, observed 1). The iter ceilings are the
-  performance guard: they catch a silent slow-grind regression (e.g. reverting
-  to the `max_outer = 200` approach, which converges but at ~145 iters) that a
-  pure converged/gap assertion would miss.
-- ✅ **Mid-size inputs validated** — states/countries ARs unchanged, iters flat.
-- ✅ **Finest-cell DNC guard kept** — the survey confirmed those are genuine
-  floors; the `σ_max·ε` narrative in `src/api.zig` stands. (An earlier draft
-  proposed flipping that test to assert convergence — retracted.)
+  (dense ≤ 20, sparse ≤ 4) as a slow-grind guard.
+- ✅ **Finest-cell DNC guard kept** — those are genuine floors; the `σ_max·ε`
+  narrative in `src/api.zig` stands. (An earlier draft proposed flipping that
+  test to assert convergence — retracted.)
 
 ## Possible future work
 
-- **Unify the two regimes.** A fully-corrective / away-step inner FW that drives
-  weights to exactly zero would drain the active set without a large per-cycle
-  budget, removing the size gate entirely. See the `FUTURE:` note in the
-  `INNER_FW_BOOST_*` doc-comment. Bigger change; needs its own validation.
+- **Smarter-than-size gate.** The real discriminator is "redundant /
+  non-symmetric," not size. The size gate skips *small irregular* polygons where
+  sparse init would also help (ungated sparse beat the gate on states/countries
+  iteration counts). A cheap proxy (hull ≫ lifted dim, or near-cocircularity)
+  could capture those without hurting symmetric small cells.
+- **Unify via away-step FW.** A fully-corrective / away-step inner FW that drives
+  weights to exactly zero could drain the active set well enough that even the
+  uniform start is fine, removing the gate. Bigger change; own validation. Design
+  note: `docs/away-step-fw.md`.
 - **(Optional) broaden the survey** to multi-resolution / densified boundaries
-  (extend `gen_cells.py` or run skar_py `dnc_sweep.py`) for full coverage —
-  deferred.
+  for full coverage — deferred.
 
 > **Reproducing the investigation:** the numbers in **Investigation** /
 > **Survey validation** came from temporary harnesses (a `mveeFw`
