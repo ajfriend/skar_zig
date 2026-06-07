@@ -300,7 +300,8 @@ the `INNER_FW_BOOST_*` doc-comment.
   could capture those without hurting symmetric small cells.
 - **Unify via away-step FW.** A fully-corrective / away-step inner FW that drives
   weights to exactly zero could drain the active set well enough that even the
-  uniform start is fine, removing the gate. Bigger change; own validation.
+  uniform start is fine, removing the gate. Bigger change; own validation. Design
+  note: `docs/away-step-fw.md`.
 - **(Optional) broaden the survey** to multi-resolution / densified boundaries
   for full coverage — deferred.
 
