@@ -16,7 +16,7 @@ polygons) ~3–6× faster — the latter undoing a slowdown the v0.3.0 boost had
 introduced on those inputs. Small near-circular cells keep the uniform start (the
 size gate), and the finest-resolution f64 floors are unchanged. Internal-only;
 public API unchanged. Full write-up in `docs/a5_res0_dnc_report.md` and commit
-[COMMIT](https://github.com/ajfriend/skar_zig/commit/COMMIT).
+[fe08bbc](https://github.com/ajfriend/skar_zig/commit/fe08bbc).
 
 ## [0.3.0] - 2026-06-07
 
