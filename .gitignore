@@ -6,3 +6,4 @@ scripts/states/data/
 scripts/countries/data/
 scripts/globe/index.html
 .claude/
+.DS_Store
