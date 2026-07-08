@@ -997,6 +997,11 @@ fn solveAlternating(
     // Eigen-data from the last gap call — feeds the converged/partial
     // outcome's Q/sigma at finalization without a redundant eig2 + lift.
     var last_gap = GapResult{ .gap = 1e30, .cert_n = 0, .v1 = Vec3.zero, .v2 = Vec3.zero, .sigma = .{ 0, 0 } };
+    // Axis at which last_gap was computed. The outer loop steps b AFTER
+    // certifying, so on DNC the final b is one step past the last
+    // certificate — returning (b_cert, last_gap) keeps the outcome's
+    // Q/sigma/gap a consistent snapshot of one iterate.
+    var b_cert = b;
 
     // Orthonormal tangent basis at the current b. Rebuilt after each
     // accepted step in the outer loop (trivial: one project-and-normalize
@@ -1041,6 +1046,7 @@ fn solveAlternating(
             if (is_full) {
                 const A_perp = try recoverAPerp(wb.P_buf, m.M);
                 last_gap = try dualityGapConstructed(wb.w, b, Xw, A_perp, Q, &wb.gap_scratch, wb.cert_active, wb.cert_lambdas);
+                b_cert = b;
                 // Convergence + broken-certificate guard (see
                 // gapConverged for the load-bearing ordering).
                 if (try gapConverged(last_gap.gap, opts.gap_tol)) {
@@ -1063,7 +1069,7 @@ fn solveAlternating(
     return buildOutcome(
         allocator,
         converged,
-        b,
+        b_cert,
         last_gap,
         .{ .alternating = .{
             .outer_iters = outer_count,
@@ -1093,6 +1099,10 @@ pub fn gapConverged(gap: f64, gap_tol: f64) SolveError!bool {
 /// eigendecomposition (Q's columns are (b, v1, v2) with eigenvalues
 /// (SIGMA_0, sigma[0], sigma[1]); v2 flipped if needed so det Q = +1),
 /// and wrap as Converged / DidNotConverge.
+/// `b` MUST be the axis at which `last_gap` was computed: Q's
+/// orthonormality (and the meaning of gap/sigma) depends on v1/v2
+/// being tangent to this exact axis. Callers track a `b_cert`
+/// alongside `last_gap` for this reason.
 pub fn buildOutcome(
     allocator: std.mem.Allocator,
     converged: bool,

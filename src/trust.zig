@@ -433,6 +433,11 @@ pub fn solveTrust(
     var eager_certified = false;
 
     var last_gap: GapResult = undefined;
+    // Axis at which last_gap was computed (see buildOutcome's contract):
+    // TR-loop certification is gated on pred, and the RECERT loop can be
+    // budget-skipped, so on DNC the final b may be several accepted
+    // steps past the last certificate.
+    var b_cert = b;
 
     // Eager first certificate — the alternating path's exact opening cadence
     // (two FW steps, one polish, certify) BEFORE any full-precision
@@ -459,6 +464,7 @@ pub fn solveTrust(
         }
         var m = core.computeMoments(wb.Ps, wb.w, s_scale);
         last_gap = try certifyAt(m.M, Q, b, Xw, &wb);
+        b_cert = b;
         if (try core.gapConverged(last_gap.gap, opts.gap_tol)) {
             converged = true;
             eager_certified = true;
@@ -494,6 +500,7 @@ pub fn solveTrust(
             if (is_full) {
                 open_iters += 1;
                 last_gap = try certifyAt(m.M, Q, b, Xw, &wb);
+                b_cert = b;
                 if (try core.gapConverged(last_gap.gap, opts.gap_tol)) converged = true;
             }
         }
@@ -513,6 +520,7 @@ pub fn solveTrust(
         if (cur.polish_failed) polish_failures += 1;
 
         last_gap = try certifyAt(cur.moments.M, cur.Q, b, Xw, &wb);
+        b_cert = b;
         converged = try core.gapConverged(last_gap.gap, opts.gap_tol);
     }
 
@@ -573,6 +581,7 @@ pub fn solveTrust(
         // config.trust.CERT_PRED_FACTOR.
         if (step.pred <= tc.CERT_PRED_FACTOR * opts.gap_tol) {
             last_gap = try certifyAt(cur.moments.M, cur.Q, b, Xw, &wb);
+            b_cert = b;
             if (try core.gapConverged(last_gap.gap, opts.gap_tol)) {
                 converged = true;
                 break;
@@ -620,6 +629,7 @@ pub fn solveTrust(
             }
             const m = core.computeMoments(wb.Ps, wb.w, s_scale);
             last_gap = try certifyAt(m.M, Q, b, Xw, &wb);
+            b_cert = b;
             if (try core.gapConverged(last_gap.gap, opts.gap_tol)) {
                 converged = true;
                 break;
@@ -637,7 +647,7 @@ pub fn solveTrust(
     return core.buildOutcome(
         allocator,
         converged,
-        b,
+        b_cert,
         last_gap,
         .{ .trust = .{
             .eager_certified = eager_certified,

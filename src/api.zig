@@ -329,13 +329,18 @@ pub const Infeasible = struct {
 /// `aspectRatio`/`b`/`A` methods. Raw `Q`, `sigma`, `gap`, and
 /// iteration counters are exposed for diagnostics.
 pub const DidNotConverge = struct {
+    /// Q/sigma/gap/cert are one consistent snapshot: the LAST iterate
+    /// at which a certificate was computed (the solver may have taken
+    /// further uncertified steps before giving up; those are not
+    /// reflected here, by design — a mixed snapshot would pair an axis
+    /// with another axis's eigenvectors).
     Q: Mat3,
     sigma: [3]f64,
-    /// Last computed gap from the final iterate. May be near zero
-    /// (almost converged) or large (the solver gave up far from
-    /// optimal); inspect alongside `diag` rather than as a uniform
-    /// quality metric — unlike `Converged.gap`, this value is not
-    /// certified to be below `gap_tol`.
+    /// Gap at the last certified iterate. May be near zero (almost
+    /// converged) or large (the solver gave up far from optimal);
+    /// inspect alongside `diag` rather than as a uniform quality
+    /// metric — unlike `Converged.gap`, this value is not certified
+    /// to be below `gap_tol`.
     gap: f64,
     /// Algorithm-specific diagnostics; the tag records which solver
     /// path produced this outcome.
