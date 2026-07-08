@@ -302,16 +302,6 @@ pub fn solveReduced(
     var polish_failures: u32 = 0;
     var converged = false;
 
-    var cur = evalH(b, Xw, &wb, -std.math.inf(f64), true);
-    if (cur.polish_failed) polish_failures += 1;
-    // The initial axis comes from halfspaceCheck, so the projection
-    // cannot fail; a rank-deficient design here means the input slipped
-    // past the coplanarity gate — surface it as the same error the
-    // fast path's recoverAPerp would raise.
-    if (!cur.ok) return SolveError.SingularMoment;
-
-    // Certified gap at the current (always-accepted) iterate. Reuses
-    // the fast path's certification wholesale.
     var last_gap = GapResult{ .gap = 1e30, .cert_n = 0, .v1 = Vec3.zero, .v2 = Vec3.zero, .sigma = .{ 0, 0 } };
     var final_gap: f64 = 1e30;
 
@@ -322,16 +312,63 @@ pub fn solveReduced(
         }
     };
 
-    last_gap = try certify.run(cur, b, Xw, &wb);
-    final_gap = last_gap.gap;
-    // Order matters (mirrors the fast path's break-before-guard): a
-    // converged-at-noise-level gap can be slightly negative (seen on
-    // H3 r15 cells, gap ~ −5e-9 from κ·ε noise) and must be accepted
-    // before the hard NegGap guard fires.
-    if (@abs(final_gap) <= opts.gap_tol) {
-        converged = true;
-    } else if (final_gap < -tol.NEG_GAP) {
-        return SolveError.NegativeDualityGap;
+    // Eager first certificate — the fast path's exact opening cadence
+    // (two FW steps, one polish, certify) BEFORE any full-precision
+    // oracle work. On the DGGS hot path the certificate passes right
+    // here and the solve ends having done essentially what the fast
+    // path's first outer iteration would have done; the full oracle
+    // (stall-quality FW refinement, gradient, majorant Hessian, trust
+    // region) runs only when this certificate fails. Safe w.r.t. the
+    // oracle-consistency lesson: this certificate is a pure
+    // upper-bound check — it never feeds the trust-region model, and
+    // the (h, g, B̃) triple is only ever constructed from the
+    // fully-refined state on the path that continues.
+    {
+        const Q0 = b.orthoBasis();
+        // b0 comes from halfspaceCheck (strictly feasible), so the
+        // projection cannot fail.
+        _ = projectGnomonic(Xw, b, Q0, wb.P_buf, -std.math.inf(f64));
+        const s0 = core.rescaleP(wb.P_buf, wb.Ps);
+        core.initWeights(wb.Ps, wb.w);
+        core.mveeFw(wb.Ps, algo.FW_PER_NEWTON, 0.0, wb.Ql, wb.w);
+        if (!newtonPolish(wb.Ql, wb.w, algo.ACTIVE_THRESH, 20, tol.NEWTON_INNER, &wb.newton_scratch)) {
+            polish_failures += 1;
+        }
+        const m0 = core.computeMoments(wb.Ps, wb.w, s0);
+        const A_perp0 = try core.recoverAPerp(wb.P_buf, m0.M);
+        last_gap = try core.dualityGapConstructed(wb.w, b, Xw, A_perp0, Q0, &wb.gap_scratch, wb.cert_active, wb.cert_lambdas);
+        final_gap = last_gap.gap;
+        // Order matters (mirrors the fast path's break-before-guard):
+        // a converged-at-noise-level gap can be slightly negative
+        // (seen on H3 r15 cells, gap ~ −5e-9 from κ·ε noise) and must
+        // be accepted before the hard NegGap guard fires.
+        if (@abs(final_gap) <= opts.gap_tol) {
+            converged = true;
+        } else if (final_gap < -tol.NEG_GAP) {
+            return SolveError.NegativeDualityGap;
+        }
+    }
+
+    // Full-precision evaluation at the initial axis (warm-started from
+    // the eager phase's weights), certified again at oracle quality.
+    // Reuses the fast path's certification wholesale.
+    var cur: Eval = undefined;
+    if (!converged) {
+        cur = evalH(b, Xw, &wb, -std.math.inf(f64), false);
+        if (cur.polish_failed) polish_failures += 1;
+        // The projection cannot fail at the halfspace axis; a
+        // rank-deficient design here means the input slipped past the
+        // coplanarity gate — surface it as the same error the fast
+        // path's recoverAPerp would raise.
+        if (!cur.ok) return SolveError.SingularMoment;
+
+        last_gap = try certify.run(cur, b, Xw, &wb);
+        final_gap = last_gap.gap;
+        if (@abs(final_gap) <= opts.gap_tol) {
+            converged = true;
+        } else if (final_gap < -tol.NEG_GAP) {
+            return SolveError.NegativeDualityGap;
+        }
     }
 
     // Trust-region state. The model Hessian is per-evaluation (the

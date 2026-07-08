@@ -399,6 +399,33 @@ Done (this branch):
       pipelines at strict tolerance do pay for. Residual on mid-size
       synthetic caps (np400 ~2.3×, ha_14 ~2.7×) unchanged.
 
+- [x] **Eager first certificate — the fusion work's cadence half —
+      CLOSED the h3 gap** (2026-07-08). Iteration 0 now runs the fast
+      path's exact opening cadence (two FW steps, one polish,
+      certify) before any full-precision oracle work; the full oracle
+      + trust region engage only when that certificate fails. Safe
+      w.r.t. the oracle-consistency lesson: the eager certificate is a
+      pure upper-bound check that never feeds the TR model. Fair
+      metric (probe27, mutually-converged only) after:
+
+      | system, tol | before | after |
+      |---|---|---|
+      | h3 @1e-3 | 1.50× | **1.02×** |
+      | h3 @1e-6 | 1.50× | **0.89×** |
+      | s2 / a5 (either tol) | 1.00–1.07× | 0.97–1.02× |
+
+      Reduced is now at parity or faster with fast on every DGGS
+      system at both tolerances on successes, with the floor-coverage
+      and cheap-failure advantages intact, CANARY pins unchanged
+      (0/3/0/3/3), and the full battery green (geographies, fixtures,
+      rotations, a5_res0, slow suite). In the running framing: the
+      reduced method's iteration 0 is now *literally* the fast path's
+      first outer iteration, and the trust region is what happens
+      instead of the damped wander when that first certificate doesn't
+      pass — the two designs have converged into one. The dedup half
+      of the fusion work (shared design state) was measured
+      unnecessary after this and skipped.
+
       CANARY-cell comparison (fast pins vs reduced, post-fix): H3 r15
       1 → **0**, S2 L30 1 → **0**, A5 hard tail 4 → **3**, H3 r9
       2 → 3, A5 common 2 → 3. Reduced meets or beats the pins on cells
