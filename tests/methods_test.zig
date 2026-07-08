@@ -1,23 +1,21 @@
 //! Tests for solver path selection
 //! (`SolveOptions.method`; `src/trust.zig`), incl. the away-step FW
-//! solver kept for the record and the wide-cap fixtures with their
-//! Clarabel reference aspect ratios.
+//! solver kept for the record.
 //!
 //! Coverage:
-//!  - the wide-cap fixtures (tests/wide_cap_cells.zig) that the
-//!    alternating path limit-cycles on: `.trust` must converge, with
-//!    the AR matching the Clarabel SDP cross-check;
+//!  - the wide-cap manifest cases (tests/cases/zon/wide_cap*.zon) that
+//!    the alternating path limit-cycles on: `.trust` must converge
+//!    within iteration ceilings, matching the Clarabel SDP cross-check;
 //!  - easy-case agreement: `.trust` reproduces `.alternating`'s aspect ratio
 //!    on a spread of bundled manifest cases;
-//!  - `.auto` is a pure alias for the library's recommended method
-//!    (currently `.trust`) — identical outcomes, pinned;
+//!  - `.auto` is a pure alias for `Method.recommended` (currently
+//!    `.trust`) — identical outcomes, and the resolution pinned;
 //!  - certificate sanity on a trust solve (λ ≥ 0, certified gap in
 //!    [−NEG_GAP, gap_tol], primal feasibility ≤ roundoff).
 
 const std = @import("std");
 const sphar = @import("../src/root.zig");
 const cases = @import("cases");
-const wide = @import("wide_cap_cells.zig");
 
 const GAP_TOL: f64 = 1e-6;
 /// The certified gap bounds primal suboptimality, but AR is a ratio of
@@ -28,42 +26,42 @@ const AR_REF_REL_TOL: f64 = 1e-3;
 /// slack in the AR.
 const AR_AGREE_REL_TOL: f64 = 1e-4;
 
-fn expectConvergesWithRefAr(pts: []const [3]f64, method: sphar.Method, ref_ar: f64) !void {
-    const allocator = std.testing.allocator;
-    var outcome = try sphar.solve(allocator, pts, .{ .method = method });
-    defer outcome.deinit();
-    try std.testing.expect(std.meta.activeTag(outcome) == .converged);
-    const c = outcome.converged;
-    try std.testing.expect(@abs(c.gap) <= GAP_TOL);
-    // Structured-cone primal feasibility: within roundoff of 0.
-    try std.testing.expect(sphar.checkFeasibility(c, pts) <= 1e-12);
-    // Cross-check against the Clarabel reference.
-    try std.testing.expect(@abs(c.aspectRatio() - ref_ar) <= AR_REF_REL_TOL * ref_ar);
+/// Points of a wide-cap manifest case (tests/cases/zon/wide_cap*.zon —
+/// the single home of the fixture data).
+fn wideCap(name: []const u8) []const [3]f64 {
+    return (cases.byName(name) orelse unreachable).points;
 }
 
-test "trust: wide-cap fixtures converge and match the Clarabel reference AR" {
-    try expectConvergesWithRefAr(&wide.CAP82_S1, .trust, wide.AR_CAP82_S1);
-    try expectConvergesWithRefAr(&wide.CAP85_S1, .trust, wide.AR_CAP85_S1);
-    try expectConvergesWithRefAr(&wide.CAP89_S3, .trust, wide.AR_CAP89_S3);
-}
-
-test "trust: wide-cap fixture iteration ceilings (CANARY-style)" {
+test "trust: wide-cap iteration ceilings (CANARY-style) + Clarabel cross-check" {
     // Trust-region iteration guard on the wide-angle frontier (same
     // flag-don't-bump policy as the dggs canaries). Observed: 20 / 34 /
     // 14; ceilings leave headroom for FP drift across platforms while
     // catching a trust-region or oracle regression that turns the
     // frontier slow again.
+    //
+    // The AR is cross-checked against the CLARABEL reference from the
+    // wide-cap investigation's SDP probe — independent provenance from
+    // the solver-derived `.expected.ar` pins the manifest loop
+    // (tests/cases/cases_test.zig) checks on the same cases. Explicit
+    // `.method = .trust` (not the default), so this keeps guarding the
+    // trust path even if `.auto` is ever re-pointed.
     const allocator = std.testing.allocator;
-    const fixtures = [_]struct { pts: []const [3]f64, ceiling: u32 }{
-        .{ .pts = &wide.CAP82_S1, .ceiling = 30 },
-        .{ .pts = &wide.CAP85_S1, .ceiling = 50 },
-        .{ .pts = &wide.CAP89_S3, .ceiling = 25 },
+    const fixtures = [_]struct { name: []const u8, ceiling: u32, clarabel_ar: f64 }{
+        .{ .name = "wide_cap82", .ceiling = 30, .clarabel_ar = 1.159634 },
+        .{ .name = "wide_cap85", .ceiling = 50, .clarabel_ar = 1.269181 },
+        .{ .name = "wide_cap89", .ceiling = 25, .clarabel_ar = 1.542028 },
     };
     for (fixtures) |f| {
-        var o = try sphar.solve(allocator, f.pts, .{ .method = .trust });
+        const pts = wideCap(f.name);
+        var o = try sphar.solve(allocator, pts, .{ .method = .trust });
         defer o.deinit();
         try std.testing.expect(std.meta.activeTag(o) == .converged);
-        try std.testing.expect(o.converged.diag.totalIters() <= f.ceiling);
+        const c = o.converged;
+        try std.testing.expect(@abs(c.gap) <= GAP_TOL);
+        // Structured-cone primal feasibility: within roundoff of 0.
+        try std.testing.expect(sphar.checkFeasibility(c, pts) <= 1e-12);
+        try std.testing.expect(@abs(c.aspectRatio() - f.clarabel_ar) <= AR_REF_REL_TOL * f.clarabel_ar);
+        try std.testing.expect(c.diag.totalIters() <= f.ceiling);
     }
 }
 
@@ -101,22 +99,25 @@ test "alternating: wide-cap fixtures still DNC (the gap the trust default closes
     // converging here, celebrate — and update the .alternating
     // doc-comment's caveat (see docs/wide-cap-dnc-report.md).
     const allocator = std.testing.allocator;
-    for ([_][]const [3]f64{ &wide.CAP82_S1, &wide.CAP85_S1, &wide.CAP89_S3 }) |pts| {
-        var outcome = try sphar.solve(allocator, pts, .{ .method = .alternating });
+    for ([_][]const u8{ "wide_cap82", "wide_cap85", "wide_cap89" }) |name| {
+        var outcome = try sphar.solve(allocator, wideCap(name), .{ .method = .alternating });
         defer outcome.deinit();
         try std.testing.expect(std.meta.activeTag(outcome) == .did_not_converge);
     }
 }
 
-test "auto: resolves to trust (pure alias, identical outcomes)" {
-    // .auto is the "library's current recommendation" placeholder and
-    // today is a pure alias for .trust: same dispatch target, so
-    // identical outcomes including the diag tag. If a future version
-    // re-points .auto at a new method, this test is the explicit place
-    // that decision gets recorded.
+test "auto: resolves to Method.recommended (pure alias, identical outcomes)" {
+    // .auto is the "library's current recommendation" placeholder;
+    // `Method.recommended` is the single source of truth for the
+    // resolution, and this test is where a re-point gets recorded.
+    try std.testing.expectEqual(sphar.Method.trust, sphar.Method.recommended);
+    try std.testing.expectEqual(sphar.Method.trust, sphar.Method.auto.resolved());
+
+    // Behavioral half: same dispatch target ⇒ identical outcomes,
+    // including the diag tag (the expectEqual on `.diag.trust` panics
+    // on a wrong active tag, so a silent re-point trips loudly).
     const allocator = std.testing.allocator;
-    const names = [_][]const u8{ "hex", "h3_res09", "np100", "ha_05" };
-    for (names) |name| {
+    for ([_][]const u8{ "hex", "h3_res09" }) |name| {
         const case = cases.byName(name) orelse unreachable;
         var trust_out = try sphar.solve(allocator, case.points, .{ .method = .trust });
         defer trust_out.deinit();
@@ -129,9 +130,6 @@ test "auto: resolves to trust (pure alias, identical outcomes)" {
         try std.testing.expectEqual(trust_out.converged.gap, auto_out.converged.gap);
         try std.testing.expectEqual(trust_out.converged.sigma, auto_out.converged.sigma);
     }
-    // And on a wide-cap fixture (where the two concrete paths genuinely
-    // differ), so a silent re-point to .alternating trips loudly.
-    try expectConvergesWithRefAr(&wide.CAP89_S3, .auto, wide.AR_CAP89_S3);
 }
 
 test "mveeFwAway: converges the design and keeps weights in the simplex" {
@@ -170,7 +168,8 @@ test "mveeFwAway: converges the design and keeps weights in the simplex" {
 
 test "trust: certificate sanity on a wide-cap solve" {
     const allocator = std.testing.allocator;
-    var outcome = try sphar.solve(allocator, &wide.CAP85_S1, .{ .method = .trust });
+    const pts = wideCap("wide_cap85");
+    var outcome = try sphar.solve(allocator, pts, .{ .method = .trust });
     defer outcome.deinit();
     const c = outcome.converged;
     // Weak duality: certified gap is non-negative up to FP noise.
@@ -180,5 +179,5 @@ test "trust: certificate sanity on a wide-cap solve" {
     try std.testing.expect(c.cert.indices.len >= 3);
     for (c.cert.lambdas) |lam| try std.testing.expect(lam >= 0);
     // Indices point into the caller's array.
-    for (c.cert.indices) |idx| try std.testing.expect(idx < wide.CAP85_S1.len);
+    for (c.cert.indices) |idx| try std.testing.expect(idx < pts.len);
 }

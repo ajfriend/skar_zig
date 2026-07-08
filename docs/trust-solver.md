@@ -1,12 +1,13 @@
 # The trust solver: trust-region descent on h(b)
 
-**Status:** prototype on branch `investigate/wide-cap-dnc`
-(`src/trust.zig`, `SolveOptions.method = .trust`). This document is
-the tracking doc for the method: the writeup, the measurements so far,
-and the validation ledger toward promoting it (first as the `.auto`
-fallback, possibly as the default solver). History of how we got here:
-`docs/wide-cap-dnc-report.md` (the wide-angle DNC investigation and the
-joint-IPM prototype it superseded).
+**Status:** shipped, and the default since 0.6.0 (`src/trust.zig`;
+`SolveOptions.method = .auto` resolves to it via `Method.recommended`).
+This document is the tracking doc for the method: the writeup, the
+measurements, and the validation ledger that was the promotion record —
+dated sections below describe the state at their time of writing.
+History of how we got here: `docs/wide-cap-dnc-report.md` (the
+wide-angle DNC investigation and the joint-IPM prototype it
+superseded).
 
 ## The idea in one paragraph
 
@@ -140,7 +141,7 @@ majorant-model section below for the history):
    iterations — nothing to transport, nothing to corrupt.
 
 Knobs live in `config.trust` (inner oracle budget/tolerance,
-trust-region constants). All prototype values.
+trust-region constants), tuned in the sessions recorded below.
 
 ## Performance so far (2026-07-07, `zig build ex-compare`, ReleaseFast)
 
@@ -634,9 +635,10 @@ Open, roughly in order:
 > docs/wide-cap-dnc-report.md.
 
 - `zig build ex-compare` — manifest × {alternating, trust} + the
-  wide-cap grid × {alternating, trust, auto}.
-- `zig build test -Dslow=true` — includes `tests/joint_test.zig`
-  (fixtures + agreement for both experimental paths).
+  wide-cap grid × {alternating, trust}.
+- `zig build test -Dslow=true` — includes `tests/methods_test.zig`
+  (wide-cap ceilings + Clarabel cross-check, path agreement, the
+  `.auto` alias pin).
 - Branch probes: `probe10.zig` (reduced smoke + timing), `probe11.zig` /
   `probe12.zig` (the seed-6 stall + trace), `probe13.zig` (a5_res0
   dense), `probe9.zig` (the barrier-schedule sweep that motivated the

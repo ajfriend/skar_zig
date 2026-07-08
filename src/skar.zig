@@ -576,7 +576,7 @@ const newton = @import("newton.zig");
 const NewtonScratch = newton.NewtonScratch;
 const newtonPolish = newton.newtonPolish;
 
-// The default solver path (`SolveOptions.method = .trust`).
+// The trust solver path (`SolveOptions.method`).
 const trust = @import("trust.zig");
 
 // ----------------------------------------------------------------
@@ -1167,11 +1167,10 @@ pub fn solve(
         .ready => |p| p,
     };
 
-    switch (opts.method) {
+    switch (opts.method.resolved()) {
         .alternating => return solveAlternating(allocator, scratch_alloc, prep, opts),
-        // .auto resolves to the library's current recommendation (see
-        // the SolveOptions.method doc-comment) — .trust today.
-        .trust, .auto => return trust.solveTrust(allocator, scratch_alloc, prep, opts),
+        .trust => return trust.solveTrust(allocator, scratch_alloc, prep, opts),
+        .auto => unreachable, // resolved() maps .auto to Method.recommended
     }
 }
 

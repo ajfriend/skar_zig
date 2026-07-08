@@ -139,7 +139,7 @@ test "A5/S2 finest cells: honest decline at the strict 1e-6 tolerance" {
     // facts.
     const allocator = std.testing.allocator;
 
-    inline for (.{ &A5_CELL, &S2_CELL }) |cell| {
+    for ([_][]const [3]f64{ &A5_CELL, &S2_CELL }) |cell| {
         var o = try skar.solve(allocator, cell, .{ .method = .alternating }); // default gap_tol = 1e-6
         defer o.deinit();
         try std.testing.expect(std.meta.activeTag(o) == .did_not_converge);

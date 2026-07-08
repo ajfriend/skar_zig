@@ -26,7 +26,7 @@ test "max_outer cap forces DidNotConverge on any input" {
     };
     // The cap is a shared contract: both paths must respect it (the
     // trust path counts opening + TR + recert iterations against it).
-    inline for (.{ sphar.Method.alternating, sphar.Method.trust }) |method| {
+    for ([_]sphar.Method{ .alternating, .trust }) |method| {
         var outcome = try sphar.solve(allocator, &pts, .{
             .max_outer = 1,
             .gap_tol = 1e-20,

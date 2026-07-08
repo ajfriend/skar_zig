@@ -137,12 +137,11 @@ pub const SolveOptions = struct {
     /// Solver path selection.
     ///
     ///   .auto  — the default: resolves to the library's recommended
-    ///            method for this version — currently a pure alias for
-    ///            .trust. The resolution MAY change between minor
-    ///            versions as methods improve; pin a concrete method
-    ///            below if you need version-stable solver behavior.
-    ///            The outcome's `diag` union always records which
-    ///            concrete path ran.
+    ///            method for this version, `Method.recommended` (the
+    ///            single place the resolution is defined). The
+    ///            resolution MAY change between minor versions as
+    ///            methods improve; pin a concrete method below if you
+    ///            need version-stable solver behavior.
     ///   .trust — trust-region descent on the reduced convex
     ///            objective h(b) = min_A(−log det A) over the
     ///            sphere, using the alternating path's inner MVEE
@@ -168,14 +167,31 @@ pub const SolveOptions = struct {
 
 /// Solver path selector for `SolveOptions.method` (see that field's
 /// doc-comment for the semantics of each variant).
-pub const Method = enum { alternating, trust, auto };
+pub const Method = enum {
+    alternating,
+    trust,
+    auto,
+
+    /// The concrete method `.auto` resolves to in this version — THE
+    /// single source of truth for the alias. Re-pointing `.auto` in a
+    /// future version means changing this one declaration (and the
+    /// alias-identity test in tests/methods_test.zig, which pins it).
+    pub const recommended: Method = .trust;
+
+    /// Resolve `.auto` to its concrete method; concrete methods map to
+    /// themselves. `solve`'s dispatch switches on this.
+    pub fn resolved(self: Method) Method {
+        return if (self == .auto) recommended else self;
+    }
+};
 
 /// Per-algorithm diagnostics, tagged by the solver path that produced
 /// the outcome. The mathematical contract — Q, sigma, gap, cert — is
 /// shared and method-independent; everything in here is diagnostic and
 /// algorithm-specific, so each path gets its own well-typed struct
-/// instead of overloading shared counters. Under `method = .auto` the
-/// tag additionally records WHICH path produced the returned outcome.
+/// instead of overloading shared counters. The tag records the
+/// concrete path that ran; under `method = .auto` that is
+/// `Method.recommended`.
 pub const Diagnostics = union(enum) {
     alternating: AlternatingDiagnostics,
     trust: TrustDiagnostics,

@@ -8,7 +8,7 @@
 //! Part 2: the wide-cap robustness grid (random caps by width × seed
 //! × density) × {alternating, trust} — DNC counts and median times.
 //! Answers "does the trust default close the wide-angle hole, and at
-//! what price?" (.auto is a pure alias for .trust; no separate column.)
+//! what price?" (.auto is a pure alias for Method.recommended; no separate column.)
 //!
 //! Force-built ReleaseFast (timing meaningless in Debug).
 
