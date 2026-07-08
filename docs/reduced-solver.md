@@ -291,13 +291,46 @@ Done (this branch):
       dropped ~25% since the reduced fallback beats the joint solve on
       the widest cells).
 
+- [x] **Oracle cost tuning** (2026-07-07): two changes — (a) FW runs in
+      bursts of 64 with a stall exit on the design value (κ-limited
+      cells stop grinding the full budget at noise amplitude); (b)
+      certification of accepted TR iterates is gated on the accepted
+      step's predicted decrease (`pred ≤ 100·gap_tol` — pred is in gap
+      units, so the gate is scale-aware; a ‖g‖-based gate was tried
+      first and mis-fired on elongated regions whose Hessian scale
+      ≫ B₀). Results, survey aggregates (the load-bearing numbers):
+      h3 10k 2.0× → **1.45×** fast; s2 10k @1e-6 → **0.84×** (faster
+      than fast); a5 10k @1e-6 **1.10×**; states/countries equal
+      wall-time. Residual gap confined to mid-size synthetic caps
+      (np400 ~2.3×, ha_14 ~2.7×) where mid-descent oracle evaluations
+      legitimately run more FW than fast's 2-steps-per-outer. All
+      convergence numbers identical to pre-tuning (fixtures, DGGS
+      parity, states 50/50, countries 177/177, a5_res0, rotations,
+      slow suite green).
+
+      Two failed variants documented for the record, both re-runs of
+      the oracle-consistency lesson: a burst of 16 let mveeFw's
+      destructive near-singular drop step corrupt-and-partially-recover
+      *inside* the stall window, so the exit landed on a corrupted
+      state (New York DNC'd — trial h stuck 2.9e-3 high at Δ = 1e-12);
+      and an incoming-baseline restore (round-0 redux) re-broke the
+      wide caps by returning unrefined states. The burst must be big
+      enough for the drop to self-heal before the h-sample; no
+      snapshots, no restores.
+
 Open, roughly in order:
 
-- [ ] **Oracle cost tuning**: adaptive inner tolerance (loose early,
-      tighten with the certified gap), skip certification while the
-      gradient is large, revisit `INNER_ITERS`. Target: close the 3–7×
-      gap on dense mid-width inputs without disturbing the 0–1-iteration
-      behavior on small cells.
+- [ ] **Guard `mveeFw`'s near-singular drop step at the source.** Now
+      bitten four times (h3_res09/cap82 during the rounds detour, New
+      York during tuning): when det_G ≤ NEAR_SING but the pairwise
+      progress `a = g_max − g_min` is noise-level, the full-mass drop
+      `step = w[jm]` destroys a needed support point that polish
+      cannot resurrect. Fixing it in `mveeFw` (e.g. require genuine
+      progress before the full drop, or take the vanilla step there)
+      would let the reduced oracle drop its burst-size defense — but
+      it changes the fast path, so it needs the CANARY gauntlet and a
+      human-confirmed decision. The away-step FW work
+      (docs/away-step-fw.md) subsumes this.
 - [ ] **CANARY-style iteration pins for `.reduced`** on the small-cell
       hot path (mirror `tests/dggs_dnc_test.zig`) before any default
       flip.

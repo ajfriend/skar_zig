@@ -159,20 +159,39 @@ pub const joint = struct {
 /// convex objective h(b) over the sphere, with the fast path's inner
 /// MVEE machinery as the oracle. Prototype values — not yet tuned.
 pub const reduced = struct {
-    /// Inner MVEE oracle budget per h-evaluation: one FW run to
-    /// INNER_TOL (early exit — easy evaluations stay cheap) + one
-    /// Newton polish. Deliberately the simple form: its states are
-    /// inner-(near-)optimal so the envelope gradient −3·c is the
-    /// gradient of the h reported, keeping the trust region's
-    /// (value, gradient) pair consistent. History note: a
-    /// rounds/burst/patience oracle with best-w tracking was tried and
-    /// reverted — every variant could return under-refined states
-    /// whose reported gradient wasn't the gradient of the reported h,
-    /// which the trust region reads as a systematically wrong slope
-    /// (measured ρ → −7.95 as Δ → 0 on cap82). Floor-regime cert
-    /// pathologies are handled by the RECERT phase instead.
-    pub const INNER_ITERS: u32 = 300;
+    /// Inner MVEE oracle per h-evaluation: FW in bursts of INNER_BURST
+    /// steps with a stall exit — stop when a burst improves the design
+    /// value by less than INNER_STALL_REL·(1+|h|) — up to the
+    /// INNER_ITERS total budget, then ONE Newton polish. The stall exit
+    /// is what keeps κ-limited cells (whose g-noise sits above any
+    /// reachable INNER_TOL) from grinding the whole budget at noise
+    /// amplitude; the burst FW itself remains monotone-in-intent with
+    /// no snapshot/restore machinery, and the single final polish means
+    /// the returned state is inner-(near-)optimal so the envelope
+    /// gradient −3·c is the gradient of the h reported. History note:
+    /// a rounds/burst/patience oracle with per-round polish and best-w
+    /// tracking was tried and reverted — it could return under-refined
+    /// snapshot states whose reported gradient wasn't the gradient of
+    /// the reported h, which the trust region reads as a
+    /// systematically wrong slope (measured ρ → −7.95 as Δ → 0 on
+    /// cap82). Floor-regime cert pathologies are handled by the RECERT
+    /// phase instead.
+    pub const INNER_ITERS: u32 = 320;
+    pub const INNER_BURST: u32 = 64;
     pub const INNER_TOL: f64 = 1e-11;
+    pub const INNER_STALL_REL: f64 = 1e-9;
+    /// Certify an accepted trust-region iterate only once the accepted
+    /// step's predicted decrease has fallen to within a couple of
+    /// orders of gap_tol: while the model still predicts ≫ gap_tol of
+    /// remaining descent, no certificate can pass and computing one is
+    /// pure overhead (early wide-cap iterates). pred is in the same
+    /// units as the gap, so this gate is scale-aware — a ‖g‖-based gate
+    /// was tried first and mis-fired on elongated regions whose Hessian
+    /// scale ≫ B0 (states survey: certificates that would have passed
+    /// were skipped). The iteration-0 certificate is always computed
+    /// (it is what makes already-optimal inputs converge in 0
+    /// iterations), and the RECERT phase always certifies.
+    pub const CERT_PRED_FACTOR: f64 = 100.0;
     /// Trust-region radius: initial, max, shrink on rejection, growth
     /// on a very successful step (ratio ≥ ETA_GOOD with a full-length
     /// step), and the collapse threshold that ends the solve. Radii

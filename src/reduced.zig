@@ -133,14 +133,33 @@ fn evalH(
 
     if (first) core.initWeights(wb.Ps, wb.w);
 
-    // Inner solve: one FW run to tolerance + one Newton polish — the
-    // proven-simple oracle. Its states are inner-(near-)optimal, so the
-    // envelope gradient −3·c below is the gradient of the h reported.
-    // Floor-regime pathologies (certificates that fail at noise level
-    // no matter how the inner state is refined) are NOT the oracle's
-    // job — they're handled by the re-certification phase in
-    // solveReduced, which is where the fast path handles them too.
-    core.mveeFw(wb.Ps, rc.INNER_ITERS, rc.INNER_TOL, wb.Ql, wb.w);
+    // Inner solve: FW in bursts with a stall exit, then ONE Newton
+    // polish. The stall exit stops κ-limited inputs (g-noise above any
+    // reachable tolerance) from grinding the whole budget at noise
+    // amplitude; the single final polish keeps the returned state
+    // inner-(near-)optimal, so the envelope gradient −3·c below is the
+    // gradient of the h reported. The burst is deliberately LARGE:
+    // mveeFw's destructive near-singular drop step can fire mid-burst
+    // at a converged design and needs room to self-heal (FW re-adds the
+    // dropped point) before the boundary h-sample — with a small burst,
+    // drop-and-recover nets out as "no progress" and the stall exit
+    // lands on a corrupted state (measured on New York). No snapshots,
+    // no restores — the reverted rounds-oracle experiments showed any
+    // state-juggling here hands the trust region (value, gradient)
+    // pairs that don't belong together. See config.reduced.INNER_*.
+    var spent: u32 = 0;
+    var h_prev: f64 = std.math.inf(f64);
+    while (spent < rc.INNER_ITERS) : (spent += rc.INNER_BURST) {
+        core.mveeFw(wb.Ps, rc.INNER_BURST, rc.INNER_TOL, wb.Ql, wb.w);
+        // Cheap progress check on the design value (one 3×3 Cholesky).
+        var S_chk = Mat3.zero;
+        for (wb.Ql, 0..) |q, i| S_chk.addSymRank1(wb.w[i], q);
+        const L_chk = S_chk.cholesky() orelse break;
+        const logdet_chk = 2.0 * (@log(L_chk.m[0]) + @log(L_chk.m[4]) + @log(L_chk.m[8]));
+        const h_chk = 0.5 * (logdet_chk + 3.0 * @log(3.0)) + 2.0 * @log(s_scale);
+        if (h_chk >= h_prev - rc.INNER_STALL_REL * (1.0 + @abs(h_chk))) break;
+        h_prev = h_chk;
+    }
     const polished = newtonPolish(wb.Ql, wb.w, algo.ACTIVE_THRESH, 20, tol.NEWTON_INNER, &wb.newton_scratch);
 
     // Design value in the scaled chart: h = ½(log det S + 3·ln 3) +
@@ -313,14 +332,20 @@ pub fn solveReduced(
         b = b_trial;
         cur = trial;
 
-        // Certify the accepted iterate (fast-path machinery).
-        last_gap = try certify.run(cur, b, Xw, &wb);
-        final_gap = last_gap.gap;
-        if (@abs(final_gap) <= opts.gap_tol) {
-            converged = true;
-            break;
+        // Certify the accepted iterate (fast-path machinery) — but only
+        // once the accepted step's predicted decrease is within a
+        // couple of orders of gap_tol; while the model still predicts
+        // ≫ gap_tol of remaining descent no certificate can pass. See
+        // config.reduced.CERT_PRED_FACTOR.
+        if (step.pred <= rc.CERT_PRED_FACTOR * opts.gap_tol) {
+            last_gap = try certify.run(cur, b, Xw, &wb);
+            final_gap = last_gap.gap;
+            if (@abs(final_gap) <= opts.gap_tol) {
+                converged = true;
+                break;
+            }
+            if (final_gap < -tol.NEG_GAP) return SolveError.NegativeDualityGap;
         }
-        if (final_gap < -tol.NEG_GAP) return SolveError.NegativeDualityGap;
 
         // BFGS update with the transported pair (s, y); skip on flat
         // curvature to keep B PD.
