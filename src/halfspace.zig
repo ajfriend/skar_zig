@@ -41,8 +41,14 @@ pub fn halfspaceCheck(allocator: std.mem.Allocator, X: []const Vec3) !HalfspaceR
 
     var b_out: ?Vec3 = null;
 
+    // Iteration cap is a stall backstop only; the intended exits are
+    // the all-positive witness (feasible) and the z-exhaustion floor
+    // (infeasible or margin below ~1e-8 — see tol.FW_Z_EXHAUSTED).
+    // Sized so small-margin feasible inputs (m just above 1e-8, where
+    // the witness dots xᵢ·z ~ m² sit barely above noise) have room to
+    // converge in direction before the backstop fires.
     var it: u32 = 0;
-    while (it < 2000) : (it += 1) {
+    while (it < 5000) : (it += 1) {
         var j: usize = 0;
         var k: ?usize = null;
         var g_min: f64 = 1e30;

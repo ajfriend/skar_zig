@@ -298,12 +298,23 @@ pub const Converged = struct {
     }
 };
 
-/// Proven-infeasible outcome. Carries the active-set certificate
-/// (the λ on the inputs whose convex combination is near zero) and
-/// the witness magnitude.
+/// Infeasibility outcome. Carries the active-set certificate (the λ
+/// on the inputs whose convex combination is near zero) and the
+/// witness magnitude.
+///
+/// PRECISION FLOOR: the witness is exact only up to f64 — this
+/// outcome means "no hemisphere contains all points, OR the deepest
+/// hemisphere's margin is below ~1e-8" (`tol.FW_Z_EXHAUSTED` holds
+/// the derivation). `residual` bounds that alternative: a feasible
+/// input can only land here if its margin is ≤ residual. Inputs whose
+/// feasibility genuinely matters at margins below 1e-8 are beyond
+/// what unit-vector f64 coordinates can express reliably.
 pub const Infeasible = struct {
     cert: Cert,
-    /// Witness magnitude: ‖∑ λᵢ xᵢ‖. Near zero by construction.
+    /// Witness magnitude: ‖∑ λᵢ xᵢ‖. Near zero = sharp Farkas
+    /// certificate; it also bounds the feasibility-margin alternative
+    /// above (a feasible input reaching this outcome has margin
+    /// ≤ residual).
     residual: f64,
     allocator: std.mem.Allocator,
 
@@ -349,7 +360,9 @@ pub const DidNotConverge = struct {
 pub const Outcome = union(enum) {
     /// A valid cone was found; full eigendecomposition + primal certificate.
     converged: Converged,
-    /// Proven infeasible — no hemisphere contains all input points.
+    /// Infeasible within f64: no hemisphere contains all input
+    /// points, or the deepest hemisphere's margin is below ~1e-8
+    /// (bounded by `Infeasible.residual`; see that doc).
     infeasible: Infeasible,
     /// Solver hit `max_outer` without closing the gap. Last iterate
     /// is available for inspection; no certified cone.
