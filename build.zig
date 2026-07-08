@@ -73,7 +73,6 @@ pub fn build(b: *std.Build) void {
     addExample(b, skar_mod, cases_mod, target, optimize, "cases", null, "Run examples/cases.zig (run a named case or --all)");
     addExample(b, skar_mod, cases_mod, target, optimize, "bench", .ReleaseFast, "Run examples/bench.zig (per-case timing, release-built)");
     addExample(b, skar_mod, cases_mod, target, optimize, "compare", .ReleaseFast, "Run examples/compare.zig (alternating vs trust vs auto solver paths, release-built)");
-    addExample(b, skar_mod, cases_mod, target, optimize, "bulkcmp", .ReleaseFast, "EXPLORATION PROBE: bulk fair alternating-vs-trust comparison over survey datasets");
 
     // DGGS aspect-ratio survey (see docs/dggs-aspect-survey-plan.md
     // and scripts/dggs/). Standalone exec, not an example: lives under
