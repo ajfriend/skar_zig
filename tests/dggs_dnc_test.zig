@@ -275,7 +275,7 @@ test "CANARY: a harder A5 r30 cell takes more than 2 outer iterations" {
     try std.testing.expect(outcome.converged.diag.alternating.outer_iters > 2);
 }
 
-// ── Reduced-path CANARIES (same cells, same spirit) ──────────────────────
+// ── Trust-path CANARIES (same cells, same spirit) ────────────────────────
 //
 // Iteration pins for the EXPERIMENTAL `.trust` path on the same five
 // cells the alternating-path canaries pin. Same policy: a trip is a signal to

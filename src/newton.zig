@@ -7,8 +7,7 @@
 //!   `w` in place; inactive entries reset to 0 on exit.
 //!
 //! The bordered KKT linear solve is private to this module; the
-//! generic LU it rides on lives in `linalg.zig` (also used by the
-//! joint barrier solver's 9×9 Newton system).
+//! generic LU it rides on lives in `linalg.zig`.
 
 const std = @import("std");
 const linalg = @import("linalg.zig");

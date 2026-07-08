@@ -1,6 +1,6 @@
 //! EXPERIMENTAL trust solver path (`SolveOptions.method = .trust`).
 //!
-//! Trust-region BFGS on the *reduced* convex objective
+//! Trust-region descent on the *reduced* convex objective
 //!
 //!   h(b) = min_A { −log det A : ‖A·xᵢ‖₂ ≤ bᵀxᵢ }
 //!
@@ -79,7 +79,6 @@ const Buffers = struct {
     Ql: []Vec3,
     w: []f64,
     w_bak: []f64,
-    w_round: []f64,
     cert_active: []usize,
     cert_lambdas: []f64,
     /// Scratch for the model-Hessian computation: active indices and
@@ -96,7 +95,6 @@ const Buffers = struct {
             .Ql = try scratch.alloc(Vec3, nw),
             .w = try scratch.alloc(f64, nw),
             .w_bak = try scratch.alloc(f64, nw),
-            .w_round = try scratch.alloc(f64, nw),
             .cert_active = try scratch.alloc(usize, nw),
             .cert_lambdas = try scratch.alloc(f64, nw),
             .act_idx = try scratch.alloc(usize, nw),
@@ -107,12 +105,27 @@ const Buffers = struct {
     }
 };
 
-/// One h-oracle evaluation at a trial axis. `ok = false` means the
-/// trial left the barrier domain (a point below the feasibility margin
-/// or a rank-deficient design) — the trust region treats it as an
-/// unconditionally rejected step.
+/// Certify a structured iterate: recover the budget-tight A_perp from
+/// the chart moment matrix and run the shared constructed-dual gap.
+/// One recipe for all four certification sites (eager, initial, TR
+/// accept, RECERT); reads the chart buffers (`P_buf`, `w`) that the
+/// preceding oracle/moments computation left in place.
+fn certifyAt(
+    M: Mat2,
+    Q: Mat3x2,
+    b: Vec3,
+    Xw: []const Vec3,
+    wb: *Buffers,
+) SolveError!GapResult {
+    const A_perp = try core.recoverAPerp(wb.P_buf, M);
+    return core.dualityGapConstructed(wb.w, b, Xw, A_perp, Q, &wb.gap_scratch, wb.cert_active, wb.cert_lambdas);
+}
+
+/// One h-oracle evaluation at a trial axis. `evalH` returns null when
+/// the trial leaves the barrier domain (a point below the feasibility
+/// margin or a rank-deficient design) — the trust region treats that
+/// as an unconditionally rejected step.
 const Eval = struct {
-    ok: bool,
     h: f64,
     /// Tangent gradient of h at b in the Q basis: g = −3·c.
     g: Vec2,
@@ -124,24 +137,44 @@ const Eval = struct {
     polish_failed: bool,
 };
 
-const EVAL_FAIL = Eval{ .ok = false, .h = 0, .g = Vec2.zero, .B = Mat2.zero, .Q = undefined, .moments = undefined, .polish_failed = false };
+/// Design state of the current weights in the scaled chart:
+/// S = Σ wᵢ·qᵢ·qᵢᵀ factored, the design value
+/// h = ½(log det S + 3·ln 3) + 2·ln s_scale (D-optimal values shift by
+/// 2·ln s_scale under the rescaling), and the chart moments read
+/// directly off S — with qᵢ = [pᵢ; 1], S's last column IS Σ wᵢ·pᵢ and
+/// its upper-left block IS Σ wᵢ·pᵢpᵢᵀ, so no separate
+/// `computeMoments` pass over the points is needed. Null on a
+/// rank-deficient design.
+const DesignState = struct { L: linalg.Chol3, h: f64, moments: core.Moments };
+
+fn designState(Ql: []const Vec3, w: []const f64, s_scale: f64) ?DesignState {
+    var S = Mat3.zero;
+    for (Ql, 0..) |q, i| S.addSymRank1(w[i], q);
+    const L = S.cholesky() orelse return null;
+    return .{
+        .L = L,
+        .h = 0.5 * (L.logDet() + 3.0 * @log(3.0)) + 2.0 * @log(s_scale),
+        .moments = .{
+            .center = (Vec2{ .m = .{ S.m[2], S.m[5] } }).scale(s_scale),
+            .M = (Mat2{ .m = .{ S.m[0], S.m[1], S.m[1], S.m[4] } }).scale(s_scale * s_scale),
+        },
+    };
+}
 
 /// Evaluate h(b), its tangent gradient, and the chart data needed for
 /// certification. Mutates wb.w (warm start) — caller snapshots/restores
-/// around rejected trials. `margin` guards the projection (−inf for the
-/// initial axis, which halfspaceCheck only guarantees strictly feasible).
+/// around rejected trials. `margin` guards the projection (weights are
+/// always warm here: the eager phase seeds them via initWeights before
+/// the first call).
 fn evalH(
     b: Vec3,
     Xw: []const Vec3,
     wb: *Buffers,
     margin: f64,
-    first: bool,
-) Eval {
+) ?Eval {
     const Q = b.orthoBasis();
-    if (!projectGnomonic(Xw, b, Q, wb.P_buf, margin)) return EVAL_FAIL;
+    if (!projectGnomonic(Xw, b, Q, wb.P_buf, margin)) return null;
     const s_scale = core.rescaleP(wb.P_buf, wb.Ps);
-
-    if (first) core.initWeights(wb.Ps, wb.w);
 
     // Inner solve: pairwise FW in bursts with a stall exit on the
     // design value, then ONE Newton polish. The stall exit stops
@@ -164,24 +197,14 @@ fn evalH(
     while (spent < tc.INNER_ITERS) : (spent += tc.INNER_BURST) {
         core.mveeFw(wb.Ps, tc.INNER_BURST, tc.INNER_TOL, wb.Ql, wb.w);
         // Cheap progress check on the design value (one 3×3 Cholesky).
-        var S_chk = Mat3.zero;
-        for (wb.Ql, 0..) |q, i| S_chk.addSymRank1(wb.w[i], q);
-        const L_chk = S_chk.cholesky() orelse break;
-        const logdet_chk = 2.0 * (@log(L_chk.m[0]) + @log(L_chk.m[4]) + @log(L_chk.m[8]));
-        const h_chk = 0.5 * (logdet_chk + 3.0 * @log(3.0)) + 2.0 * @log(s_scale);
-        if (h_chk >= h_prev - tc.INNER_STALL_REL * (1.0 + @abs(h_chk))) break;
-        h_prev = h_chk;
+        const chk = designState(wb.Ql, wb.w, s_scale) orelse break;
+        if (chk.h >= h_prev - tc.INNER_STALL_REL * (1.0 + @abs(chk.h))) break;
+        h_prev = chk.h;
     }
     const polished = newtonPolish(wb.Ql, wb.w, algo.ACTIVE_THRESH, 20, tol.NEWTON_INNER, &wb.newton_scratch);
 
-    // Design value in the scaled chart: h = ½(log det S + 3·ln 3) +
-    // 2·ln s_scale, S = Σ wᵢ·qᵢ·qᵢᵀ (D-optimal design values shift by
-    // 2·ln s_scale under the rescaling).
-    var S = Mat3.zero;
-    for (wb.Ql, 0..) |q, i| S.addSymRank1(wb.w[i], q);
-    const L = S.cholesky() orelse return EVAL_FAIL;
-    const logdet_s = 2.0 * (@log(L.m[0]) + @log(L.m[4]) + @log(L.m[8]));
-    const h = 0.5 * (logdet_s + 3.0 * @log(3.0)) + 2.0 * @log(s_scale);
+    const ds = designState(wb.Ql, wb.w, s_scale) orelse return null;
+    const L = ds.L;
 
     // Model Hessian: the fixed-w (majorant) Hessian of h̃_w on the
     // sphere, entirely in chart quantities. For frozen weights,
@@ -237,14 +260,12 @@ fn evalH(
     Bm.m[0] += sum_wg;
     Bm.m[3] += sum_wg;
 
-    const m = core.computeMoments(wb.Ps, wb.w, s_scale);
     return .{
-        .ok = true,
-        .h = h,
-        .g = m.center.scale(-3.0),
+        .h = ds.h,
+        .g = ds.moments.center.scale(-3.0),
         .B = Bm,
         .Q = Q,
-        .moments = m,
+        .moments = ds.moments,
         .polish_failed = !polished,
     };
 }
@@ -285,7 +306,7 @@ fn doglegStep(B: Mat2, g: Vec2, delta: f64) TrStep {
 }
 
 /// Solve the preprocessed problem by trust-region BFGS on h(b) over
-/// the sphere. Same contract as `solveAlternating` / `solveJoint`.
+/// the sphere. Same contract as `solveAlternating`.
 pub fn solveTrust(
     allocator: std.mem.Allocator,
     scratch_alloc: std.mem.Allocator,
@@ -302,15 +323,7 @@ pub fn solveTrust(
     var converged = false;
     var eager_certified = false;
 
-    var last_gap = GapResult{ .gap = 1e30, .cert_n = 0, .v1 = Vec3.zero, .v2 = Vec3.zero, .sigma = .{ 0, 0 } };
-    var final_gap: f64 = 1e30;
-
-    const certify = struct {
-        fn run(cur_: Eval, b_: Vec3, Xw_: []const Vec3, wb_: *Buffers) SolveError!GapResult {
-            const A_perp = try core.recoverAPerp(wb_.P_buf, cur_.moments.M);
-            return core.dualityGapConstructed(wb_.w, b_, Xw_, A_perp, cur_.Q, &wb_.gap_scratch, wb_.cert_active, wb_.cert_lambdas);
-        }
-    };
+    var last_gap: GapResult = undefined;
 
     // Eager first certificate — the alternating path's exact opening cadence
     // (two FW steps, one polish, certify) BEFORE any full-precision
@@ -335,18 +348,10 @@ pub fn solveTrust(
             polish_failures += 1;
         }
         const m0 = core.computeMoments(wb.Ps, wb.w, s0);
-        const A_perp0 = try core.recoverAPerp(wb.P_buf, m0.M);
-        last_gap = try core.dualityGapConstructed(wb.w, b, Xw, A_perp0, Q0, &wb.gap_scratch, wb.cert_active, wb.cert_lambdas);
-        final_gap = last_gap.gap;
-        // Order matters (mirrors the alternating path's break-before-guard):
-        // a converged-at-noise-level gap can be slightly negative
-        // (seen on H3 r15 cells, gap ~ −5e-9 from κ·ε noise) and must
-        // be accepted before the hard NegGap guard fires.
-        if (@abs(final_gap) <= opts.gap_tol) {
+        last_gap = try certifyAt(m0.M, Q0, b, Xw, &wb);
+        if (try core.gapConverged(last_gap.gap, opts.gap_tol)) {
             converged = true;
             eager_certified = true;
-        } else if (final_gap < -tol.NEG_GAP) {
-            return SolveError.NegativeDualityGap;
         }
     }
 
@@ -355,21 +360,15 @@ pub fn solveTrust(
     // Reuses the alternating path's certification wholesale.
     var cur: Eval = undefined;
     if (!converged) {
-        cur = evalH(b, Xw, &wb, -std.math.inf(f64), false);
-        if (cur.polish_failed) polish_failures += 1;
         // The projection cannot fail at the halfspace axis; a
         // rank-deficient design here means the input slipped past the
-        // coplanarity gate — surface it as the same error the fast
-        // path's recoverAPerp would raise.
-        if (!cur.ok) return SolveError.SingularMoment;
+        // coplanarity gate — surface it as the same error the
+        // alternating path's recoverAPerp would raise.
+        cur = evalH(b, Xw, &wb, -std.math.inf(f64)) orelse return SolveError.SingularMoment;
+        if (cur.polish_failed) polish_failures += 1;
 
-        last_gap = try certify.run(cur, b, Xw, &wb);
-        final_gap = last_gap.gap;
-        if (@abs(final_gap) <= opts.gap_tol) {
-            converged = true;
-        } else if (final_gap < -tol.NEG_GAP) {
-            return SolveError.NegativeDualityGap;
-        }
+        last_gap = try certifyAt(cur.moments.M, cur.Q, b, Xw, &wb);
+        converged = try core.gapConverged(last_gap.gap, opts.gap_tol);
     }
 
     // Trust-region state. The model Hessian is per-evaluation (the
@@ -403,9 +402,9 @@ pub fn solveTrust(
         const b_trial = Vec3.lincomb(1.0, b, 1.0, cur.Q.apply(step.u)).normalize();
 
         @memcpy(wb.w_bak, wb.w);
-        const trial = evalH(b_trial, Xw, &wb, algo.FEAS_MARGIN, false);
+        const trial = evalH(b_trial, Xw, &wb, algo.FEAS_MARGIN);
 
-        const rho: f64 = if (trial.ok) (cur.h - trial.h) / step.pred else -1.0;
+        const rho: f64 = if (trial) |t| (cur.h - t.h) / step.pred else -1.0;
         if (rho < tc.ETA) {
             // Reject: restore the warm-start weights, shrink the radius
             // (relative to the step actually attempted, so interior
@@ -418,9 +417,9 @@ pub fn solveTrust(
 
         // Accept. The trial evaluation carries its own model Hessian in
         // its own tangent basis — nothing to transport.
-        if (trial.polish_failed) polish_failures += 1;
+        if (trial.?.polish_failed) polish_failures += 1;
         b = b_trial;
-        cur = trial;
+        cur = trial.?;
 
         // Certify the accepted iterate (alternating-path machinery) — but only
         // once the accepted step's predicted decrease is within a
@@ -428,13 +427,11 @@ pub fn solveTrust(
         // ≫ gap_tol of remaining descent no certificate can pass. See
         // config.trust.CERT_PRED_FACTOR.
         if (step.pred <= tc.CERT_PRED_FACTOR * opts.gap_tol) {
-            last_gap = try certify.run(cur, b, Xw, &wb);
-            final_gap = last_gap.gap;
-            if (@abs(final_gap) <= opts.gap_tol) {
+            last_gap = try certifyAt(cur.moments.M, cur.Q, b, Xw, &wb);
+            if (try core.gapConverged(last_gap.gap, opts.gap_tol)) {
                 converged = true;
                 break;
             }
-            if (final_gap < -tol.NEG_GAP) return SolveError.NegativeDualityGap;
         }
 
         if (rho < tc.RHO_POOR) {
@@ -477,14 +474,11 @@ pub fn solveTrust(
                 polish_failures += 1;
             }
             const m = core.computeMoments(wb.Ps, wb.w, s_scale);
-            const A_perp = try core.recoverAPerp(wb.P_buf, m.M);
-            last_gap = try core.dualityGapConstructed(wb.w, b, Xw, A_perp, Q, &wb.gap_scratch, wb.cert_active, wb.cert_lambdas);
-            final_gap = last_gap.gap;
-            if (@abs(final_gap) <= opts.gap_tol) {
+            last_gap = try certifyAt(m.M, Q, b, Xw, &wb);
+            if (try core.gapConverged(last_gap.gap, opts.gap_tol)) {
                 converged = true;
                 break;
             }
-            if (final_gap < -tol.NEG_GAP) return SolveError.NegativeDualityGap;
             // Axis micro-step along the h-gradient (plain, undamped —
             // ‖center‖ is at noise scale here). This is the numerical
             // re-sample the alternating path gets for free each iteration.
@@ -500,7 +494,6 @@ pub fn solveTrust(
         converged,
         b,
         last_gap,
-        final_gap,
         .{ .trust = .{
             .eager_certified = eager_certified,
             .tr_iters = tr_iters,
@@ -509,7 +502,6 @@ pub fn solveTrust(
         } },
         wb.cert_active,
         wb.cert_lambdas,
-        last_gap.cert_n,
         prep.work_to_orig,
     );
 }

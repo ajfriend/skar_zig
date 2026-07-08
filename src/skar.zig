@@ -291,9 +291,20 @@ pub fn mveeFw(
     }
 }
 
-/// Away-step Frank–Wolfe for the lifted D-optimal design — stage 1 of
-/// docs/away-step-fw.md: used by the REDUCED path's oracle only; the
-/// alternating path keeps `mveeFw` verbatim (so no alternating-path CANARY exposure).
+/// Noise-floor exit for `mveeFwAway`: stop when its optimality gap has
+/// not improved by AWAY_GAP_IMPR within AWAY_STALL_ITERS iterations.
+/// Local to the (unwired) experimental solver — deliberately NOT in
+/// `config.algo`, which is the audited tuning surface for shipping
+/// paths.
+const AWAY_GAP_IMPR: f64 = 0.9;
+const AWAY_STALL_ITERS: u32 = 24;
+
+/// Away-step Frank–Wolfe for the lifted D-optimal design. NOT wired
+/// into any solver path: it was stage 1 of docs/away-step-fw.md, tried
+/// as the trust path's oracle and reverted (measurably slower than
+/// pairwise on large near-circular supports — see the "Stage 1
+/// findings" there). Kept in-tree for the record with a bit-rot guard
+/// test in tests/methods_test.zig.
 ///
 /// Same per-iteration quantities as `mveeFw` (gradients gᵢ = qᵢᵀS⁻¹qᵢ,
 /// toward-vertex j_max, away-vertex j_min), different decision: pick
@@ -373,12 +384,12 @@ pub fn mveeFwAway(
         // This replaces the caller-side burst/stall machinery: the gap
         // is a sound convergence signal; an h-sample window was a proxy
         // that misread slow-but-genuine descent phases as stalls.
-        if (gap < algo.AWAY_GAP_IMPR * gap_best) {
+        if (gap < AWAY_GAP_IMPR * gap_best) {
             gap_best = gap;
             since_best = 0;
         } else {
             since_best += 1;
-            if (since_best >= algo.AWAY_STALL_ITERS) break;
+            if (since_best >= AWAY_STALL_ITERS) break;
         }
 
         if (toward_gap >= away_gap) {
@@ -738,8 +749,7 @@ pub fn dualityGapConstructed(
     // Routing through M (eigenvalues near 1 at convergence) avoids the
     // ~1e-3 error that sum-of-logs on Z's own ill-conditioned eigenvalues
     // would suffer (hex-degenerate cases, κ(Z) ~ 1e7).
-    const log_det_M = 2.0 * (@log(Lm.m[0]) + @log(Lm.m[4]) + @log(Lm.m[8]));
-    const gap = w_sum.norm() - 3.0 - log_det_M;
+    const gap = w_sum.norm() - 3.0 - Lm.logDet();
     return .{
         .gap = gap,
         .cert_n = k,
@@ -781,7 +791,7 @@ fn buildFarkasCert(allocator: std.mem.Allocator, hs: HalfspaceResult) !Cert {
 /// `X[]` indexing via `work_to_orig` (`null` when no hull reduction
 /// happened). The scalar quality measurement (the `gap` field) lives
 /// on the enclosing variant.
-pub fn buildPrimalCert(
+fn buildPrimalCert(
     allocator: std.mem.Allocator,
     cert_active: []const usize,
     cert_lambdas: []const f64,
@@ -977,8 +987,6 @@ fn solveAlternating(
     // 3) Working buffers — all backed by the arena, freed once at the
     //    end of `solve`.
     var wb = try WorkBuffers.init(scratch_alloc, nw);
-    var cert_n: usize = 0;
-    var final_gap: f64 = 1e30;
 
     var damp = DampState{};
     var outer_count: u32 = 0;
@@ -1032,19 +1040,12 @@ fn solveAlternating(
             if (is_full) {
                 const A_perp = try recoverAPerp(wb.P_buf, m.M);
                 last_gap = try dualityGapConstructed(wb.w, b, Xw, A_perp, Q, &wb.gap_scratch, wb.cert_active, wb.cert_lambdas);
-                final_gap = last_gap.gap;
-                cert_n = last_gap.cert_n;
-                // Convergence: |gap| ≤ tol. FP noise can push the gap
-                // slightly negative when the iteration has converged to
-                // a near-zero gap (seen on h3_r15_pent: gap = -8.5e-10
-                // with tol = 1e-6). Accept those as converged before the
-                // hard NegGap guard kicks in.
-                if (@abs(last_gap.gap) <= opts.gap_tol) {
+                // Convergence + broken-certificate guard (see
+                // gapConverged for the load-bearing ordering).
+                if (try gapConverged(last_gap.gap, opts.gap_tol)) {
                     converged = true;
                     break :outer_loop;
                 }
-                // Anything else negative is a broken certificate.
-                if (last_gap.gap < -tol.NEG_GAP) return SolveError.NegativeDualityGap;
             }
 
             const axis = quasiNewtonAxisDirection(outer, m.M, m.center);
@@ -1057,25 +1058,36 @@ fn solveAlternating(
     }
 
     // 5) Build final cert (translate work indices back to original X indices)
-    //    and bundle the outcome. Shared with the joint path.
+    //    and bundle the outcome. Shared with the trust path.
     return buildOutcome(
         allocator,
         converged,
         b,
         last_gap,
-        final_gap,
         .{ .alternating = .{
             .outer_iters = outer_count,
             .newton_polish_failures = newton_polish_failures,
         } },
         wb.cert_active,
         wb.cert_lambdas,
-        cert_n,
         work_to_orig,
     );
 }
 
-/// Shared finalization for the fast and joint paths: translate the
+/// Classify a freshly computed certificate gap. Returns true when the
+/// solve is converged at `gap_tol`. ORDER MATTERS and is shared by
+/// every certification site in both solver paths: a converged-at-noise
+/// gap can be slightly negative (seen on H3 r15 cells, gap ~ −5e-9
+/// from κ·ε noise) and must be ACCEPTED before the hard NegGap guard
+/// fires; anything meaningfully negative beyond `tol.NEG_GAP` is a
+/// broken certificate and errors loudly.
+pub fn gapConverged(gap: f64, gap_tol: f64) SolveError!bool {
+    if (@abs(gap) <= gap_tol) return true;
+    if (gap < -tol.NEG_GAP) return SolveError.NegativeDualityGap;
+    return false;
+}
+
+/// Shared finalization for the alternating and trust paths: translate the
 /// work-set certificate back to caller indices, bundle the full
 /// eigendecomposition (Q's columns are (b, v1, v2) with eigenvalues
 /// (SIGMA_0, sigma[0], sigma[1]); v2 flipped if needed so det Q = +1),
@@ -1085,14 +1097,12 @@ pub fn buildOutcome(
     converged: bool,
     b: Vec3,
     last_gap: GapResult,
-    final_gap: f64,
     diag: api.Diagnostics,
     cert_active: []const usize,
     cert_lambdas: []const f64,
-    cert_n: usize,
     work_to_orig: ?[]const u32,
 ) !Outcome {
-    const cert = try buildPrimalCert(allocator, cert_active, cert_lambdas, cert_n, work_to_orig);
+    const cert = try buildPrimalCert(allocator, cert_active, cert_lambdas, last_gap.cert_n, work_to_orig);
 
     var v1 = last_gap.v1;
     var v2 = last_gap.v2;
@@ -1104,7 +1114,7 @@ pub fn buildOutcome(
         return .{ .converged = .{
             .Q = Qmat,
             .sigma = sigma,
-            .gap = final_gap,
+            .gap = last_gap.gap,
             .diag = diag,
             .cert = cert,
             .allocator = allocator,
@@ -1113,7 +1123,7 @@ pub fn buildOutcome(
         return .{ .did_not_converge = .{
             .Q = Qmat,
             .sigma = sigma,
-            .gap = final_gap,
+            .gap = last_gap.gap,
             .diag = diag,
             .cert = cert,
             .allocator = allocator,

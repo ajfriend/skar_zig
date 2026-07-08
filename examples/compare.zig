@@ -120,8 +120,8 @@ pub fn main() !void {
         "alt",     "iters", "min_us", "ar",
         "trust",   "iters", "min_us", "ar_rel_diff",
     });
-    var n_red: u32 = 0;
-    var red_slowdown_sum: f64 = 0;
+    var n_trust: u32 = 0;
+    var trust_slowdown_sum: f64 = 0;
     for (cases.all) |entry| {
         const pts = entry.case.points;
         const f = try measure(allocator, pts, .alternating, N_RUNS, &times);
@@ -134,8 +134,8 @@ pub fn main() !void {
         // in the ratio rather than dividing by ~0.
         if (f.t_median_us >= 1.0 and std.mem.eql(u8, f.status, "ok")) {
             if (std.mem.eql(u8, r.status, "ok")) {
-                red_slowdown_sum += r.t_median_us / f.t_median_us;
-                n_red += 1;
+                trust_slowdown_sum += r.t_median_us / f.t_median_us;
+                n_trust += 1;
             }
         }
         try stdout.print("{s:22} {d:3} | {s:6} {d:5} {d:9.2} {d:11.6} | {s:7} {d:5} {d:9.2} {e:11.2}\n", .{
@@ -145,7 +145,7 @@ pub fn main() !void {
         });
     }
     try stdout.print("\nmean median-time slowdown vs alternating (mutually-converged, alt ≥ 1µs): trust {d:.1}x ({d})\n", .{
-        red_slowdown_sum / @as(f64, @floatFromInt(n_red)), n_red,
+        trust_slowdown_sum / @as(f64, @floatFromInt(n_trust)), n_trust,
     });
 
     // ---------- Part 2: wide-cap robustness grid ----------

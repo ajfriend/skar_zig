@@ -481,14 +481,18 @@ pub const Chol3 = struct {
     pub inline fn solve(self: Chol3, b: Vec3) Vec3 {
         return self.backSolve(self.forwardSolve(b));
     }
+
+    /// log det of the factored matrix: 2·Σ log(diagonal of L).
+    pub inline fn logDet(self: Chol3) f64 {
+        return 2.0 * (@log(self.m[0]) + @log(self.m[4]) + @log(self.m[8]));
+    }
 };
 
 /// LU factorization with partial pivoting, dimension-generic. Storage
 /// (`data`, `piv`) is borrowed from the caller — `factorize` mutates
 /// `data` in place to hold the packed L\U factors. The returned handle
 /// just binds the dimension to those slices so `solve` can't mismatch
-/// them. Used for the bordered KKT system in `newton.zig` and the 9×9
-/// Newton system in `joint.zig`.
+/// them. Used for the bordered KKT system in `newton.zig`.
 pub const LU = struct {
     data: []f64, // n·n, row-major; L (strict lower, unit diag) + U (upper)
     piv: []usize, // n

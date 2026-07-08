@@ -116,21 +116,10 @@ pub const algo = struct {
     pub const SEED_SPARSE_MIN_POINTS: usize = 16;
     pub const SEED_SPARSE_K: usize = 5;
 
-    /// Noise-floor exit for `mveeFwAway` (the trust path's inner
-    /// solver): stop when the solver's own optimality gap
-    /// max(g_max − 3, 3 − g_min) has not improved by a factor of
-    /// AWAY_GAP_IMPR within AWAY_STALL_ITERS iterations. On κ-limited
-    /// inputs the gap floors at f64 noise and never reaches any fixed
-    /// inner tolerance; on genuinely converging inputs it decreases
-    /// geometrically, so requiring a 10% improvement per window
-    /// separates the two cleanly. FW gaps are non-monotone, hence the
-    /// window rather than a per-iteration test.
-    pub const AWAY_GAP_IMPR: f64 = 0.9;
-    pub const AWAY_STALL_ITERS: u32 = 24;
 };
 
 /// Tuning for the EXPERIMENTAL trust solver path (`src/trust.zig`,
-/// `SolveOptions.method = .trust`): trust-region BFGS on the reduced
+/// `SolveOptions.method = .trust`): trust-region descent on the reduced
 /// convex objective h(b) over the sphere, with the alternating path's inner
 /// MVEE machinery as the oracle. Prototype values — not yet tuned.
 pub const trust = struct {

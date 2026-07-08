@@ -5,13 +5,13 @@
 //!
 //! Coverage:
 //!  - the wide-cap fixtures (tests/wide_cap_cells.zig) that the fast
-//!    path limit-cycles on: `.joint` and `.auto` must converge, with
+//!    path limit-cycles on: `.trust` and `.auto` must converge, with
 //!    the AR matching the Clarabel SDP cross-check;
-//!  - easy-case agreement: `.joint` reproduces `.alternating`'s aspect ratio
+//!  - easy-case agreement: `.trust` reproduces `.alternating`'s aspect ratio
 //!    on a spread of bundled manifest cases;
 //!  - `.auto` never changes the result on inputs where the alternating path
 //!    already converges;
-//!  - certificate sanity on a joint solve (λ ≥ 0, certified gap in
+//!  - certificate sanity on a trust solve (λ ≥ 0, certified gap in
 //!    [−NEG_GAP, gap_tol], primal feasibility ≤ roundoff).
 
 const std = @import("std");
@@ -24,11 +24,11 @@ const GAP_TOL: f64 = 1e-6;
 /// eigenvalues of a near-optimal iterate — allow a few × 1e-4 relative
 /// against the Clarabel reference (which has its own ~1e-8 tolerance).
 const AR_REF_REL_TOL: f64 = 1e-3;
-/// Fast and joint converge to the same optimum; both carry ~gap-sized
+/// Both solvers converge to the same optimum; both carry ~gap-sized
 /// slack in the AR.
 const AR_AGREE_REL_TOL: f64 = 1e-4;
 
-fn expectJointConverges(pts: []const [3]f64, method: sphar.Method, ref_ar: f64) !void {
+fn expectConvergesWithRefAr(pts: []const [3]f64, method: sphar.Method, ref_ar: f64) !void {
     const allocator = std.testing.allocator;
     var outcome = try sphar.solve(allocator, pts, .{ .method = method });
     defer outcome.deinit();
@@ -42,9 +42,9 @@ fn expectJointConverges(pts: []const [3]f64, method: sphar.Method, ref_ar: f64) 
 }
 
 test "trust: wide-cap fixtures converge and match the Clarabel reference AR" {
-    try expectJointConverges(&wide.CAP82_S1, .trust, wide.AR_CAP82_S1);
-    try expectJointConverges(&wide.CAP85_S1, .trust, wide.AR_CAP85_S1);
-    try expectJointConverges(&wide.CAP89_S3, .trust, wide.AR_CAP89_S3);
+    try expectConvergesWithRefAr(&wide.CAP82_S1, .trust, wide.AR_CAP82_S1);
+    try expectConvergesWithRefAr(&wide.CAP85_S1, .trust, wide.AR_CAP85_S1);
+    try expectConvergesWithRefAr(&wide.CAP89_S3, .trust, wide.AR_CAP89_S3);
 }
 
 test "trust: wide-cap fixture iteration ceilings (CANARY-style)" {
@@ -69,9 +69,10 @@ test "trust: wide-cap fixture iteration ceilings (CANARY-style)" {
 
 test "trust: agrees with alternating on bundled cases incl. extreme-kappa cells" {
     const allocator = std.testing.allocator;
-    // Superset of the joint agreement list: the trust path certifies
-    // in the scaled chart, so it must ALSO handle the finest-resolution
-    // extreme-kappa cells that pure .joint floors on.
+    // Includes the finest-resolution extreme-kappa cells: the trust
+    // path certifies in the scaled chart, so it must handle the cells
+    // whose raw-3D certification floors (the removed joint IPM's
+    // failure regime).
     const names = [_][]const u8{
         "hex",           "h3_res09",      "np20",        "np400",
         "ha_05",         "ha_14",         "dnc_small_wide",
@@ -97,9 +98,9 @@ test "trust: agrees with alternating on bundled cases incl. extreme-kappa cells"
 
 test "auto: falls back to trust on the wide-cap fixtures" {
     // Fast alone DNCs on these (pinned below); .auto must rescue them.
-    try expectJointConverges(&wide.CAP82_S1, .auto, wide.AR_CAP82_S1);
-    try expectJointConverges(&wide.CAP85_S1, .auto, wide.AR_CAP85_S1);
-    try expectJointConverges(&wide.CAP89_S3, .auto, wide.AR_CAP89_S3);
+    try expectConvergesWithRefAr(&wide.CAP82_S1, .auto, wide.AR_CAP82_S1);
+    try expectConvergesWithRefAr(&wide.CAP85_S1, .auto, wide.AR_CAP85_S1);
+    try expectConvergesWithRefAr(&wide.CAP89_S3, .auto, wide.AR_CAP89_S3);
 }
 
 test "alternating: wide-cap fixtures still DNC (the gap .auto exists to close)" {
@@ -123,7 +124,6 @@ test "auto: identical to alternating when alternating converges" {
         defer fast_out.deinit();
         var auto_out = try sphar.solve(allocator, case.points, .{ .method = .auto });
         defer auto_out.deinit();
-        // Same path executed ⇒ bit-identical outcome.
         // Same path executed: the auto outcome carries alternating
         // diagnostics identical to the direct solve's.
         try std.testing.expectEqual(

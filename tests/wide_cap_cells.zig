@@ -1,9 +1,9 @@
-//! Wide-cap regression fixtures for the joint solver path.
+//! Wide-cap regression fixtures for the trust solver path.
 //!
 //! Three dense random spherical caps (200 points each) from the
 //! wide-angle DNC investigation (docs/wide-cap-dnc-report.md): the
-//! alternating path limit-cycles on all three at any iteration budget; the
-//! joint barrier path (and Clarabel, cross-checked) solves them.
+//! alternating path limit-cycles on all three at any iteration budget;
+//! the trust path (and Clarabel, cross-checked) solves them.
 //! Point literals are committed (rather than PRNG-generated in the
 //! test) so the fixtures survive std.Random changes.
 //!
