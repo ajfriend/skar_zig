@@ -79,7 +79,7 @@ test "reduced: agrees with fast on bundled cases incl. extreme-kappa cells" {
     }
 }
 
-test "auto: falls back to joint on the wide-cap fixtures" {
+test "auto: falls back to reduced on the wide-cap fixtures" {
     // Fast alone DNCs on these (pinned below); .auto must rescue them.
     try expectJointConverges(&wide.CAP82_S1, .auto, wide.AR_CAP82_S1);
     try expectJointConverges(&wide.CAP85_S1, .auto, wide.AR_CAP85_S1);

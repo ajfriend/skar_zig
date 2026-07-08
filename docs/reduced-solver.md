@@ -271,21 +271,33 @@ Done (this branch):
       1e-3 and 1e-6 — full parity at 1e-3; *better* than fast at the
       1e-6 floor (see the DGGS survey validation section; probe14).
 
+- [x] **States/countries surveys with `.reduced`** (probe19, strict
+      1e-6): states 50/50 both paths, reduced mean 2.7 outer iters vs
+      fast's 13.4, maxRelΔAR 1.7e-8. Countries: reduced **177/177 at
+      the default `max_outer = 100`** with a max of 5 iterations —
+      including France, which the fast path can only solve because the
+      survey exec quietly raises `max_outer` to 1000 for it (France
+      needs 140 fast iterations; Chile 97; both extreme-AR elongated
+      shapes, AR 7.8 / 6.2 — the fast path's degrading-contraction
+      regime, invisible to the second-order model). maxRelΔAR 4.7e-8.
+- [x] **Randomized rotation stress** (probe20: 8 geometries × 20 SO(3)
+      rotations — wide-cap fixtures, arcs to AR 143, patch AR 17320,
+      stretched caps): 160/160 converged, all gaps certified ≤ 1e-6,
+      worst AR drift 1e-7 (mostly ≤ 1e-11); symmetric caps converge in
+      0 iterations under arbitrary rotation. Neither catalogued failure
+      shape appeared.
+- [x] **Repoint `.auto`'s fallback** from `.joint` to `.reduced` — done;
+      grid re-validated (auto 0 DNC everywhere, and its worst-case cost
+      dropped ~25% since the reduced fallback beats the joint solve on
+      the widest cells).
+
 Open, roughly in order:
 
-- [ ] **States/countries surveys with `.reduced`**: AR agreement +
-      iteration counts (Tennessee at 41 fast outer iters is the
-      interesting row).
-- [ ] **Randomized rotation stress** (extreme_aspect-style SO(3) sweeps)
-      on the wide-cap and high-AR geometries; watch for the
-      model-corruption failure shape.
 - [ ] **Oracle cost tuning**: adaptive inner tolerance (loose early,
       tighten with the certified gap), skip certification while the
       gradient is large, revisit `INNER_ITERS`. Target: close the 3–7×
       gap on dense mid-width inputs without disturbing the 0–1-iteration
       behavior on small cells.
-- [ ] **Repoint `.auto`'s fallback** from `.joint` to `.reduced`
-      (strictly better on every measured axis) once the surveys pass.
 - [ ] **CANARY-style iteration pins for `.reduced`** on the small-cell
       hot path (mirror `tests/dggs_dnc_test.zig`) before any default
       flip.

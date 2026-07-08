@@ -1070,23 +1070,25 @@ pub fn solve(
         .auto => {
             var fast_out = try solveFast(allocator, scratch_alloc, prep, opts);
             if (fast_out != .did_not_converge) return fast_out;
-            var joint_out = try joint.solveJoint(allocator, scratch_alloc, prep, opts);
-            switch (joint_out) {
+            // Fallback: the reduced path (dominates the joint IPM on
+            // every measured axis — see docs/reduced-solver.md).
+            var red_out = try reduced.solveReduced(allocator, scratch_alloc, prep, opts);
+            switch (red_out) {
                 .converged => {
                     fast_out.deinit();
-                    return joint_out;
+                    return red_out;
                 },
-                .did_not_converge => |jd| {
+                .did_not_converge => |rd| {
                     // Neither path converged: return the iterate with the
                     // smaller (more trustworthy) gap, free the other.
-                    if (jd.gap <= fast_out.did_not_converge.gap) {
+                    if (rd.gap <= fast_out.did_not_converge.gap) {
                         fast_out.deinit();
-                        return joint_out;
+                        return red_out;
                     }
-                    joint_out.deinit();
+                    red_out.deinit();
                     return fast_out;
                 },
-                // Feasibility was established in preprocess; the joint
+                // Feasibility was established in preprocess; the reduced
                 // path never re-derives infeasibility.
                 .infeasible => unreachable,
             }

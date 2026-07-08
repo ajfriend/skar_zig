@@ -196,5 +196,5 @@ pub fn main() !void {
             });
         }
     }
-    try stdout.print("\n(med_us for a DNC-heavy fast cell is the cost of burning max_outer; auto pays that plus the joint solve.)\n", .{});
+    try stdout.print("\n(med_us for a DNC-heavy fast cell is the cost of burning max_outer; auto pays that plus the reduced fallback.)\n", .{});
 }

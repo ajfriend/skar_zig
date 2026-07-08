@@ -152,7 +152,7 @@ pub const SolveOptions = struct {
     ///            candidate unification of .fast and .joint (see
     ///            src/reduced.zig).
     ///   .auto  — .fast first; if it returns `did_not_converge`, retry
-    ///            with .joint on the same preprocessed working set and
+    ///            with .reduced on the same preprocessed working set and
     ///            return the better outcome.
     ///
     /// Default .fast keeps existing behavior bit-identical while the
