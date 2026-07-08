@@ -276,6 +276,17 @@ pub const tol = struct {
     /// strictly feasible margin-1e-7 rings. See the Infeasible outcome
     /// docs in api.zig for the caller-facing statement of this floor.
     pub const FW_Z_EXHAUSTED: f64 = 1e-16;
+    /// Hard floor for the coplanarity gate: applied even when the
+    /// caller disables the tunable check (`coplanarity_tol <= 0`).
+    /// Exactly rank-deficient input has NO meaningful enclosing-cone
+    /// answer (one tangent eigenvalue -> 0, AR -> inf), and letting it
+    /// through only buys a max_outer burn (alternating) or an internal
+    /// SolveError mislabeled as a library bug (trust) — per-path
+    /// garbage for the same input. Several orders below the 1e-12
+    /// default so the opt-out keeps its meaning ("handle NEAR-coplanar
+    /// yourself") while f64-exact degeneracy is always rejected as the
+    /// typed InputError.CoplanarInput on every path.
+    pub const COPLANAR_FLOOR: f64 = 1e-24;
     /// Sentinel gap meaning "no certificate could be constructed"
     /// (zero active points, or the dual moment's Cholesky failed).
     /// NOT a measured gap: gapConverged never accepts it (regardless

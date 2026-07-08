@@ -964,7 +964,14 @@ fn preprocess(
     //      cone (one tangent eigenvalue → 0) and produces NaN downstream.
     //      Signaled as `InputError.CoplanarInput`, symmetric with
     //      `InsufficientPoints` — both are "X is structurally bad."
-    if (opts.coplanarity_tol > 0 and isCoplanarInput(hp.Xw, b, opts.coplanarity_tol)) {
+    //      `coplanarity_tol <= 0` opts out of the NEAR-coplanar
+    //      rejection only: exactly rank-deficient input is always
+    //      rejected (tol.COPLANAR_FLOOR), uniformly across solver
+    //      paths — there is no meaningful answer for it, and the
+    //      per-path alternatives were a max_outer burn vs. an internal
+    //      error mislabeled as a library bug.
+    const cop_tol = if (opts.coplanarity_tol > 0) opts.coplanarity_tol else tol.COPLANAR_FLOOR;
+    if (isCoplanarInput(hp.Xw, b, cop_tol)) {
         return InputError.CoplanarInput;
     }
 

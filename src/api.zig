@@ -20,7 +20,9 @@
 //!
 //!   - `Outcome` is a tagged union over what the algorithm *found* on
 //!     the input. Callers switch on it to dispatch — use the certificate,
-//!     ask the user to fix the input, retry with more iterations, etc.
+//!     ask the user to fix the input, loosen `gap_tol` or raise
+//!     `max_outer` (see `DidNotConverge` for which remedy fits which
+//!     stop mode), etc.
 //!     Each variant carries only the data meaningful for it; the type
 //!     system prevents reading `aspectRatio()` etc. on a non-converged
 //!     outcome (you have to switch first and reach it through the
@@ -37,6 +39,10 @@ const Mat3 = linalg.Mat3;
 /// Internal-correctness errors. Distinct from `Allocator.Error` (the
 /// host couldn't allocate) — these mean the library produced a result
 /// that violates a theorem and the bug needs to be surfaced loudly.
+/// (Structurally degenerate INPUT does not reach these: preprocess
+/// rejects rank-deficient inputs as `InputError.CoplanarInput` even
+/// when the tunable check is disabled, so a `SolveError` is the
+/// library's fault, not the caller's.)
 /// All three variants share the same tolerance-band shape: ulp-level
 /// negatives on PSD-invariant values are float noise and silently
 /// clipped; anything beyond `tol.NEG_GAP` / `tol.PSD_NEG_REL`
@@ -88,8 +94,9 @@ pub const InputError = error{
     /// literal "all points on a great circle" case is the dominant
     /// instance, but short arcs on non-equatorial latitude circles can
     /// also project to a near-line in the tangent plane and trigger
-    /// this. Disable the check by passing `coplanarity_tol ≤ 0` to
-    /// `solve` if you want to handle this case yourself.
+    /// this. Passing `coplanarity_tol ≤ 0` to `solve` disables only
+    /// the near-coplanar rejection (handle those yourself); exactly
+    /// rank-deficient input is always rejected with this error.
     CoplanarInput,
 };
 
@@ -109,10 +116,14 @@ pub const SolveOptions = struct {
     /// O(κ(A)·ε) ≈ O(σ_max·ε). For well-conditioned inputs this is far
     /// below the 1e-6 default. But very small, far-from-origin scatters
     /// (e.g. sub-meter DGGS cells at finest resolution, where σ_max ~ 1e9)
-    /// floor at ~1e-4–1e-3 and will return `.did_not_converge` at the
-    /// default — correctly, since f64 cannot certify a tighter bound
-    /// (the optimal cone axis is a sub-ulp rotation away). Pass a looser
-    /// `gap_tol` (e.g. 1e-3) for such inputs; the aspect ratio is
+    /// floor at ~1e-4–1e-3, and many will return `.did_not_converge`
+    /// at the default — correctly, since f64 cannot certify a tighter
+    /// bound (the optimal cone axis is a sub-ulp rotation away). WHICH
+    /// cells sit above vs below the floor at a tolerance near it is
+    /// path-dependent at noise level (the status is noisier than the
+    /// answer there; aspect ratios agree across paths to ~1e-7).
+    /// Raising `max_outer` does NOT help at the floor; pass a looser
+    /// `gap_tol` (e.g. 1e-3) for such inputs — the aspect ratio is
     /// input-precision-limited and accurate regardless of the gap.
     gap_tol: f64 = 1e-6,
 
@@ -124,15 +135,24 @@ pub const SolveOptions = struct {
 
     /// Coplanarity check threshold (see `InputError.CoplanarInput`).
     /// `4·det(C) < tol · trace(C)²` on the centered 2D scatter
-    /// triggers rejection. ≤ 0 disables the check; tighter positive
-    /// values catch only essentially-exact coplanarity; looser
-    /// values also reject near-coplanar inputs the solver would
-    /// otherwise NaN on.
+    /// triggers rejection. Tighter positive values catch only
+    /// essentially-exact coplanarity; looser values also reject
+    /// near-coplanar inputs the solver would otherwise NaN on.
+    /// ≤ 0 opts out of the NEAR-coplanar rejection only: exactly
+    /// rank-deficient input (which has no meaningful enclosing-cone
+    /// answer) is always rejected as `CoplanarInput`, on every solver
+    /// path.
     coplanarity_tol: f64 = 1e-12,
 
-    /// Outer iteration cap before returning `Outcome.did_not_converge`.
-    /// Each outer iteration runs `algo.FW_PER_NEWTON` inner cycles +
-    /// one Newton polish + one gap check.
+    /// Iteration cap before returning `Outcome.did_not_converge`.
+    /// What one tick costs depends on `method`: on `.alternating`, an
+    /// outer iteration is `algo.FW_PER_NEWTON` cheap FW cycles + one
+    /// Newton polish + one gap check; on `.trust` (the default via
+    /// `.auto`), the budget counts opening rounds, trust-region
+    /// iterations (each a full-precision inner-oracle evaluation —
+    /// substantially more work per tick), and re-certification
+    /// attempts. The trust path can also stop BELOW the cap when its
+    /// merit function is stationary — see `DidNotConverge`.
     max_outer: u32 = 100,
 
     /// Solver path selection.
@@ -375,8 +395,13 @@ pub const Outcome = union(enum) {
     /// points, or the deepest hemisphere's margin is below ~1e-8
     /// (bounded by `Infeasible.residual`; see that doc).
     infeasible: Infeasible,
-    /// Solver hit `max_outer` without closing the gap. Last iterate
-    /// is available for inspection; no certified cone.
+    /// The gap did not close, either because the iteration budget
+    /// (`max_outer`) ran out or — on the trust path — because the
+    /// solver reached a stationary point whose certificate stays
+    /// above `gap_tol` (the f64 gap floor; retrying with a larger
+    /// `max_outer` changes nothing there — loosen `gap_tol` instead,
+    /// see its doc). Last certified iterate is available for
+    /// inspection; no certified cone.
     did_not_converge: DidNotConverge,
 
     pub fn deinit(self: *Outcome) void {
