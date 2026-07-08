@@ -336,22 +336,57 @@ pub fn solveTrust(
     // upper-bound check — it never feeds the trust-region model, and
     // the (h, g, B̃) triple is only ever constructed from the
     // fully-refined state on the path that continues.
+    var open_iters: u32 = 0;
     {
-        const Q0 = b.orthoBasis();
+        var Q = b.orthoBasis();
         // b0 comes from halfspaceCheck (strictly feasible), so the
         // projection cannot fail.
-        _ = projectGnomonic(Xw, b, Q0, wb.P_buf, -std.math.inf(f64));
-        const s0 = core.rescaleP(wb.P_buf, wb.Ps);
+        _ = projectGnomonic(Xw, b, Q, wb.P_buf, -std.math.inf(f64));
+        var s_scale = core.rescaleP(wb.P_buf, wb.Ps);
         core.initWeights(wb.Ps, wb.w);
         core.mveeFw(wb.Ps, algo.FW_PER_NEWTON, 0.0, wb.Ql, wb.w);
         if (!newtonPolish(wb.Ql, wb.w, algo.ACTIVE_THRESH, 20, tol.NEWTON_INNER, &wb.newton_scratch)) {
             polish_failures += 1;
         }
-        const m0 = core.computeMoments(wb.Ps, wb.w, s0);
-        last_gap = try certifyAt(m0.M, Q0, b, Xw, &wb);
+        var m = core.computeMoments(wb.Ps, wb.w, s_scale);
+        last_gap = try certifyAt(m.M, Q, b, Xw, &wb);
         if (try core.gapConverged(last_gap.gap, opts.gap_tol)) {
             converged = true;
             eager_certified = true;
+        }
+
+        // Opening rounds: continue the alternating path's outer-loop cadence
+        // (see solveAlternating in skar.zig — axis step from the current
+        // moments, cheap FW cycle, polish + certificate every
+        // FW_PER_NEWTON-th cycle) for up to OPEN_ROUNDS certified
+        // rounds. Mid-size DGGS cells converge right here at
+        // alternating-path cost; hard inputs fall through to the trust
+        // region having spent a bounded, cheap prefix. See
+        // config.trust.OPEN_ROUNDS.
+        var damp = core.DampState{};
+        const max_rounds = @min(tc.OPEN_ROUNDS, opts.max_outer);
+        var cycle: u32 = 0;
+        while (!converged and open_iters < max_rounds) : (cycle += 1) {
+            const axis = core.quasiNewtonAxisDirection(cycle / algo.FW_PER_NEWTON, m.M, m.center);
+            damp.tick(axis.c_norm);
+            const st = core.acceptBUpdate(Xw, b, Q, axis.u, damp.alpha, wb.P_buf, wb.Ps);
+            b = st.b;
+            Q = st.Q;
+            s_scale = st.s_scale;
+
+            core.mveeFw(wb.Ps, 1, 0.0, wb.Ql, wb.w);
+            const is_full = (cycle % algo.FW_PER_NEWTON == algo.FW_PER_NEWTON - 1);
+            if (is_full) {
+                if (!newtonPolish(wb.Ql, wb.w, algo.ACTIVE_THRESH, 20, tol.NEWTON_INNER, &wb.newton_scratch)) {
+                    polish_failures += 1;
+                }
+            }
+            m = core.computeMoments(wb.Ps, wb.w, s_scale);
+            if (is_full) {
+                open_iters += 1;
+                last_gap = try certifyAt(m.M, Q, b, Xw, &wb);
+                if (try core.gapConverged(last_gap.gap, opts.gap_tol)) converged = true;
+            }
         }
     }
 
@@ -360,10 +395,11 @@ pub fn solveTrust(
     // Reuses the alternating path's certification wholesale.
     var cur: Eval = undefined;
     if (!converged) {
-        // The projection cannot fail at the halfspace axis; a
-        // rank-deficient design here means the input slipped past the
-        // coplanarity gate — surface it as the same error the
-        // alternating path's recoverAPerp would raise.
+        // The projection cannot fail: b is the halfspace axis or an
+        // opening-round axis accepted at FEAS_MARGIN. A rank-deficient
+        // design here means the input slipped past the coplanarity
+        // gate — surface it as the same error the alternating path's
+        // recoverAPerp would raise.
         cur = evalH(b, Xw, &wb, -std.math.inf(f64)) orelse return SolveError.SingularMoment;
         if (cur.polish_failed) polish_failures += 1;
 
@@ -376,7 +412,7 @@ pub fn solveTrust(
     // transport between tangent bases.
     var delta: f64 = tc.DELTA0;
 
-    while (!converged and tr_iters < opts.max_outer) {
+    while (!converged and open_iters + tr_iters < opts.max_outer) {
         tr_iters += 1;
 
         // The majorant Hessian is PSD-in-exact-arithmetic near inner
@@ -467,7 +503,7 @@ pub fn solveTrust(
         // buffers at the rejected axis; re-project at the accepted b.
         _ = projectGnomonic(Xw, b, Q, wb.P_buf, -std.math.inf(f64));
         var s_scale = core.rescaleP(wb.P_buf, wb.Ps);
-        while (recert_attempts < tc.RECERT_MAX and tr_iters + recert_attempts < opts.max_outer) {
+        while (recert_attempts < tc.RECERT_MAX and open_iters + tr_iters + recert_attempts < opts.max_outer) {
             recert_attempts += 1;
             core.mveeFw(wb.Ps, 1, 0.0, wb.Ql, wb.w);
             if (!newtonPolish(wb.Ql, wb.w, algo.ACTIVE_THRESH, 20, tol.NEWTON_INNER, &wb.newton_scratch)) {
@@ -496,6 +532,7 @@ pub fn solveTrust(
         last_gap,
         .{ .trust = .{
             .eager_certified = eager_certified,
+            .open_iters = open_iters,
             .tr_iters = tr_iters,
             .recert_attempts = recert_attempts,
             .polish_failures = polish_failures,

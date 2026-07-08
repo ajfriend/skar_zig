@@ -177,7 +177,7 @@ pub const Diagnostics = union(enum) {
     pub fn totalIters(self: Diagnostics) u32 {
         return switch (self) {
             .alternating => |d| d.outer_iters,
-            .trust => |d| d.tr_iters + d.recert_attempts,
+            .trust => |d| d.open_iters + d.tr_iters + d.recert_attempts,
         };
     }
 };
@@ -197,6 +197,11 @@ pub const TrustDiagnostics = struct {
     /// The eager iteration-0 certificate (the alternating path's
     /// opening cadence at the initial axis) ended the solve.
     eager_certified: bool,
+    /// Alternating-cadence opening iterations run after the eager
+    /// certificate (0..config.trust.OPEN_ROUNDS): cheap certified
+    /// axis-motion rounds before any trust-region work. A solve that
+    /// converges here has tr_iters == 0 and recert_attempts == 0.
+    open_iters: u32,
     /// Trust-region iterations (accepted + rejected trials; each costs
     /// one inner-oracle evaluation).
     tr_iters: u32,

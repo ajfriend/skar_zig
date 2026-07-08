@@ -123,6 +123,21 @@ pub const algo = struct {
 /// convex objective h(b) over the sphere, with the alternating path's inner
 /// MVEE machinery as the oracle. Prototype values — not yet tuned.
 pub const trust = struct {
+    /// Alternating-cadence opening rounds after the eager iteration-0
+    /// certificate, before any trust-region work. Each round is one
+    /// alternating-path outer iteration (FW_PER_NEWTON cheap FW cycles
+    /// with axis motion, Newton polish + certificate on the last),
+    /// warm-started from the eager phase's weights. Motivation:
+    /// mid-size DGGS cells (H3 r9 class, common A5 cells) certify in
+    /// 1–2 alternating iterations, while the full trust apparatus
+    /// (full-precision oracle, TR step, RECERT) costs 3–6× wall time
+    /// on them. The rounds are a bounded prefix, so hard inputs lose
+    /// at most OPEN_ROUNDS cheap iterations (~2 µs each at n = 200)
+    /// before the trust region engages. Safe w.r.t. the
+    /// oracle-consistency lesson: opening certificates are pure
+    /// upper-bound checks and never feed the trust-region model.
+    pub const OPEN_ROUNDS: u32 = 1;
+
     /// Inner MVEE oracle per h-evaluation: FW in bursts of INNER_BURST
     /// steps with a stall exit — stop when a burst improves the design
     /// value by less than INNER_STALL_REL·(1+|h|) — up to the

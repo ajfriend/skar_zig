@@ -98,11 +98,12 @@ pub inline fn computeMoments(Ps: []const [2]f64, w: []const f64, s_scale: f64) M
 
 /// Damping controller for the axis update. Shrinks the step when |c|
 /// grew, grows it when |c| shrank, bounded in [algo.DAMP_MIN, algo.DAMP_MAX].
-const DampState = struct {
+/// (`pub` for the trust path's alternating-cadence opening rounds.)
+pub const DampState = struct {
     alpha: f64 = 1.0,
     prev_c_norm: f64 = 1e30,
 
-    inline fn tick(self: *DampState, c_norm: f64) void {
+    pub inline fn tick(self: *DampState, c_norm: f64) void {
         if (c_norm > self.prev_c_norm) {
             self.alpha *= algo.DAMP_SHRINK;
             if (self.alpha < algo.DAMP_MIN) self.alpha = algo.DAMP_MIN;
@@ -124,9 +125,9 @@ const DampState = struct {
 /// Skip the whole check for the first algo.AXIS_WARMUP iters — easy cases
 /// converge inside the warmup and pay zero preconditioner cost. See
 /// docs/mvee_derivation.md "Quasi-Newton axis update" appendix for history.
-const AxisStep = struct { u: Vec2, c_norm: f64 };
+pub const AxisStep = struct { u: Vec2, c_norm: f64 };
 
-inline fn quasiNewtonAxisDirection(outer: u32, M: Mat2, center: Vec2) AxisStep {
+pub inline fn quasiNewtonAxisDirection(outer: u32, M: Mat2, center: Vec2) AxisStep {
     const c_norm = center.norm();
     var u: Vec2 = center;
     if (outer >= algo.AXIS_WARMUP and c_norm > tol.TINY) {
