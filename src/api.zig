@@ -134,27 +134,37 @@ pub const SolveOptions = struct {
     /// one Newton polish + one gap check.
     max_outer: u32 = 100,
 
-    /// EXPERIMENTAL — solver path selection (prototype on the
-    /// `investigate/wide-cap-dnc` branch; see docs/wide-cap-dnc-report.md).
+    /// Solver path selection.
     ///
+    ///   .trust — the default: trust-region descent on the reduced
+    ///            convex objective h(b) = min_A(−log det A) over the
+    ///            sphere, using the alternating path's inner MVEE
+    ///            machinery as the oracle and the same certification
+    ///            (see src/trust.zig and docs/trust-solver.md).
+    ///            Converges on every input family constructed to date,
+    ///            including the wide-angle/elongated inputs .alternating
+    ///            structurally cannot (dense caps past ~82°, regions
+    ///            like France at the default iteration budget), at DGGS
+    ///            success-speed parity.
     ///   .alternating — the original solver: alternates single
-    ///            Frank–Wolfe weight steps with damped axis steps. Very
-    ///            fast on the DGGS hot path, but limit-cycles on dense
-    ///            inputs spanning ≳ 81° from the optimal axis.
-    ///   .trust — trust-region descent on the reduced convex
-    ///            objective h(b) = min_A(−log det A) over the sphere,
-    ///            using the alternating path's inner MVEE machinery as
-    ///            the oracle and the same certification. Converges on
-    ///            the wide-angle/elongated inputs the alternating path
-    ///            cannot (see src/trust.zig and docs/trust-solver.md).
+    ///            Frank–Wolfe weight steps with damped axis steps.
+    ///            Kept for continuity (bit-stable with pre-0.6.0
+    ///            defaults) and for large dense near-circular inputs,
+    ///            where it can still be ~2× faster; limit-cycles on
+    ///            dense inputs spanning ≳ 81° from the optimal axis.
     ///   .auto  — .alternating first; if it returns
     ///            `did_not_converge`, retry with .trust on the same
     ///            preprocessed working set and return the better
-    ///            outcome.
+    ///            outcome. Predates the .trust default (it was the
+    ///            robustness fallback); on hard inputs it pays
+    ///            .alternating's full failure budget before .trust
+    ///            runs, so prefer .trust unless you specifically want
+    ///            alternating-first behavior.
     ///
-    /// Default .alternating keeps existing behavior bit-identical while
-    /// the prototype is evaluated.
-    method: Method = .alternating,
+    /// Which cells certify at a tolerance near the f64 gap floor
+    /// (finest-resolution S2/A5) differs between paths at noise level;
+    /// aspect ratios agree to ~1e-7 relative wherever both certify.
+    method: Method = .trust,
 };
 
 /// Solver path selector for `SolveOptions.method` (see that field's

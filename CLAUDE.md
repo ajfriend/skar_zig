@@ -53,5 +53,5 @@ still fast (`tests/a5_res0_test.zig`).
 - `docs/away-step-fw.md` — staged proposal: away-step FW for the inner MVEE
   solver (stage 1: reduced-oracle only, no alternating-path risk; stage 2: alternating-path
   adoption + sparse-gate deletion, requires CANARY sign-off).
-- `docs/trust-solver.md` — the EXPERIMENTAL trust solver
-  (`SolveOptions.method`): writeup, measurements, validation ledger.
+- `docs/trust-solver.md` — the trust solver (the `SolveOptions.method`
+  default since 0.6.0): writeup, measurements, validation ledger.

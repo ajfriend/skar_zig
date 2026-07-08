@@ -33,7 +33,9 @@ test "a5 res-0 dense (320-pt) boundary cells converge at the strict default" {
     // returned .did_not_converge at the default cap; all must now certify.
     var it_max: u32 = 0;
     for (dense.A5_RES0_CELLS) |cell| {
-        var o = try skar.solve(allocator, cell, .{}); // default gap_tol = 1e-6, max_outer = 100
+        // Explicit .alternating: this test guards the sparse-FW-init fix on
+        // that path (the trust path has its own ceilings test below).
+        var o = try skar.solve(allocator, cell, .{ .method = .alternating }); // default gap_tol = 1e-6, max_outer = 100
         defer o.deinit();
         try std.testing.expect(std.meta.activeTag(o) == .converged);
         try std.testing.expect(o.converged.gap <= 1e-6);
@@ -50,7 +52,7 @@ test "a5 res-0 dense (320-pt) boundary cells converge at the strict default" {
 test "a5 res-0 sparse (5-corner) cell converges and matches the dense AR" {
     const allocator = std.testing.allocator;
 
-    var sparse = try skar.solve(allocator, &A5_RES0_CORNERS, .{});
+    var sparse = try skar.solve(allocator, &A5_RES0_CORNERS, .{ .method = .alternating });
     defer sparse.deinit();
     try std.testing.expect(std.meta.activeTag(sparse) == .converged);
     try std.testing.expect(sparse.converged.gap <= 1e-6);
@@ -63,7 +65,7 @@ test "a5 res-0 sparse (5-corner) cell converges and matches the dense AR" {
     // Same cell as dense.A5_RES0_CELLS[0] (the 320-point boundary of
     // 200000000000000) → same minimum-volume enclosing cone, so the aspect
     // ratio must agree. AR is input-precision-limited (~7 digits); loose guard.
-    var full = try skar.solve(allocator, dense.A5_RES0_CELLS[0], .{});
+    var full = try skar.solve(allocator, dense.A5_RES0_CELLS[0], .{ .method = .alternating });
     defer full.deinit();
     try std.testing.expect(std.meta.activeTag(full) == .converged);
     try std.testing.expectApproxEqAbs(
@@ -74,7 +76,7 @@ test "a5 res-0 sparse (5-corner) cell converges and matches the dense AR" {
 }
 
 test "a5 res-0 cells under the trust path: iteration ceilings" {
-    // CANARY-style guard for the EXPERIMENTAL `.trust` path on the
+    // CANARY-style guard for the `.trust` path (the default) on the
     // redundant-boundary family (same flag-don't-bump policy as the
     // dggs canaries). Observed: dense max 2 trust-region iterations,
     // sparse 0 (the initial certificate at the halfspace axis passes

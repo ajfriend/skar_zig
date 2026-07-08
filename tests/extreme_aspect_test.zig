@@ -349,17 +349,24 @@ test "coplanarity check flags great-circle inputs" {
 
     // Sanity: same input does NOT flag when the check is disabled.
     // Doc'd contract: when the caller opts out of the coplanarity
-    // gate, the solver must not crash or NaN on degenerate input.
-    // Empirically it runs to `max_outer` and returns `DidNotConverge`
-    // — the inner FW weights can't concentrate on an active set for
-    // a rank-deficient SDP, so the duality-gap routine never updates
-    // last_gap and the convergence check never trips. Pin that
-    // behavior so a future change that turns degenerate input into a
-    // hard error (or worse, a silent garbage Converged) is caught.
-    var unchecked = try sphar.solve(allocator, canon_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = -1, .max_outer = max_outer });
+    // gate, the solver must not crash, NaN, or return silent garbage
+    // Converged on degenerate input. The two paths honor that
+    // differently — pin both so a change to either shape is caught:
+    //  - .alternating runs to `max_outer` and returns DidNotConverge
+    //    (the inner FW weights can't concentrate on an active set for
+    //    a rank-deficient SDP, so the gap check never trips);
+    //  - .trust surfaces the rank deficiency immediately as the typed
+    //    SolveError.SingularMoment (its oracle Cholesky-factors the
+    //    design and a coplanar chart is exactly rank-deficient).
+    var unchecked = try sphar.solve(allocator, canon_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = -1, .max_outer = max_outer, .method = .alternating });
     defer unchecked.deinit();
     try std.testing.expect(std.meta.activeTag(unchecked) == .did_not_converge);
     try std.testing.expectEqual(max_outer, unchecked.did_not_converge.diag.alternating.outer_iters);
+
+    try std.testing.expectError(
+        sphar.SolveError.SingularMoment,
+        sphar.solve(allocator, canon_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = -1, .max_outer = max_outer, .method = .trust }),
+    );
 }
 
 test "solve rejects malformed inputs with typed errors" {

@@ -1,5 +1,5 @@
-//! Fast-vs-trust solver path comparison (EXPERIMENTAL `.trust`
-//! prototype; see docs/trust-solver.md).
+//! Alternating-vs-trust solver path comparison (see
+//! docs/trust-solver.md).
 //!
 //! Part 1: every bundled manifest case × {alternating, trust} — status,
 //! iterations, min/median wall µs, aspect ratio. Answers "what does

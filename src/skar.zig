@@ -576,7 +576,7 @@ const newton = @import("newton.zig");
 const NewtonScratch = newton.NewtonScratch;
 const newtonPolish = newton.newtonPolish;
 
-// Alternative solver path (EXPERIMENTAL; `SolveOptions.method`).
+// The default solver path (`SolveOptions.method = .trust`).
 const trust = @import("trust.zig");
 
 // ----------------------------------------------------------------

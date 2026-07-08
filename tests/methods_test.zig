@@ -1,4 +1,4 @@
-//! Tests for the EXPERIMENTAL alternative solver paths
+//! Tests for solver path selection
 //! (`SolveOptions.method`; `src/trust.zig`), incl. the away-step FW
 //! solver kept for the record and the wide-cap fixtures with their
 //! Clarabel reference aspect ratios.
@@ -80,7 +80,7 @@ test "trust: agrees with alternating on bundled cases incl. extreme-kappa cells"
     };
     for (names) |name| {
         const case = cases.byName(name) orelse unreachable;
-        var fast_out = try sphar.solve(allocator, case.points, .{});
+        var fast_out = try sphar.solve(allocator, case.points, .{ .method = .alternating });
         defer fast_out.deinit();
         var red_out = try sphar.solve(allocator, case.points, .{ .method = .trust });
         defer red_out.deinit();
@@ -109,7 +109,7 @@ test "alternating: wide-cap fixtures still DNC (the gap .auto exists to close)" 
     // fallback is still needed (see docs/wide-cap-dnc-report.md).
     const allocator = std.testing.allocator;
     for ([_][]const [3]f64{ &wide.CAP82_S1, &wide.CAP85_S1, &wide.CAP89_S3 }) |pts| {
-        var outcome = try sphar.solve(allocator, pts, .{});
+        var outcome = try sphar.solve(allocator, pts, .{ .method = .alternating });
         defer outcome.deinit();
         try std.testing.expect(std.meta.activeTag(outcome) == .did_not_converge);
     }
@@ -120,7 +120,7 @@ test "auto: identical to alternating when alternating converges" {
     const names = [_][]const u8{ "hex", "h3_res09", "np100" };
     for (names) |name| {
         const case = cases.byName(name) orelse unreachable;
-        var fast_out = try sphar.solve(allocator, case.points, .{});
+        var fast_out = try sphar.solve(allocator, case.points, .{ .method = .alternating });
         defer fast_out.deinit();
         var auto_out = try sphar.solve(allocator, case.points, .{ .method = .auto });
         defer auto_out.deinit();
