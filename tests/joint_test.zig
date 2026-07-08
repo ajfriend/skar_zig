@@ -158,6 +158,40 @@ test "auto: identical to fast when fast converges" {
     }
 }
 
+test "mveeFwAway: converges the design and keeps weights in the simplex" {
+    // Bit-rot guard for the away-step FW solver, kept in-tree for the
+    // record after the stage-1 experiment (docs/away-step-fw.md
+    // "Stage 1 findings"): hazard-free by construction but slower than
+    // pairwise as the reduced oracle. This pins its correctness so the
+    // recorded findings stay reproducible.
+    const skar_core = @import("../src/skar.zig");
+    // Slightly irregular quad in the chart: optimal design weights are
+    // non-uniform, support is all 4 points.
+    const P = [_][2]f64{ .{ 1.0, 0.1 }, .{ -0.9, 0.2 }, .{ 0.15, 1.1 }, .{ -0.1, -1.0 } };
+    var Ql: [4]sphar.Vec3 = undefined;
+    var w = [_]f64{ 0.25, 0.25, 0.25, 0.25 };
+    skar_core.mveeFwAway(&P, 200, 1e-10, &Ql, &w);
+
+    var sum: f64 = 0;
+    for (w) |wi| {
+        try std.testing.expect(wi >= 0);
+        sum += wi;
+    }
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), sum, 1e-12);
+
+    // Design optimality: g_i = q_i' S^-1 q_i within tol of 3 on the
+    // support (Kiefer-Wolfowitz).
+    var S = sphar.Mat3.zero;
+    for (Ql, 0..) |q, i| S.addSymRank1(w[i], q);
+    const L = S.cholesky().?;
+    for (Ql, 0..) |q, i| {
+        if (w[i] > 1e-9) {
+            const gi = q.dot(L.solve(q));
+            try std.testing.expect(@abs(gi - 3.0) < 1e-6);
+        }
+    }
+}
+
 test "joint: certificate sanity on a wide-cap solve" {
     const allocator = std.testing.allocator;
     var outcome = try sphar.solve(allocator, &wide.CAP85_S1, .{ .method = .joint });

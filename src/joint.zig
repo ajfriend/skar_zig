@@ -392,8 +392,7 @@ pub fn solveJoint(
     var rhs: [9]f64 = undefined;
     var piv: [9]usize = undefined;
 
-    const mu = if (jc.probe_mu > 0) jc.probe_mu else jc.MU;
-    stages: while (t <= jc.T_MAX and newton_total < jc.MAX_NEWTON_TOTAL) : (t *= mu) {
+    stages: while (t <= jc.T_MAX and newton_total < jc.MAX_NEWTON_TOTAL) : (t *= jc.MU) {
         // Centering: damped Newton on F_t.
         var it: u32 = 0;
         while (it < jc.MAX_NEWTON_PER_STAGE and newton_total < jc.MAX_NEWTON_TOTAL) : (it += 1) {

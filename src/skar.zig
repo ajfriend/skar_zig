@@ -686,10 +686,7 @@ pub fn dualityGapConstructed(
             k += 1;
         }
     }
-    if (k == 0) {
-        if (probe_gap_trace) std.debug.print("    [gap] k=0 (no active weights)\n", .{});
-        return .{ .gap = 1e30, .cert_n = 0, .v1 = v1, .v2 = v2, .sigma = sigma };
-    }
+    if (k == 0) return .{ .gap = 1e30, .cert_n = 0, .v1 = v1, .v2 = v2, .sigma = sigma };
 
     // Materialize A once; per-point matvec in the zᵢ loop is cheaper than a
     // structural A·x decomposition once there are ≥ 2 points.
@@ -723,15 +720,8 @@ pub fn dualityGapConstructed(
     // convergence, so Cholesky on M is well-conditioned. A failed pivot
     // is the indefinite-dual guard — Z not PSD enough for log det.
     const M = L.transpose().mul(Z).mul(L).symmetrize();
-    const Lm = M.cholesky() orelse {
-        if (probe_gap_trace) {
-            std.debug.print("    [gap] M-chol FAIL k={d} sigma=({e:.3},{e:.3}) M=({e:.3},{e:.3},{e:.3};{e:.3},{e:.3},{e:.3};{e:.3},{e:.3},{e:.3})\n", .{
-                k, sigma[0], sigma[1],
-                M.m[0], M.m[1], M.m[2], M.m[3], M.m[4], M.m[5], M.m[6], M.m[7], M.m[8],
-            });
-        }
+    const Lm = M.cholesky() orelse
         return .{ .gap = 1e30, .cert_n = 0, .v1 = v1, .v2 = v2, .sigma = sigma };
-    };
 
     var w_sum = Vec3.zero;
     for (0..k) |i| {
@@ -905,16 +895,6 @@ fn isCoplanarInput(points: []const Vec3, b: Vec3, threshold: f64) bool {
     return tr <= 0 or 4.0 * det < threshold * tr * tr;
 }
 
-/// TEMPORARY probe knobs (see probe_dnc.zig) — revert before commit.
-pub var probe_centroid_init: bool = false;
-pub var probe_trace: bool = false;
-/// Max axis-rotation per b-step, as tan(angle): caps alpha·‖u‖. 0 = off.
-pub var probe_step_cap: f64 = 0;
-/// Inner FW budget per cycle (0 = default 1 step).
-pub var probe_inner_iters: u32 = 0;
-/// Trace why dualityGapConstructed returns its 1e30 sentinel.
-pub var probe_gap_trace: bool = false;
-
 /// Preprocessed problem handed to a solver path: a strictly feasible
 /// axis, the (possibly hull-reduced) working point set, and the map
 /// back to the caller's original indices (`null` = identity).
@@ -964,16 +944,6 @@ fn preprocess(
             .residual = hs.residual,
             .allocator = allocator,
         } } };
-    }
-
-    // TEMPORARY probe: centroid warm-start (revert before commit).
-    if (probe_centroid_init) {
-        var csum = Vec3.zero;
-        for (Xv) |xi| csum = csum.add(xi);
-        const cdir = csum.normalize();
-        var mindot: f64 = 1e30;
-        for (Xv) |xi| mindot = @min(mindot, cdir.dot(xi));
-        if (mindot > algo.FEAS_MARGIN) b = cdir;
     }
 
     // 2) Optional hull preprocessing.
@@ -1050,11 +1020,7 @@ fn solveFast(
         while (cycle < algo.FW_PER_NEWTON) : (cycle += 1) {
             const is_full = (cycle == algo.FW_PER_NEWTON - 1);
 
-            if (probe_inner_iters > 0) {
-                mveeFw(wb.Ps, probe_inner_iters, 1e-9, wb.Ql, wb.w);
-            } else {
-                mveeFw(wb.Ps, 1, 0.0, wb.Ql, wb.w);
-            }
+            mveeFw(wb.Ps, 1, 0.0, wb.Ql, wb.w);
 
             if (is_full) {
                 if (!newtonPolish(wb.Ql, wb.w, algo.ACTIVE_THRESH, 20, tol.NEWTON_INNER, &wb.newton_scratch)) {
@@ -1084,17 +1050,7 @@ fn solveFast(
 
             const axis = quasiNewtonAxisDirection(outer, m.M, m.center);
             damp.tick(axis.c_norm);
-            if (probe_trace and is_full) {
-                var mindot: f64 = 1e30;
-                for (Xw) |xi| mindot = @min(mindot, b.dot(xi));
-                std.debug.print("  it={d:4} gap={e:9.2} c_norm={e:9.2} alpha={d:.3} min_bx={e:9.2} s_scale={e:9.2}\n", .{ outer, last_gap.gap, axis.c_norm, damp.alpha, mindot, s_scale });
-            }
-            var alpha_eff = damp.alpha;
-            if (probe_step_cap > 0 and axis.c_norm > tol.TINY) {
-                const cap_alpha = probe_step_cap / axis.c_norm;
-                if (cap_alpha < alpha_eff) alpha_eff = cap_alpha;
-            }
-            const step = acceptBUpdate(Xw, b, Q, axis.u, alpha_eff, wb.P_buf, wb.Ps);
+            const step = acceptBUpdate(Xw, b, Q, axis.u, damp.alpha, wb.P_buf, wb.Ps);
             b = step.b;
             Q = step.Q;
             s_scale = step.s_scale;

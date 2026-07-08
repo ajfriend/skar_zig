@@ -137,9 +137,6 @@ pub const joint = struct {
     /// Initial barrier parameter t (weight on the −log det A objective
     /// relative to the constraint barriers).
     pub const T0: f64 = 1.0;
-    /// TEMPORARY probe override for MU (0 = use MU). Revert with the
-    /// other probe knobs.
-    pub var probe_mu: f64 = 0;
     /// Barrier growth factor between centering stages.
     pub const MU: f64 = 10.0;
     /// Give up growing t past this — the constraint residuals r_i

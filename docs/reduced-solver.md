@@ -493,6 +493,12 @@ Open, roughly in order:
 
 ## Reproducing
 
+> The `probe*.zig` / `probe_sdp.py` harnesses referenced throughout
+> were development tools, removed before merge per repo convention —
+> they live in the `investigate/wide-cap-dnc` / `exp/majorant-hessian`
+> branch history, and every table they produced is recorded here or in
+> docs/wide-cap-dnc-report.md.
+
 - `zig build ex-compare` — manifest × {fast, joint, reduced} + the
   wide-cap grid × {fast, joint, reduced, auto}.
 - `zig build test -Dslow=true` — includes `tests/joint_test.zig`

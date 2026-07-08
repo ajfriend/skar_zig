@@ -1,11 +1,10 @@
 # Wide-angle inputs DNC: the outer axis iteration limit-cycles past ~81° cap radius
 
-**Status:** root cause characterized; fix direction #1 (joint barrier-Newton
-solver) **prototyped on this branch** — see **Prototype results** below.
-Probe harnesses live on this branch (`investigate/wide-cap-dnc`):
-`probe_dnc.zig` … `probe8.zig` at the repo root plus temporary `probe_*`
-knobs in `src/skar.zig` (all marked TEMPORARY; revert before merging anything
-to `main`).
+**Status:** root cause characterized; resolved by the reduced solver path
+(`docs/reduced-solver.md`) with the joint barrier-Newton solver retained as a
+reference oracle — see **Prototype results** below for how both came to be.
+The probe harnesses referenced throughout were development tools, removed
+before merge; they live in the `investigate/wide-cap-dnc` branch history.
 **Found:** 2026-07-07, sweeping randomized spherical caps of increasing angular
 radius (the `ha_*` construction) past the bundled `ha_14` (80°) case.
 **Summary:** For dense random inputs, the solver hits a **hard wall at cap
@@ -287,6 +286,11 @@ what you want in a cross-check oracle (and it validated the reduced path's
 ARs here, alongside Clarabel).
 
 ## Reproducing
+
+> The probe harnesses below were removed before merge per repo
+> convention; they live in the `investigate/wide-cap-dnc` branch
+> history. All their output tables are recorded in this file and in
+> docs/reduced-solver.md.
 
 All numbers from the probe harnesses on this branch:
 

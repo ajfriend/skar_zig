@@ -283,9 +283,6 @@ fn doglegStep(B: Mat2, g: Vec2, delta: f64) TrStep {
     return .{ .u = u, .pred = model.pred(B, g, u) };
 }
 
-/// TEMPORARY probe knob: per-iteration trace (revert before merge).
-pub var probe_trace: bool = false;
-
 /// Solve the preprocessed problem by trust-region BFGS on h(b) over
 /// the sphere. Same contract as `solveFast` / `solveJoint`.
 pub fn solveReduced(
@@ -392,9 +389,6 @@ pub fn solveReduced(
             B = .{ .m = .{ rc.B0, 0, 0, rc.B0 } };
             step = doglegStep(B, cur.g, delta);
         }
-        if (probe_trace) {
-            std.debug.print("  it={d:3} h={e:12.5} gap={e:9.2} |g|={e:9.2} delta={e:9.2} pred={e:9.2}\n", .{ outer_count, cur.h, final_gap, cur.g.norm(), delta, step.pred });
-        }
         if (step.pred <= 0 or !(step.u.norm() > 0)) break; // stationary: g ≈ 0
         // Below merit resolution the ratio test can never verify a
         // step — hand off to the re-cert phase instead of rejecting
@@ -408,9 +402,6 @@ pub fn solveReduced(
         const trial = evalH(b_trial, Xw, &wb, algo.FEAS_MARGIN, false);
 
         const rho: f64 = if (trial.ok) (cur.h - trial.h) / step.pred else -1.0;
-        if (probe_trace) {
-            std.debug.print("         trial ok={} h={e:12.5} rho={e:9.2}\n", .{ trial.ok, trial.h, rho });
-        }
         if (rho < rc.ETA) {
             // Reject: restore the warm-start weights, shrink the radius
             // (relative to the step actually attempted, so interior
@@ -486,7 +477,6 @@ pub fn solveReduced(
             const A_perp = try core.recoverAPerp(wb.P_buf, m.M);
             last_gap = try core.dualityGapConstructed(wb.w, b, Xw, A_perp, Q, &wb.gap_scratch, wb.cert_active, wb.cert_lambdas);
             final_gap = last_gap.gap;
-            if (probe_trace) std.debug.print("  recert attempt={d:2} gap={e:10.3}\n", .{ attempts, final_gap });
             if (@abs(final_gap) <= opts.gap_tol) {
                 converged = true;
                 break;
