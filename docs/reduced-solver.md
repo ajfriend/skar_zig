@@ -367,16 +367,37 @@ Done (this branch):
       iterations before the fix, 3 after; the A5 common canary went
       30 → 3 and the a5 survey's mean iterations 14.0 → 3.0).
 
-      Results, survey aggregates (the load-bearing numbers): at the
-      strict 1e-6, **s2 0.70× and a5 0.64× — faster than fast while
-      converging more cells**; h3 1.1×; manifest mean 1.4×;
-      states/countries equal-or-faster wall-time at a fraction of the
-      iterations. Residual gap confined to mid-size synthetic caps
-      (np400 ~2.3×, ha_14 ~2.7×) where mid-descent oracle evaluations
-      legitimately run more FW than fast's 2-steps-per-outer. All
+      Results, survey aggregates: at the strict 1e-6, whole-config
+      wall time showed s2 0.70× / a5 0.64× "faster than fast" — but
+      see the CORRECTION below: that was a DNC-burn artifact. All
       convergence behavior held across the battery (fixtures, DGGS
       parity, states 50/50, countries 177/177, a5_res0, rotations,
       slow suite green).
+
+      **CORRECTION (probe27, fair metric).** Whole-config survey times
+      conflate success cost with failure cost: fast honestly burns its
+      full `max_outer` (~50 µs/cell) on floor cells before reporting
+      DNC, so any config containing DNCs overstates fast's time.
+      Measured per-cell (min of 3) on the MUTUALLY-CONVERGED subsets
+      only:
+
+      | system, tol | both-converged | fast | reduced | ratio |
+      |---|---|---|---|---|
+      | h3, either tol | 10000 | 147 ms | 222 ms | **1.50×** |
+      | s2 @1e-3 | 10000 | 121 ms | 124 ms | 1.02× |
+      | s2 @1e-6 | 7250 | 91 ms | 91 ms | **1.00×** |
+      | a5 @1e-3 | 10000 | 163 ms | 175 ms | 1.07× |
+      | a5 @1e-6 | 3879 | 67 ms | 70 ms | 1.04× |
+
+      So on successes: parity on s2/a5, and fast genuinely 1.5× faster
+      on the h3 family — the real hot-path gap the fusion work must
+      close. Two facts survive the correction in reduced's favor: it
+      certifies more floor cells at 1e-6 (net +723 s2 / +466 a5,
+      though not a per-cell superset), and its cost of FAILURE is
+      ~2.5× cheaper (20–25 vs ~50 µs/DNC cell — it stops at
+      stationarity instead of burning the budget), which bulk
+      pipelines at strict tolerance do pay for. Residual on mid-size
+      synthetic caps (np400 ~2.3×, ha_14 ~2.7×) unchanged.
 
       CANARY-cell comparison (fast pins vs reduced, post-fix): H3 r15
       1 → **0**, S2 L30 1 → **0**, A5 hard tail 4 → **3**, H3 r9
