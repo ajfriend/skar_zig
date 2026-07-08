@@ -154,6 +154,39 @@ pub const joint = struct {
     pub const A0_SHRINK: f64 = 0.9;
 };
 
+/// Tuning for the EXPERIMENTAL reduced solver path (`src/reduced.zig`,
+/// `SolveOptions.method = .reduced`): trust-region BFGS on the reduced
+/// convex objective h(b) over the sphere, with the fast path's inner
+/// MVEE machinery as the oracle. Prototype values — not yet tuned.
+pub const reduced = struct {
+    /// Inner MVEE oracle budget per h-evaluation. The oracle breaks
+    /// out early on INNER_TOL, so easy evaluations stay cheap; the
+    /// budget only binds on cold starts of dense inputs. Warm-started
+    /// re-evaluations typically use a handful of steps.
+    pub const INNER_ITERS: u32 = 300;
+    pub const INNER_TOL: f64 = 1e-9;
+    /// Trust-region radius: initial, max, shrink on rejection, growth
+    /// on a very successful step (ratio ≥ ETA_GOOD with a full-length
+    /// step), and the collapse threshold that ends the solve. Radii
+    /// are in tangent-plane units (≈ tan of the axis rotation angle).
+    pub const DELTA0: f64 = 0.5;
+    pub const DELTA_MAX: f64 = 4.0;
+    pub const SHRINK: f64 = 0.25;
+    pub const GROW: f64 = 2.5;
+    pub const DELTA_MIN: f64 = 1e-14;
+    /// Step acceptance thresholds on ρ = actual/predicted decrease.
+    pub const ETA: f64 = 0.05;
+    pub const ETA_GOOD: f64 = 0.7;
+    /// Initial BFGS model Hessian B = B0·I. For a near-circular cell
+    /// the true Hessian of h at the optimum is ≈ 3·I (h ≈ (3/2)‖c‖²
+    /// locally), so the first Newton-like step is well-scaled on the
+    /// hot-path geometry.
+    pub const B0: f64 = 3.0;
+    /// Skip the BFGS update when the curvature yᵀs falls below this
+    /// relative floor (keeps B PD without damping machinery).
+    pub const CURV_MIN_REL: f64 = 1e-12;
+};
+
 /// Numerical tolerances — the "how small is small" guards.
 /// These guard against divide-by-zero, underflow, and spurious convergence.
 /// Tuned to f64 precision; not exposed to callers.

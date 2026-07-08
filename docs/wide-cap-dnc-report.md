@@ -204,6 +204,85 @@ path bails before burning all `max_outer` iterations pre-fallback (~halves
 auto's worst-case), and decide whether the wide-cap fixtures should join the
 cases manifest with `.auto` expectations.
 
+**Superseding note:** the reduced path below dominates `.joint` on every
+axis measured; if it holds up, the `.auto` fallback (and possibly the fast
+path's role as the primary) should be re-pointed at `.reduced`.
+
+## Prototype results (2026-07-07, later): reduced trust-region path
+
+A follow-up question — "why does a 9-variable convex problem need 33–70
+Newton steps?" — led to the barrier-schedule sweep (`probe9.zig`: µ-tuning
+trims ~25–40% then floors at ~40–55 steps; even hex costs 22, and µ = 1000
+destabilizes) and from there to the observation the joint IPM ignores: the
+problem has a *reduced* convex structure.
+
+**The reduction** (`src/reduced.zig`, `method = .reduced`). Define
+h(b) = min_A { −log det A : ‖A·xᵢ‖ ≤ bᵀxᵢ }. Partial minimization of the
+jointly convex primal makes h convex on the unit ball and radially
+non-increasing, so its sphere minimum is the joint optimum and no spurious
+strict local minima exist for a descent method. Three exact identities make
+it cheap:
+
+- the inner problem at fixed b **is** the fast path's 2D lifted MVEE: the
+  lifted points [pᵢ; 1] are the coordinates of zᵢ = xᵢ/(bᵀxᵢ) in the
+  [Q̂ | b] basis (`initWeights` + `mveeFw` + `newtonPolish` reused verbatim);
+- h(b) = ½(log det S + 3·ln 3) + 2·ln s_scale from the design moment S in
+  the rescaled chart;
+- the envelope theorem gives ∇h(b) = −3·Σwᵢzᵢ, whose tangent component is
+  −3·c — the weighted centroid the fast path already computes. **The fast
+  path is gradient descent on h minus the merit function**; the reduced path
+  adds the merit function and a 2D trust-region BFGS model (dogleg steps,
+  model reset on a non-positive prediction), certifying each accepted
+  iterate with the fast path's own `recoverAPerp` + `dualityGapConstructed`.
+
+**Measured** (`ex-compare`, same protocol):
+
+| axis | fast | joint | reduced |
+|------|------|-------|---------|
+| wide-cap grid DNC | wall at ~82° (10/10 at ≥84°, n=200) | 0 | **0** |
+| manifest DNC | 0 (by construction) | 4 (extreme-κ floor) | **0** |
+| mean slowdown vs fast (manifest) | 1× | 12.5× | **0.9×** |
+| iterations | 1–30 outer | 33–119 Newton | **0–34 TR** |
+
+Highlights: hex converges in **0 iterations** (the initial certificate
+already passes), h3_res09 in 1 (vs fast's 4), ha_05 in 4 (vs 10), ha_14 in
+21 (vs 30); the wide caps take 9–34 TR iterations where fast limit-cycles
+forever; and the extreme-κ finest-res cells converge in 0 iterations — the
+joint path's certification floor doesn't exist here because certification
+runs in the scaled chart. At the widest densest cells (89°+, 200 pts) the
+reduced path is the fastest method in *absolute* terms (~82–84 µs vs joint's
+~180–240 µs, vs fast burning ~210 µs failing). ARs agree with fast to ≤1e-7
+relative on mutually-converged cases and with Clarabel on the fixtures.
+
+Where it's slower: dense mid-width caps (~60–80°, 200 pts) cost ~3–7× fast
+(cold inner oracle runs the full FW budget on the first evaluation) — mean
+across the manifest is still 0.9× because it wins elsewhere. Obvious tuning:
+adaptive inner tolerance (loose early, tighten with the gap), and skipping
+certification on early iterates.
+
+One TR robustness fix is already in: near active-set kinks the BFGS
+curvature pairs can leave the model ill-conditioned enough that the dogleg's
+own prediction goes negative; the loop resets to the B₀·I model and retries
+instead of declaring stationarity (found on the n=20/88°/seed-6 grid cell,
+which now converges in 19 iterations to the same AR joint finds).
+
+**Verdict (updated).** `.reduced` matches or beats the fast path on
+iterations everywhere measured, closes the wide-angle hole with *better*
+wall-time than the joint IPM, has no extreme-κ blind spot, and reuses the
+fast path's inner machinery and certification wholesale. It is the natural
+candidate to *replace* the two-path split: promote it to the `.auto`
+fallback first (strictly better than `.joint` there), and — after broader
+validation (full DGGS surveys at strict tol, states/countries, randomized
+stress with rotations) — consider it as the default solver. The fast path
+would remain as the specialized hot-path shortcut, or be retired if
+`.reduced`'s 0–1-iteration behavior on small cells holds up under the
+CANARY-style scrutiny.
+
+The joint IPM keeps independent value as the *reference implementation*:
+its convergence is schedule-driven and geometry-blind, which is exactly
+what you want in a cross-check oracle (and it validated the reduced path's
+ARs here, alongside Clarabel).
+
 ## Reproducing
 
 All numbers from the probe harnesses on this branch:

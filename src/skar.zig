@@ -68,7 +68,7 @@ const SolveOptions = api.SolveOptions;
 /// Rescale P_buf into Ps so max ‖Ps‖ = 1 (numerical hygiene for FW).
 /// Returns the scale factor so callers can lift moments back to
 /// unscaled coordinates.
-inline fn rescaleP(P_buf: []const [2]f64, Ps: [][2]f64) f64 {
+pub inline fn rescaleP(P_buf: []const [2]f64, Ps: [][2]f64) f64 {
     var s2_max: f64 = 0;
     for (P_buf) |p| {
         const sq = @mulAdd(f64, p[1], p[1], p[0] * p[0]);
@@ -83,9 +83,9 @@ inline fn rescaleP(P_buf: []const [2]f64, Ps: [][2]f64) f64 {
 
 /// Weighted 2D moments of the scaled projected points, lifted back to
 /// original (unscaled) coordinates: center = Σ w·P, M = Σ w·P·Pᵀ.
-const Moments = struct { center: Vec2, M: Mat2 };
+pub const Moments = struct { center: Vec2, M: Mat2 };
 
-inline fn computeMoments(Ps: []const [2]f64, w: []const f64, s_scale: f64) Moments {
+pub inline fn computeMoments(Ps: []const [2]f64, w: []const f64, s_scale: f64) Moments {
     var center_s = Vec2.zero;
     var M_s = Mat2.zero;
     for (Ps, 0..) |p_arr, i| {
@@ -190,7 +190,7 @@ pub fn acceptBUpdate(
 // MVEE inner: pairwise FW on lifted points [P; 1]
 // ----------------------------------------------------------------
 
-fn mveeFw(
+pub fn mveeFw(
     P: []const [2]f64,
     max_iter: u32,
     inner_tol: f64,
@@ -369,7 +369,7 @@ fn farthestPointSeed(P: []const [2]f64, w: []f64, k_req: usize) void {
 /// medium/large inputs); small inputs get the uniform start (already optimal for
 /// near-circular cells, where a sparse seed would break symmetry and slow them).
 /// `P` and `w` index the same working set. See `algo.SEED_SPARSE_MIN_POINTS`.
-fn initWeights(P: []const [2]f64, w: []f64) void {
+pub fn initWeights(P: []const [2]f64, w: []f64) void {
     if (P.len > algo.SEED_SPARSE_MIN_POINTS) {
         farthestPointSeed(P, w, algo.SEED_SPARSE_K);
     } else {
@@ -385,7 +385,7 @@ fn initWeights(P: []const [2]f64, w: []f64) void {
 /// A_perp is Minv_half scaled by √(2/(3·g_max)), where g_max = max_i pᵢᵀ·M⁻¹·pᵢ
 /// enforces the budget max_i ‖A_perp·pᵢ‖² = 2/3 that pins the axial eigenvalue
 /// of A to SIGMA_0.
-fn recoverAPerp(P: []const [2]f64, M: Mat2) SolveError!Mat2 {
+pub fn recoverAPerp(P: []const [2]f64, M: Mat2) SolveError!Mat2 {
     const Minv = M.inverse();
 
     // Max of pᵀ M⁻¹ p over points (used for scaling).
@@ -425,8 +425,9 @@ const newton = @import("newton.zig");
 const NewtonScratch = newton.NewtonScratch;
 const newtonPolish = newton.newtonPolish;
 
-// Joint convex solver path (EXPERIMENTAL; `SolveOptions.method`).
+// Alternative solver paths (EXPERIMENTAL; `SolveOptions.method`).
 const joint = @import("joint.zig");
+const reduced = @import("reduced.zig");
 
 // ----------------------------------------------------------------
 // Dual-certificate gap scratch
@@ -1053,6 +1054,7 @@ pub fn solve(
     switch (opts.method) {
         .fast => return solveFast(allocator, scratch_alloc, prep, opts),
         .joint => return joint.solveJoint(allocator, scratch_alloc, prep, opts),
+        .reduced => return reduced.solveReduced(allocator, scratch_alloc, prep, opts),
         .auto => {
             var fast_out = try solveFast(allocator, scratch_alloc, prep, opts);
             if (fast_out != .did_not_converge) return fast_out;

@@ -114,56 +114,66 @@ pub fn main() !void {
 
     var times: [N_RUNS]f64 = undefined;
 
-    // ---------- Part 1: bundled manifest, fast vs joint ----------
-    try stdout.print("== part 1: bundled cases, fast vs joint (n={d} runs; iters = outer loops for fast, Newton steps for joint) ==\n\n", .{N_RUNS});
-    try stdout.print("{s:22} {s:3} | {s:6} {s:5} {s:9} {s:11} | {s:6} {s:5} {s:9} {s:11} | {s:9} {s}\n", .{
-        "case",       "n",
-        "fast",       "iters", "min_us", "ar",
-        "joint",      "iters", "min_us", "ar",
-        "slowdown",   "ar_rel_diff",
+    // ---------- Part 1: bundled manifest, fast vs joint vs reduced ----------
+    try stdout.print("== part 1: bundled cases (n={d} runs; iters = outer loops for fast/reduced, Newton steps for joint) ==\n\n", .{N_RUNS});
+    try stdout.print("{s:22} {s:3} | {s:6} {s:5} {s:9} {s:11} | {s:6} {s:5} {s:9} | {s:7} {s:5} {s:9} {s:11}\n", .{
+        "case",    "n",
+        "fast",    "iters", "min_us", "ar",
+        "joint",   "iters", "min_us",
+        "reduced", "iters", "min_us", "ar_rel_diff",
     });
-    var n_both: u32 = 0;
-    var slowdown_sum: f64 = 0;
+    var n_joint: u32 = 0;
+    var joint_slowdown_sum: f64 = 0;
+    var n_red: u32 = 0;
+    var red_slowdown_sum: f64 = 0;
     for (cases.all) |entry| {
         const pts = entry.case.points;
         const f = try measure(allocator, pts, .fast, N_RUNS, &times);
         const j = try measure(allocator, pts, .joint, N_RUNS, &times);
-        var slowdown: f64 = 0;
+        const r = try measure(allocator, pts, .reduced, N_RUNS, &times);
         var ar_rel: f64 = 0;
-        if (std.mem.eql(u8, f.status, "ok") and std.mem.eql(u8, j.status, "ok")) {
-            ar_rel = @abs(j.ar - f.ar) / f.ar;
-            // Sub-µs fast solves are below the clock resolution; skip
-            // them in the ratio rather than dividing by ~0.
-            if (f.t_median_us >= 1.0) {
-                slowdown = j.t_median_us / f.t_median_us;
-                slowdown_sum += slowdown;
-                n_both += 1;
+        if (std.mem.eql(u8, f.status, "ok") and std.mem.eql(u8, r.status, "ok")) {
+            ar_rel = @abs(r.ar - f.ar) / f.ar;
+        }
+        // Sub-µs fast solves are below the clock resolution; skip them
+        // in the ratios rather than dividing by ~0.
+        if (f.t_median_us >= 1.0 and std.mem.eql(u8, f.status, "ok")) {
+            if (std.mem.eql(u8, j.status, "ok")) {
+                joint_slowdown_sum += j.t_median_us / f.t_median_us;
+                n_joint += 1;
+            }
+            if (std.mem.eql(u8, r.status, "ok")) {
+                red_slowdown_sum += r.t_median_us / f.t_median_us;
+                n_red += 1;
             }
         }
-        try stdout.print("{s:22} {d:3} | {s:6} {d:5} {d:9.2} {d:11.6} | {s:6} {d:5} {d:9.2} {d:11.6} | {d:8.1}x {e:11.2}\n", .{
-            entry.name,  pts.len,
-            f.status,    f.iters, f.t_min_us, f.ar,
-            j.status,    j.iters, j.t_min_us, j.ar,
-            slowdown,    ar_rel,
+        try stdout.print("{s:22} {d:3} | {s:6} {d:5} {d:9.2} {d:11.6} | {s:6} {d:5} {d:9.2} | {s:7} {d:5} {d:9.2} {e:11.2}\n", .{
+            entry.name, pts.len,
+            f.status,   f.iters, f.t_min_us, f.ar,
+            j.status,   j.iters, j.t_min_us,
+            r.status,   r.iters, r.t_min_us, ar_rel,
         });
     }
-    try stdout.print("\nmean joint/fast median-time slowdown on mutually-converged cases with fast ≥ 1µs: {d:.1}x ({d} cases)\n", .{ slowdown_sum / @as(f64, @floatFromInt(n_both)), n_both });
+    try stdout.print("\nmean median-time slowdown vs fast (mutually-converged, fast ≥ 1µs): joint {d:.1}x ({d}), reduced {d:.1}x ({d})\n", .{
+        joint_slowdown_sum / @as(f64, @floatFromInt(n_joint)), n_joint,
+        red_slowdown_sum / @as(f64, @floatFromInt(n_red)),     n_red,
+    });
 
     // ---------- Part 2: wide-cap robustness grid ----------
     const widths = [_]f64{ 60, 75, 80, 81, 82, 84, 86, 88, 89, 89.5 };
     const ns = [_]usize{ 20, 200 };
     const n_seeds: u64 = 10;
-    const methods = [_]sphar.Method{ .fast, .joint, .auto };
+    const methods = [_]sphar.Method{ .fast, .joint, .reduced, .auto };
 
     try stdout.print("\n== part 2: wide-cap grid, DNC counts /{d} seeds and median µs (n runs = {d}) ==\n\n", .{ n_seeds, GRID_RUNS });
-    try stdout.print("{s:5} {s:5} | {s:14} | {s:14} | {s:14}\n", .{ "n", "width", "fast", "joint", "auto" });
-    try stdout.print("{s:5} {s:5} | {s:6} {s:7} | {s:6} {s:7} | {s:6} {s:7}\n", .{ "", "", "DNC", "med_us", "DNC", "med_us", "DNC", "med_us" });
+    try stdout.print("{s:5} {s:5} | {s:14} | {s:14} | {s:14} | {s:14}\n", .{ "n", "width", "fast", "joint", "reduced", "auto" });
+    try stdout.print("{s:5} {s:5} | {s:6} {s:7} | {s:6} {s:7} | {s:6} {s:7} | {s:6} {s:7}\n", .{ "", "", "DNC", "med_us", "DNC", "med_us", "DNC", "med_us", "DNC", "med_us" });
 
     var grid_times: [GRID_RUNS]f64 = undefined;
     for (ns) |n| {
         for (widths) |wdeg| {
-            var dnc = [_]u32{ 0, 0, 0 };
-            var med = [_]f64{ 0, 0, 0 };
+            var dnc = [_]u32{ 0, 0, 0, 0 };
+            var med = [_]f64{ 0, 0, 0, 0 };
             var seed: u64 = 1;
             while (seed <= n_seeds) : (seed += 1) {
                 var prng = std.Random.DefaultPrng.init(seed);
@@ -177,11 +187,12 @@ pub fn main() !void {
                 }
             }
             const denom: f64 = @floatFromInt(n_seeds);
-            try stdout.print("{d:5} {d:5.1} | {d:2}/10 {d:7.0} | {d:2}/10 {d:7.0} | {d:2}/10 {d:7.0}\n", .{
+            try stdout.print("{d:5} {d:5.1} | {d:2}/10 {d:7.0} | {d:2}/10 {d:7.0} | {d:2}/10 {d:7.0} | {d:2}/10 {d:7.0}\n", .{
                 n,            wdeg,
                 dnc[0],       med[0] / denom,
                 dnc[1],       med[1] / denom,
                 dnc[2],       med[2] / denom,
+                dnc[3],       med[3] / denom,
             });
         }
     }

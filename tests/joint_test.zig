@@ -1,5 +1,5 @@
-//! Tests for the EXPERIMENTAL joint barrier solver path
-//! (`SolveOptions.method`; `src/joint.zig`).
+//! Tests for the EXPERIMENTAL alternative solver paths
+//! (`SolveOptions.method`; `src/joint.zig` and `src/reduced.zig`).
 //!
 //! Coverage:
 //!  - the wide-cap fixtures (tests/wide_cap_cells.zig) that the fast
@@ -43,6 +43,40 @@ test "joint: wide-cap fixtures converge and match the Clarabel reference AR" {
     try expectJointConverges(&wide.CAP82_S1, .joint, wide.AR_CAP82_S1);
     try expectJointConverges(&wide.CAP85_S1, .joint, wide.AR_CAP85_S1);
     try expectJointConverges(&wide.CAP89_S3, .joint, wide.AR_CAP89_S3);
+}
+
+test "reduced: wide-cap fixtures converge and match the Clarabel reference AR" {
+    try expectJointConverges(&wide.CAP82_S1, .reduced, wide.AR_CAP82_S1);
+    try expectJointConverges(&wide.CAP85_S1, .reduced, wide.AR_CAP85_S1);
+    try expectJointConverges(&wide.CAP89_S3, .reduced, wide.AR_CAP89_S3);
+}
+
+test "reduced: agrees with fast on bundled cases incl. extreme-kappa cells" {
+    const allocator = std.testing.allocator;
+    // Superset of the joint agreement list: the reduced path certifies
+    // in the scaled chart, so it must ALSO handle the finest-resolution
+    // extreme-kappa cells that pure .joint floors on.
+    const names = [_][]const u8{
+        "hex",           "h3_res09",      "np20",        "np400",
+        "ha_05",         "ha_14",         "dnc_small_wide",
+        "h3_r12_ring10", "h3_r15_midLat", "h3_r15_pent", "h3_r15_ring10",
+    };
+    for (names) |name| {
+        const case = cases.byName(name) orelse unreachable;
+        var fast_out = try sphar.solve(allocator, case.points, .{});
+        defer fast_out.deinit();
+        var red_out = try sphar.solve(allocator, case.points, .{ .method = .reduced });
+        defer red_out.deinit();
+        try std.testing.expect(std.meta.activeTag(fast_out) == .converged);
+        try std.testing.expect(std.meta.activeTag(red_out) == .converged);
+        const ar_f = fast_out.converged.aspectRatio();
+        const ar_r = red_out.converged.aspectRatio();
+        if (@abs(ar_f - ar_r) > AR_AGREE_REL_TOL * ar_f) {
+            std.debug.print("reduced/fast AR mismatch case={s}: fast={d:.10} reduced={d:.10}\n", .{ name, ar_f, ar_r });
+            return error.ReducedFastArMismatch;
+        }
+        try std.testing.expect(@abs(red_out.converged.gap) <= GAP_TOL);
+    }
 }
 
 test "auto: falls back to joint on the wide-cap fixtures" {
