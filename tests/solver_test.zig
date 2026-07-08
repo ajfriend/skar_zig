@@ -26,7 +26,7 @@ test "max_outer cap forces DidNotConverge on any input" {
     defer outcome.deinit();
     try std.testing.expect(std.meta.activeTag(outcome) == .did_not_converge);
     const p = outcome.did_not_converge;
-    try std.testing.expectEqual(@as(u32, 1), p.outer_iters);
+    try std.testing.expectEqual(@as(u32, 1), p.diag.alternating.outer_iters);
     // Convergence is `@abs(gap) <= gap_tol`. So DNC means `@abs(gap) > tol`,
     // not `gap > tol` — gap can be FP-noise-negative on near-converged inputs.
     try std.testing.expect(@abs(p.gap) > 1e-20);

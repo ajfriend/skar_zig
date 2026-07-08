@@ -35,10 +35,11 @@
 //!              the alternating path; convergence is declared on the same
 //!              certified |gap| ≤ gap_tol.
 //!
-//! `outer_iters` on the returned outcome counts trust-region
-//! iterations (accepted + rejected trials), each costing one inner
-//! oracle evaluation — directly comparable to the alternating path's outer
-//! count in per-iteration cost.
+//! Diagnostics: outcomes carry `Diagnostics.trust` (typed per-path —
+//! see api.zig): `eager_certified`, `tr_iters` (accepted + rejected
+//! trials, each one inner-oracle evaluation), `recert_attempts`, and
+//! `polish_failures`. Nothing here overloads the alternating path's
+//! counters.
 
 const std = @import("std");
 
@@ -295,9 +296,11 @@ pub fn solveTrust(
     var wb = try Buffers.init(scratch_alloc, Xw.len);
 
     var b = prep.b0;
-    var outer_count: u32 = 0;
+    var tr_iters: u32 = 0;
+    var recert_attempts: u32 = 0;
     var polish_failures: u32 = 0;
     var converged = false;
+    var eager_certified = false;
 
     var last_gap = GapResult{ .gap = 1e30, .cert_n = 0, .v1 = Vec3.zero, .v2 = Vec3.zero, .sigma = .{ 0, 0 } };
     var final_gap: f64 = 1e30;
@@ -341,6 +344,7 @@ pub fn solveTrust(
         // be accepted before the hard NegGap guard fires.
         if (@abs(final_gap) <= opts.gap_tol) {
             converged = true;
+            eager_certified = true;
         } else if (final_gap < -tol.NEG_GAP) {
             return SolveError.NegativeDualityGap;
         }
@@ -373,8 +377,8 @@ pub fn solveTrust(
     // transport between tangent bases.
     var delta: f64 = tc.DELTA0;
 
-    while (!converged and outer_count < opts.max_outer) {
-        outer_count += 1;
+    while (!converged and tr_iters < opts.max_outer) {
+        tr_iters += 1;
 
         // The majorant Hessian is PSD-in-exact-arithmetic near inner
         // optimality but can go indefinite from roundoff or far-field
@@ -466,9 +470,8 @@ pub fn solveTrust(
         // buffers at the rejected axis; re-project at the accepted b.
         _ = projectGnomonic(Xw, b, Q, wb.P_buf, -std.math.inf(f64));
         var s_scale = core.rescaleP(wb.P_buf, wb.Ps);
-        var attempts: u32 = 0;
-        while (attempts < tc.RECERT_MAX and outer_count < opts.max_outer) : (attempts += 1) {
-            outer_count += 1;
+        while (recert_attempts < tc.RECERT_MAX and tr_iters + recert_attempts < opts.max_outer) {
+            recert_attempts += 1;
             core.mveeFw(wb.Ps, 1, 0.0, wb.Ql, wb.w);
             if (!newtonPolish(wb.Ql, wb.w, algo.ACTIVE_THRESH, 20, tol.NEWTON_INNER, &wb.newton_scratch)) {
                 polish_failures += 1;
@@ -498,8 +501,12 @@ pub fn solveTrust(
         b,
         last_gap,
         final_gap,
-        outer_count,
-        polish_failures,
+        .{ .trust = .{
+            .eager_certified = eager_certified,
+            .tr_iters = tr_iters,
+            .recert_attempts = recert_attempts,
+            .polish_failures = polish_failures,
+        } },
         wb.cert_active,
         wb.cert_lambdas,
         last_gap.cert_n,

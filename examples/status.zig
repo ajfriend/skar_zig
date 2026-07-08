@@ -47,7 +47,7 @@ pub fn main() !void {
             std.debug.print("converged: aspect ratio = {d:.6}\n", .{aspect});
             std.debug.print("  cone axis     b = ({d:.4}, {d:.4}, {d:.4})\n", .{ b.m[0], b.m[1], b.m[2] });
             std.debug.print("  duality gap     = {e:.3}\n", .{c.gap});
-            std.debug.print("  outer iters     = {d}\n", .{c.outer_iters});
+            std.debug.print("  iters           = {d}\n", .{c.diag.totalIters()});
             std.debug.print("  active in cert  = {d} of {d} input points\n", .{ c.cert.indices.len, points.len });
         },
         .infeasible => |i| {
@@ -62,7 +62,7 @@ pub fn main() !void {
             // last iterate is in p.Q / p.sigma but isn't a verified
             // certificate; p.gap holds the last computed gap (not
             // certified to be ≤ `gap_tol`, unlike `Converged.gap`).
-            std.debug.print("did_not_converge: hit max iterations ({d})\n", .{p.outer_iters});
+            std.debug.print("did_not_converge: hit max iterations ({d})\n", .{p.diag.totalIters()});
             std.debug.print("  last gap = {e:.3}\n", .{p.gap});
         },
     }

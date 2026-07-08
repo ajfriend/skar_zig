@@ -69,13 +69,13 @@ fn measure(
     switch (last.?) {
         .converged => |c| {
             stats.status = "ok";
-            stats.iters = c.outer_iters;
+            stats.iters = c.diag.totalIters();
             stats.ar = c.aspectRatio();
             stats.gap = c.gap;
         },
         .did_not_converge => |p| {
             stats.status = "DNC";
-            stats.iters = p.outer_iters;
+            stats.iters = p.diag.totalIters();
             stats.ar = p.sigma[2] / p.sigma[1]; // uncertified, diagnostic only
             stats.gap = p.gap;
         },

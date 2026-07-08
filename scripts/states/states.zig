@@ -150,7 +150,7 @@ fn captureResult(
         .b = .{ bv.m[0], bv.m[1], bv.m[2] },
         .A = A_rows,
         .gap = c.gap,
-        .outer_iters = c.outer_iters,
+        .outer_iters = c.diag.totalIters(),
     };
 }
 

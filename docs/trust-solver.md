@@ -315,6 +315,23 @@ iterations near the optimum. It would add KKT sensitivity solves and
 code for a marginal gain — revisit only if a workload emerges whose
 cost concentrates in the endgame iterations.
 
+## Typed diagnostics (2026-07-08)
+
+The outcome structs previously overloaded shared counters:
+`outer_iters` meant "damped axis iterations" for the alternating path
+and "TR trials + recert attempts" for the trust path, with
+`newton_polish_failures` counted against different denominators. Fixed:
+the mathematical contract (Q, σ, gap, cert) stays shared on
+`Converged`/`DidNotConverge`, and algorithm-specific diagnostics moved
+into a tagged union `diag: Diagnostics` with per-path structs —
+`AlternatingDiagnostics { outer_iters, newton_polish_failures }` and
+`TrustDiagnostics { eager_certified, tr_iters, recert_attempts,
+polish_failures }`. The union's tag also records WHICH path produced
+the outcome, which `.auto` callers previously couldn't know. The trust
+CANARY pins upgraded from opaque totals (0/3/0/3/3) to typed
+signatures: eager-certified for the 0-cells, and (tr = 1, recert = 2)
+for the cert-edge cells — the pins now name the phase they guard.
+
 ## Validation ledger
 
 Done (this branch):

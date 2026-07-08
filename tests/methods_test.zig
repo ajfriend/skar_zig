@@ -63,7 +63,7 @@ test "trust: wide-cap fixture iteration ceilings (CANARY-style)" {
         var o = try sphar.solve(allocator, f.pts, .{ .method = .trust });
         defer o.deinit();
         try std.testing.expect(std.meta.activeTag(o) == .converged);
-        try std.testing.expect(o.converged.outer_iters <= f.ceiling);
+        try std.testing.expect(o.converged.diag.totalIters() <= f.ceiling);
     }
 }
 
@@ -124,7 +124,12 @@ test "auto: identical to alternating when alternating converges" {
         var auto_out = try sphar.solve(allocator, case.points, .{ .method = .auto });
         defer auto_out.deinit();
         // Same path executed ⇒ bit-identical outcome.
-        try std.testing.expectEqual(fast_out.converged.outer_iters, auto_out.converged.outer_iters);
+        // Same path executed: the auto outcome carries alternating
+        // diagnostics identical to the direct solve's.
+        try std.testing.expectEqual(
+            fast_out.converged.diag.alternating.outer_iters,
+            auto_out.converged.diag.alternating.outer_iters,
+        );
         try std.testing.expectEqual(fast_out.converged.gap, auto_out.converged.gap);
         try std.testing.expectEqual(fast_out.converged.sigma, auto_out.converged.sigma);
     }

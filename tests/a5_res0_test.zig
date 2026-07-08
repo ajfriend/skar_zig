@@ -37,7 +37,7 @@ test "a5 res-0 dense (320-pt) boundary cells converge at the strict default" {
         defer o.deinit();
         try std.testing.expect(std.meta.activeTag(o) == .converged);
         try std.testing.expect(o.converged.gap <= 1e-6);
-        if (o.converged.outer_iters > it_max) it_max = o.converged.outer_iters;
+        if (o.converged.diag.alternating.outer_iters > it_max) it_max = o.converged.diag.alternating.outer_iters;
     }
     // Performance-regression guard on the sparse-seeded path (what the fix
     // buys). With the sparse FW init these converge in a handful of outer
@@ -58,7 +58,7 @@ test "a5 res-0 sparse (5-corner) cell converges and matches the dense AR" {
     // bit-identical uniform 1-step path and must remain trivial (observed 1
     // outer iteration); guard against the sparse seed mistakenly engaging here
     // or the small-input path regressing.
-    try std.testing.expect(sparse.converged.outer_iters <= 4);
+    try std.testing.expect(sparse.converged.diag.alternating.outer_iters <= 4);
 
     // Same cell as dense.A5_RES0_CELLS[0] (the 320-point boundary of
     // 200000000000000) → same minimum-volume enclosing cone, so the aspect
@@ -88,12 +88,13 @@ test "a5 res-0 cells under the trust path: iteration ceilings" {
         defer o.deinit();
         try std.testing.expect(std.meta.activeTag(o) == .converged);
         try std.testing.expect(@abs(o.converged.gap) <= 1e-6);
-        if (o.converged.outer_iters > it_max) it_max = o.converged.outer_iters;
+        if (o.converged.diag.totalIters() > it_max) it_max = o.converged.diag.totalIters();
     }
     try std.testing.expect(it_max <= 8);
 
     var sparse = try skar.solve(allocator, &A5_RES0_CORNERS, .{ .method = .trust });
     defer sparse.deinit();
     try std.testing.expect(std.meta.activeTag(sparse) == .converged);
-    try std.testing.expect(sparse.converged.outer_iters <= 2);
+    // Observed: the eager iteration-0 certificate ends the solve.
+    try std.testing.expect(sparse.converged.diag.trust.eager_certified);
 }

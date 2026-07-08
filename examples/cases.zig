@@ -55,7 +55,7 @@ fn runOne(allocator: std.mem.Allocator, name: []const u8) !void {
     switch (outcome) {
         .converged => |c| {
             std.debug.print("  converged: AR = {d:.6}, gap = {e:.3} after {d} iters\n", .{
-                c.aspectRatio(), c.gap, c.outer_iters,
+                c.aspectRatio(), c.gap, c.diag.totalIters(),
             });
         },
         .infeasible => |i| {
@@ -65,7 +65,7 @@ fn runOne(allocator: std.mem.Allocator, name: []const u8) !void {
         },
         .did_not_converge => |p| {
             std.debug.print("  did_not_converge: gap = {e:.3} after {d} iters\n", .{
-                p.gap, p.outer_iters,
+                p.gap, p.diag.totalIters(),
             });
         },
     }
