@@ -4,13 +4,13 @@
 //! Clarabel reference aspect ratios.
 //!
 //! Coverage:
-//!  - the wide-cap fixtures (tests/wide_cap_cells.zig) that the fast
-//!    path limit-cycles on: `.trust` and `.auto` must converge, with
+//!  - the wide-cap fixtures (tests/wide_cap_cells.zig) that the
+//!    alternating path limit-cycles on: `.trust` must converge, with
 //!    the AR matching the Clarabel SDP cross-check;
 //!  - easy-case agreement: `.trust` reproduces `.alternating`'s aspect ratio
 //!    on a spread of bundled manifest cases;
-//!  - `.auto` never changes the result on inputs where the alternating path
-//!    already converges;
+//!  - `.auto` is a pure alias for the library's recommended method
+//!    (currently `.trust`) — identical outcomes, pinned;
 //!  - certificate sanity on a trust solve (λ ≥ 0, certified gap in
 //!    [−NEG_GAP, gap_tol], primal feasibility ≤ roundoff).
 
@@ -96,17 +96,10 @@ test "trust: agrees with alternating on bundled cases incl. extreme-kappa cells"
     }
 }
 
-test "auto: falls back to trust on the wide-cap fixtures" {
-    // Fast alone DNCs on these (pinned below); .auto must rescue them.
-    try expectConvergesWithRefAr(&wide.CAP82_S1, .auto, wide.AR_CAP82_S1);
-    try expectConvergesWithRefAr(&wide.CAP85_S1, .auto, wide.AR_CAP85_S1);
-    try expectConvergesWithRefAr(&wide.CAP89_S3, .auto, wide.AR_CAP89_S3);
-}
-
-test "alternating: wide-cap fixtures still DNC (the gap .auto exists to close)" {
+test "alternating: wide-cap fixtures still DNC (the gap the trust default closes)" {
     // Pins the motivating failure. If the alternating path ever starts
-    // converging here, celebrate — and re-evaluate whether the joint
-    // fallback is still needed (see docs/wide-cap-dnc-report.md).
+    // converging here, celebrate — and update the .alternating
+    // doc-comment's caveat (see docs/wide-cap-dnc-report.md).
     const allocator = std.testing.allocator;
     for ([_][]const [3]f64{ &wide.CAP82_S1, &wide.CAP85_S1, &wide.CAP89_S3 }) |pts| {
         var outcome = try sphar.solve(allocator, pts, .{ .method = .alternating });
@@ -115,24 +108,30 @@ test "alternating: wide-cap fixtures still DNC (the gap .auto exists to close)" 
     }
 }
 
-test "auto: identical to alternating when alternating converges" {
+test "auto: resolves to trust (pure alias, identical outcomes)" {
+    // .auto is the "library's current recommendation" placeholder and
+    // today is a pure alias for .trust: same dispatch target, so
+    // identical outcomes including the diag tag. If a future version
+    // re-points .auto at a new method, this test is the explicit place
+    // that decision gets recorded.
     const allocator = std.testing.allocator;
-    const names = [_][]const u8{ "hex", "h3_res09", "np100" };
+    const names = [_][]const u8{ "hex", "h3_res09", "np100", "ha_05" };
     for (names) |name| {
         const case = cases.byName(name) orelse unreachable;
-        var fast_out = try sphar.solve(allocator, case.points, .{ .method = .alternating });
-        defer fast_out.deinit();
+        var trust_out = try sphar.solve(allocator, case.points, .{ .method = .trust });
+        defer trust_out.deinit();
         var auto_out = try sphar.solve(allocator, case.points, .{ .method = .auto });
         defer auto_out.deinit();
-        // Same path executed: the auto outcome carries alternating
-        // diagnostics identical to the direct solve's.
         try std.testing.expectEqual(
-            fast_out.converged.diag.alternating.outer_iters,
-            auto_out.converged.diag.alternating.outer_iters,
+            trust_out.converged.diag.trust,
+            auto_out.converged.diag.trust,
         );
-        try std.testing.expectEqual(fast_out.converged.gap, auto_out.converged.gap);
-        try std.testing.expectEqual(fast_out.converged.sigma, auto_out.converged.sigma);
+        try std.testing.expectEqual(trust_out.converged.gap, auto_out.converged.gap);
+        try std.testing.expectEqual(trust_out.converged.sigma, auto_out.converged.sigma);
     }
+    // And on a wide-cap fixture (where the two concrete paths genuinely
+    // differ), so a silent re-point to .alternating trips loudly.
+    try expectConvergesWithRefAr(&wide.CAP89_S3, .auto, wide.AR_CAP89_S3);
 }
 
 test "mveeFwAway: converges the design and keeps weights in the simplex" {

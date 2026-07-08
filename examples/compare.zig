@@ -6,9 +6,9 @@
 //! the trust path cost on the cases fast already handles?"
 //!
 //! Part 2: the wide-cap robustness grid (random caps by width × seed
-//! × density) × {alternating, trust, auto} — DNC counts and median times.
-//! Answers "does trust/auto close the wide-angle hole, and at what
-//! price?"
+//! × density) × {alternating, trust} — DNC counts and median times.
+//! Answers "does the trust default close the wide-angle hole, and at
+//! what price?" (.auto is a pure alias for .trust; no separate column.)
 //!
 //! Force-built ReleaseFast (timing meaningless in Debug).
 
@@ -152,17 +152,17 @@ pub fn main() !void {
     const widths = [_]f64{ 60, 75, 80, 81, 82, 84, 86, 88, 89, 89.5 };
     const ns = [_]usize{ 20, 200 };
     const n_seeds: u64 = 10;
-    const methods = [_]sphar.Method{ .alternating, .trust, .auto };
+    const methods = [_]sphar.Method{ .alternating, .trust };
 
     try stdout.print("\n== part 2: wide-cap grid, DNC counts /{d} seeds and median µs (n runs = {d}) ==\n\n", .{ n_seeds, GRID_RUNS });
-    try stdout.print("{s:5} {s:5} | {s:14} | {s:14} | {s:14}\n", .{ "n", "width", "alt", "trust", "auto" });
-    try stdout.print("{s:5} {s:5} | {s:6} {s:7} | {s:6} {s:7} | {s:6} {s:7}\n", .{ "", "", "DNC", "med_us", "DNC", "med_us", "DNC", "med_us" });
+    try stdout.print("{s:5} {s:5} | {s:14} | {s:14}\n", .{ "n", "width", "alt", "trust" });
+    try stdout.print("{s:5} {s:5} | {s:6} {s:7} | {s:6} {s:7}\n", .{ "", "", "DNC", "med_us", "DNC", "med_us" });
 
     var grid_times: [GRID_RUNS]f64 = undefined;
     for (ns) |n| {
         for (widths) |wdeg| {
-            var dnc = [_]u32{ 0, 0, 0 };
-            var med = [_]f64{ 0, 0, 0 };
+            var dnc = [_]u32{ 0, 0 };
+            var med = [_]f64{ 0, 0 };
             var seed: u64 = 1;
             while (seed <= n_seeds) : (seed += 1) {
                 var prng = std.Random.DefaultPrng.init(seed);
@@ -176,13 +176,12 @@ pub fn main() !void {
                 }
             }
             const denom: f64 = @floatFromInt(n_seeds);
-            try stdout.print("{d:5} {d:5.1} | {d:2}/10 {d:7.0} | {d:2}/10 {d:7.0} | {d:2}/10 {d:7.0}\n", .{
+            try stdout.print("{d:5} {d:5.1} | {d:2}/10 {d:7.0} | {d:2}/10 {d:7.0}\n", .{
                 n,            wdeg,
                 dnc[0],       med[0] / denom,
                 dnc[1],       med[1] / denom,
-                dnc[2],       med[2] / denom,
             });
         }
     }
-    try stdout.print("\n(med_us for a DNC-heavy alternating cell is the cost of burning max_outer; auto pays that plus the trust fallback.)\n", .{});
+    try stdout.print("\n(med_us for a DNC-heavy alternating cell is the cost of burning max_outer.)\n", .{});
 }

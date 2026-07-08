@@ -136,8 +136,15 @@ pub const SolveOptions = struct {
 
     /// Solver path selection.
     ///
-    ///   .trust — the default: trust-region descent on the reduced
-    ///            convex objective h(b) = min_A(−log det A) over the
+    ///   .auto  — the default: resolves to the library's recommended
+    ///            method for this version — currently a pure alias for
+    ///            .trust. The resolution MAY change between minor
+    ///            versions as methods improve; pin a concrete method
+    ///            below if you need version-stable solver behavior.
+    ///            The outcome's `diag` union always records which
+    ///            concrete path ran.
+    ///   .trust — trust-region descent on the reduced convex
+    ///            objective h(b) = min_A(−log det A) over the
     ///            sphere, using the alternating path's inner MVEE
     ///            machinery as the oracle and the same certification
     ///            (see src/trust.zig and docs/trust-solver.md).
@@ -152,19 +159,11 @@ pub const SolveOptions = struct {
     ///            defaults) and for large dense near-circular inputs,
     ///            where it can still be ~2× faster; limit-cycles on
     ///            dense inputs spanning ≳ 81° from the optimal axis.
-    ///   .auto  — .alternating first; if it returns
-    ///            `did_not_converge`, retry with .trust on the same
-    ///            preprocessed working set and return the better
-    ///            outcome. Predates the .trust default (it was the
-    ///            robustness fallback); on hard inputs it pays
-    ///            .alternating's full failure budget before .trust
-    ///            runs, so prefer .trust unless you specifically want
-    ///            alternating-first behavior.
     ///
     /// Which cells certify at a tolerance near the f64 gap floor
     /// (finest-resolution S2/A5) differs between paths at noise level;
     /// aspect ratios agree to ~1e-7 relative wherever both certify.
-    method: Method = .trust,
+    method: Method = .auto,
 };
 
 /// Solver path selector for `SolveOptions.method` (see that field's
