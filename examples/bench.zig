@@ -77,19 +77,29 @@ pub fn main() !void {
             };
             // Per-variant: only Converged/DidNotConverge carry iteration
             // counters; Infeasible bails in halfspaceCheck before iterating.
-            // Aspect ratio is only meaningful on Converged.
+            // Aspect ratio is only meaningful on Converged. The solves run
+            // the DEFAULT method, so the diag union's tag is whatever the
+            // default resolves to — read totals via the tag-agnostic
+            // accessor and polish failures per-tag (the field name differs
+            // between the typed diagnostics structs).
             var outer_iters: u32 = 0;
             var newton_polish_failures: u32 = 0;
             var aspect_ratio: f64 = 0;
             switch (lo) {
                 .converged => |c| {
-                    outer_iters = c.diag.alternating.outer_iters;
-                    newton_polish_failures = c.diag.alternating.newton_polish_failures;
+                    outer_iters = c.diag.totalIters();
+                    newton_polish_failures = switch (c.diag) {
+                        .alternating => |d| d.newton_polish_failures,
+                        .trust => |d| d.polish_failures,
+                    };
                     aspect_ratio = c.aspectRatio();
                 },
                 .did_not_converge => |p| {
-                    outer_iters = p.diag.alternating.outer_iters;
-                    newton_polish_failures = p.diag.alternating.newton_polish_failures;
+                    outer_iters = p.diag.totalIters();
+                    newton_polish_failures = switch (p.diag) {
+                        .alternating => |d| d.newton_polish_failures,
+                        .trust => |d| d.polish_failures,
+                    };
                     // Uncertified ratio from the last iterate — useful when
                     // chasing a DNC regression. `DidNotConverge` intentionally
                     // omits an `aspectRatio()` method since the value isn't
