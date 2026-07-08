@@ -267,8 +267,8 @@ pub fn mveeFw(
                 // fires full drops on noise-level descent signals at
                 // converged designs, zeroing support points that
                 // newtonPolish cannot resurrect (its active set is
-                // w-thresholded) — the hazard that bit the reduced path's
-                // oracle four times (docs/reduced-solver.md). Interior
+                // w-thresholded) — the hazard that bit the trust path's
+                // oracle four times (docs/trust-solver.md). Interior
                 // steps (step < w[jm]) are exact 1-D line-search optima
                 // and need no guard. On a blocked drop, fall through to
                 // the vanilla FW step below.
@@ -293,7 +293,7 @@ pub fn mveeFw(
 
 /// Away-step Frank–Wolfe for the lifted D-optimal design — stage 1 of
 /// docs/away-step-fw.md: used by the REDUCED path's oracle only; the
-/// fast path keeps `mveeFw` verbatim (so no fast-path CANARY exposure).
+/// alternating path keeps `mveeFw` verbatim (so no alternating-path CANARY exposure).
 ///
 /// Same per-iteration quantities as `mveeFw` (gradients gᵢ = qᵢᵀS⁻¹qᵢ,
 /// toward-vertex j_max, away-vertex j_min), different decision: pick
@@ -312,7 +312,7 @@ pub fn mveeFw(
 /// noise-level away gap produces a noise-level step — this solver
 /// cannot fire the full-mass drop `mveeFw`'s near-singular pairwise
 /// fallback takes on noise at converged designs (the hazard that bit
-/// the reduced path four times; see docs/reduced-solver.md).
+/// the trust path four times; see docs/trust-solver.md).
 pub fn mveeFwAway(
     P: []const [2]f64,
     max_iter: u32,
@@ -565,7 +565,7 @@ const NewtonScratch = newton.NewtonScratch;
 const newtonPolish = newton.newtonPolish;
 
 // Alternative solver path (EXPERIMENTAL; `SolveOptions.method`).
-const reduced = @import("reduced.zig");
+const trust = @import("trust.zig");
 
 // ----------------------------------------------------------------
 // Dual-certificate gap scratch
@@ -960,10 +960,10 @@ fn preprocess(
     return .{ .ready = .{ .b0 = b, .Xw = hp.Xw, .work_to_orig = hp.work_to_orig } };
 }
 
-/// The fast path: alternating axis/MVEE outer loop (FW + Newton polish
+/// The alternating path: alternating axis/MVEE outer loop (FW + Newton polish
 /// + constructed dual certificate). This is the original `solve` body;
 /// see the module doc-comment for the algorithm.
-fn solveFast(
+fn solveAlternating(
     allocator: std.mem.Allocator,
     scratch_alloc: std.mem.Allocator,
     prep: Prep,
@@ -1158,30 +1158,30 @@ pub fn solve(
     };
 
     switch (opts.method) {
-        .fast => return solveFast(allocator, scratch_alloc, prep, opts),
-        .reduced => return reduced.solveReduced(allocator, scratch_alloc, prep, opts),
+        .alternating => return solveAlternating(allocator, scratch_alloc, prep, opts),
+        .trust => return trust.solveTrust(allocator, scratch_alloc, prep, opts),
         .auto => {
-            var fast_out = try solveFast(allocator, scratch_alloc, prep, opts);
+            var fast_out = try solveAlternating(allocator, scratch_alloc, prep, opts);
             if (fast_out != .did_not_converge) return fast_out;
-            // Fallback: the reduced path (dominates the joint IPM on
-            // every measured axis — see docs/reduced-solver.md).
-            var red_out = try reduced.solveReduced(allocator, scratch_alloc, prep, opts);
-            switch (red_out) {
+            // Fallback: the trust path (dominates the joint IPM on
+            // every measured axis — see docs/trust-solver.md).
+            var trust_out = try trust.solveTrust(allocator, scratch_alloc, prep, opts);
+            switch (trust_out) {
                 .converged => {
                     fast_out.deinit();
-                    return red_out;
+                    return trust_out;
                 },
                 .did_not_converge => |rd| {
                     // Neither path converged: return the iterate with the
                     // smaller (more trustworthy) gap, free the other.
                     if (rd.gap <= fast_out.did_not_converge.gap) {
                         fast_out.deinit();
-                        return red_out;
+                        return trust_out;
                     }
-                    red_out.deinit();
+                    trust_out.deinit();
                     return fast_out;
                 },
-                // Feasibility was established in preprocess; the reduced
+                // Feasibility was established in preprocess; the trust
                 // path never re-derives infeasibility.
                 .infeasible => unreachable,
             }

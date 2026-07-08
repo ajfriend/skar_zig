@@ -1,5 +1,5 @@
 //! Tests for the EXPERIMENTAL alternative solver paths
-//! (`SolveOptions.method`; `src/reduced.zig`), incl. the away-step FW
+//! (`SolveOptions.method`; `src/trust.zig`), incl. the away-step FW
 //! solver kept for the record and the wide-cap fixtures with their
 //! Clarabel reference aspect ratios.
 //!
@@ -7,9 +7,9 @@
 //!  - the wide-cap fixtures (tests/wide_cap_cells.zig) that the fast
 //!    path limit-cycles on: `.joint` and `.auto` must converge, with
 //!    the AR matching the Clarabel SDP cross-check;
-//!  - easy-case agreement: `.joint` reproduces `.fast`'s aspect ratio
+//!  - easy-case agreement: `.joint` reproduces `.alternating`'s aspect ratio
 //!    on a spread of bundled manifest cases;
-//!  - `.auto` never changes the result on inputs where the fast path
+//!  - `.auto` never changes the result on inputs where the alternating path
 //!    already converges;
 //!  - certificate sanity on a joint solve (λ ≥ 0, certified gap in
 //!    [−NEG_GAP, gap_tol], primal feasibility ≤ roundoff).
@@ -41,13 +41,13 @@ fn expectJointConverges(pts: []const [3]f64, method: sphar.Method, ref_ar: f64) 
     try std.testing.expect(@abs(c.aspectRatio() - ref_ar) <= AR_REF_REL_TOL * ref_ar);
 }
 
-test "reduced: wide-cap fixtures converge and match the Clarabel reference AR" {
-    try expectJointConverges(&wide.CAP82_S1, .reduced, wide.AR_CAP82_S1);
-    try expectJointConverges(&wide.CAP85_S1, .reduced, wide.AR_CAP85_S1);
-    try expectJointConverges(&wide.CAP89_S3, .reduced, wide.AR_CAP89_S3);
+test "trust: wide-cap fixtures converge and match the Clarabel reference AR" {
+    try expectJointConverges(&wide.CAP82_S1, .trust, wide.AR_CAP82_S1);
+    try expectJointConverges(&wide.CAP85_S1, .trust, wide.AR_CAP85_S1);
+    try expectJointConverges(&wide.CAP89_S3, .trust, wide.AR_CAP89_S3);
 }
 
-test "reduced: wide-cap fixture iteration ceilings (CANARY-style)" {
+test "trust: wide-cap fixture iteration ceilings (CANARY-style)" {
     // Trust-region iteration guard on the wide-angle frontier (same
     // flag-don't-bump policy as the dggs canaries). Observed: 20 / 34 /
     // 14; ceilings leave headroom for FP drift across platforms while
@@ -60,16 +60,16 @@ test "reduced: wide-cap fixture iteration ceilings (CANARY-style)" {
         .{ .pts = &wide.CAP89_S3, .ceiling = 25 },
     };
     for (fixtures) |f| {
-        var o = try sphar.solve(allocator, f.pts, .{ .method = .reduced });
+        var o = try sphar.solve(allocator, f.pts, .{ .method = .trust });
         defer o.deinit();
         try std.testing.expect(std.meta.activeTag(o) == .converged);
         try std.testing.expect(o.converged.outer_iters <= f.ceiling);
     }
 }
 
-test "reduced: agrees with fast on bundled cases incl. extreme-kappa cells" {
+test "trust: agrees with alternating on bundled cases incl. extreme-kappa cells" {
     const allocator = std.testing.allocator;
-    // Superset of the joint agreement list: the reduced path certifies
+    // Superset of the joint agreement list: the trust path certifies
     // in the scaled chart, so it must ALSO handle the finest-resolution
     // extreme-kappa cells that pure .joint floors on.
     const names = [_][]const u8{
@@ -81,29 +81,29 @@ test "reduced: agrees with fast on bundled cases incl. extreme-kappa cells" {
         const case = cases.byName(name) orelse unreachable;
         var fast_out = try sphar.solve(allocator, case.points, .{});
         defer fast_out.deinit();
-        var red_out = try sphar.solve(allocator, case.points, .{ .method = .reduced });
+        var red_out = try sphar.solve(allocator, case.points, .{ .method = .trust });
         defer red_out.deinit();
         try std.testing.expect(std.meta.activeTag(fast_out) == .converged);
         try std.testing.expect(std.meta.activeTag(red_out) == .converged);
         const ar_f = fast_out.converged.aspectRatio();
         const ar_r = red_out.converged.aspectRatio();
         if (@abs(ar_f - ar_r) > AR_AGREE_REL_TOL * ar_f) {
-            std.debug.print("reduced/fast AR mismatch case={s}: fast={d:.10} reduced={d:.10}\n", .{ name, ar_f, ar_r });
-            return error.ReducedFastArMismatch;
+            std.debug.print("trust/alternating AR mismatch case={s}: alternating={d:.10} trust={d:.10}\n", .{ name, ar_f, ar_r });
+            return error.TrustAlternatingArMismatch;
         }
         try std.testing.expect(@abs(red_out.converged.gap) <= GAP_TOL);
     }
 }
 
-test "auto: falls back to reduced on the wide-cap fixtures" {
+test "auto: falls back to trust on the wide-cap fixtures" {
     // Fast alone DNCs on these (pinned below); .auto must rescue them.
     try expectJointConverges(&wide.CAP82_S1, .auto, wide.AR_CAP82_S1);
     try expectJointConverges(&wide.CAP85_S1, .auto, wide.AR_CAP85_S1);
     try expectJointConverges(&wide.CAP89_S3, .auto, wide.AR_CAP89_S3);
 }
 
-test "fast: wide-cap fixtures still DNC (the gap .auto exists to close)" {
-    // Pins the motivating failure. If the fast path ever starts
+test "alternating: wide-cap fixtures still DNC (the gap .auto exists to close)" {
+    // Pins the motivating failure. If the alternating path ever starts
     // converging here, celebrate — and re-evaluate whether the joint
     // fallback is still needed (see docs/wide-cap-dnc-report.md).
     const allocator = std.testing.allocator;
@@ -114,7 +114,7 @@ test "fast: wide-cap fixtures still DNC (the gap .auto exists to close)" {
     }
 }
 
-test "auto: identical to fast when fast converges" {
+test "auto: identical to alternating when alternating converges" {
     const allocator = std.testing.allocator;
     const names = [_][]const u8{ "hex", "h3_res09", "np100" };
     for (names) |name| {
@@ -134,7 +134,7 @@ test "mveeFwAway: converges the design and keeps weights in the simplex" {
     // Bit-rot guard for the away-step FW solver, kept in-tree for the
     // record after the stage-1 experiment (docs/away-step-fw.md
     // "Stage 1 findings"): hazard-free by construction but slower than
-    // pairwise as the reduced oracle. This pins its correctness so the
+    // pairwise as the trust oracle. This pins its correctness so the
     // recorded findings stay reproducible.
     const skar_core = @import("../src/skar.zig");
     // Slightly irregular quad in the chart: optimal design weights are
@@ -164,9 +164,9 @@ test "mveeFwAway: converges the design and keeps weights in the simplex" {
     }
 }
 
-test "reduced: certificate sanity on a wide-cap solve" {
+test "trust: certificate sanity on a wide-cap solve" {
     const allocator = std.testing.allocator;
-    var outcome = try sphar.solve(allocator, &wide.CAP85_S1, .{ .method = .reduced });
+    var outcome = try sphar.solve(allocator, &wide.CAP85_S1, .{ .method = .trust });
     defer outcome.deinit();
     const c = outcome.converged;
     // Weak duality: certified gap is non-negative up to FP noise.

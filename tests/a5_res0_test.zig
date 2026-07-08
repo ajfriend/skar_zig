@@ -73,8 +73,8 @@ test "a5 res-0 sparse (5-corner) cell converges and matches the dense AR" {
     );
 }
 
-test "a5 res-0 cells under the reduced path: iteration ceilings" {
-    // CANARY-style guard for the EXPERIMENTAL `.reduced` path on the
+test "a5 res-0 cells under the trust path: iteration ceilings" {
+    // CANARY-style guard for the EXPERIMENTAL `.trust` path on the
     // redundant-boundary family (same flag-don't-bump policy as the
     // dggs canaries). Observed: dense max 2 trust-region iterations,
     // sparse 0 (the initial certificate at the halfspace axis passes
@@ -84,7 +84,7 @@ test "a5 res-0 cells under the reduced path: iteration ceilings" {
 
     var it_max: u32 = 0;
     for (dense.A5_RES0_CELLS) |cell| {
-        var o = try skar.solve(allocator, cell, .{ .method = .reduced });
+        var o = try skar.solve(allocator, cell, .{ .method = .trust });
         defer o.deinit();
         try std.testing.expect(std.meta.activeTag(o) == .converged);
         try std.testing.expect(@abs(o.converged.gap) <= 1e-6);
@@ -92,7 +92,7 @@ test "a5 res-0 cells under the reduced path: iteration ceilings" {
     }
     try std.testing.expect(it_max <= 8);
 
-    var sparse = try skar.solve(allocator, &A5_RES0_CORNERS, .{ .method = .reduced });
+    var sparse = try skar.solve(allocator, &A5_RES0_CORNERS, .{ .method = .trust });
     defer sparse.deinit();
     try std.testing.expect(std.meta.activeTag(sparse) == .converged);
     try std.testing.expect(sparse.converged.outer_iters <= 2);

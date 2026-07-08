@@ -1,13 +1,13 @@
-//! Fast-vs-reduced solver path comparison (EXPERIMENTAL `.reduced`
-//! prototype; see docs/reduced-solver.md).
+//! Fast-vs-trust solver path comparison (EXPERIMENTAL `.trust`
+//! prototype; see docs/trust-solver.md).
 //!
-//! Part 1: every bundled manifest case × {fast, reduced} — status,
+//! Part 1: every bundled manifest case × {alternating, trust} — status,
 //! iterations, min/median wall µs, aspect ratio. Answers "what does
-//! the reduced path cost on the cases fast already handles?"
+//! the trust path cost on the cases fast already handles?"
 //!
 //! Part 2: the wide-cap robustness grid (random caps by width × seed
-//! × density) × {fast, reduced, auto} — DNC counts and median times.
-//! Answers "does reduced/auto close the wide-angle hole, and at what
+//! × density) × {alternating, trust, auto} — DNC counts and median times.
+//! Answers "does trust/auto close the wide-angle hole, and at what
 //! price?"
 //!
 //! Force-built ReleaseFast (timing meaningless in Debug).
@@ -113,24 +113,24 @@ pub fn main() !void {
 
     var times: [N_RUNS]f64 = undefined;
 
-    // ---------- Part 1: bundled manifest, fast vs reduced ----------
+    // ---------- Part 1: bundled manifest, alternating vs trust ----------
     try stdout.print("== part 1: bundled cases (n={d} runs; iters = outer loops) ==\n\n", .{N_RUNS});
     try stdout.print("{s:22} {s:3} | {s:6} {s:5} {s:9} {s:11} | {s:7} {s:5} {s:9} {s:11}\n", .{
         "case",    "n",
-        "fast",    "iters", "min_us", "ar",
-        "reduced", "iters", "min_us", "ar_rel_diff",
+        "alt",     "iters", "min_us", "ar",
+        "trust",   "iters", "min_us", "ar_rel_diff",
     });
     var n_red: u32 = 0;
     var red_slowdown_sum: f64 = 0;
     for (cases.all) |entry| {
         const pts = entry.case.points;
-        const f = try measure(allocator, pts, .fast, N_RUNS, &times);
-        const r = try measure(allocator, pts, .reduced, N_RUNS, &times);
+        const f = try measure(allocator, pts, .alternating, N_RUNS, &times);
+        const r = try measure(allocator, pts, .trust, N_RUNS, &times);
         var ar_rel: f64 = 0;
         if (std.mem.eql(u8, f.status, "ok") and std.mem.eql(u8, r.status, "ok")) {
             ar_rel = @abs(r.ar - f.ar) / f.ar;
         }
-        // Sub-µs fast solves are below the clock resolution; skip them
+        // Sub-µs alternating solves are below the clock resolution; skip them
         // in the ratio rather than dividing by ~0.
         if (f.t_median_us >= 1.0 and std.mem.eql(u8, f.status, "ok")) {
             if (std.mem.eql(u8, r.status, "ok")) {
@@ -144,7 +144,7 @@ pub fn main() !void {
             r.status,   r.iters, r.t_min_us, ar_rel,
         });
     }
-    try stdout.print("\nmean median-time slowdown vs fast (mutually-converged, fast ≥ 1µs): reduced {d:.1}x ({d})\n", .{
+    try stdout.print("\nmean median-time slowdown vs alternating (mutually-converged, alt ≥ 1µs): trust {d:.1}x ({d})\n", .{
         red_slowdown_sum / @as(f64, @floatFromInt(n_red)), n_red,
     });
 
@@ -152,10 +152,10 @@ pub fn main() !void {
     const widths = [_]f64{ 60, 75, 80, 81, 82, 84, 86, 88, 89, 89.5 };
     const ns = [_]usize{ 20, 200 };
     const n_seeds: u64 = 10;
-    const methods = [_]sphar.Method{ .fast, .reduced, .auto };
+    const methods = [_]sphar.Method{ .alternating, .trust, .auto };
 
     try stdout.print("\n== part 2: wide-cap grid, DNC counts /{d} seeds and median µs (n runs = {d}) ==\n\n", .{ n_seeds, GRID_RUNS });
-    try stdout.print("{s:5} {s:5} | {s:14} | {s:14} | {s:14}\n", .{ "n", "width", "fast", "reduced", "auto" });
+    try stdout.print("{s:5} {s:5} | {s:14} | {s:14} | {s:14}\n", .{ "n", "width", "alt", "trust", "auto" });
     try stdout.print("{s:5} {s:5} | {s:6} {s:7} | {s:6} {s:7} | {s:6} {s:7}\n", .{ "", "", "DNC", "med_us", "DNC", "med_us", "DNC", "med_us" });
 
     var grid_times: [GRID_RUNS]f64 = undefined;
@@ -184,5 +184,5 @@ pub fn main() !void {
             });
         }
     }
-    try stdout.print("\n(med_us for a DNC-heavy fast cell is the cost of burning max_outer; auto pays that plus the reduced fallback.)\n", .{});
+    try stdout.print("\n(med_us for a DNC-heavy alternating cell is the cost of burning max_outer; auto pays that plus the trust fallback.)\n", .{});
 }

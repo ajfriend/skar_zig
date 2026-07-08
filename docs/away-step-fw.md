@@ -12,7 +12,7 @@ of validation/reconciliation.
 ## Stage 1 findings (2026-07-07, `exp/majorant-hessian`)
 
 `mveeFwAway` was implemented (kept in-tree in `src/skar.zig` for the
-record) and wired into the reduced oracle. Measured:
+record) and wired into the trust oracle. Measured:
 
 1. **Away-step is slower than pairwise per unit progress on large
    near-circular supports** — ha_05's evaluation chain went 56 → 261 µs;
@@ -27,8 +27,8 @@ record) and wired into the reduced oracle. Measured:
    The full-mass drop is only taken when the exact log-det change of the
    rank-2 update — (1 + γ·g_max)(1 − γ·g_min) + γ²·g_cross², from
    quantities already in hand — exceeds 1. This ratio guard landed in the
-   shared `mveeFw` and **every fast-path CANARY pin held** (the
-   blocked-drop scenario never occurs on fast trajectories), so the
+   shared `mveeFw` and **every alternating-path CANARY pin held** (the
+   blocked-drop scenario never occurs on alternating-path trajectories), so the
    hazard motivation for away-step is resolved without it.
 3. **Small oracle bursts are a dead end regardless of inner solver** —
    with the guard in place and drops impossible, burst 8/16/32 still
@@ -36,7 +36,7 @@ record) and wired into the reduced oracle. Measured:
    stretches) and made np400 *slower* (69 → 95 µs): the burst floor was
    never the residual cost.
 
-Implication for stage 2: the fast path co-evolved with pairwise FW and
+Implication for stage 2: the alternating path co-evolved with pairwise FW and
 the drop is now sound; switching it to away-step would trade a measured
 speed regression for the gate deletion alone. If the gate bothers us,
 cheaper options exist (e.g. the "smarter-than-size gate" note in
@@ -64,17 +64,17 @@ a5_res0_dnc_report.md). Stage 2 as originally scoped is NOT recommended.
    cannot resurrect (its active set is w-thresholded). This bit the reduced
    path four times in one validation day (h3_res09 + cap82 during the
    rounds-oracle detour; New York during burst tuning — see
-   docs/reduced-solver.md "What it took" and the tuning ledger entry). The
-   fast path is only accidentally shielded: it runs 2 FW steps per outer
+   docs/trust-solver.md "What it took" and the tuning ledger entry). The
+   alternating path is only accidentally shielded: it runs 2 FW steps per outer
    and stops iterating the moment its certificate passes, so it rarely
    executes FW at a converged design. Away-step FW replaces the ad-hoc
    drop with a line-search-justified away step whose drop boundary is a
    deliberate event.
 
-3. **Shrink the reduced oracle's burst defense.** `config.reduced.
+3. **Shrink the trust oracle's burst defense.** `config.trust.
    INNER_BURST = 64` exists specifically so a mid-burst noise-drop can
    self-heal before the stall-exit h-sample. That minimum evaluation cost
-   is the main residual of the reduced path's 2–3× gap on mid-size
+   is the main residual of the trust path's 2–3× gap on mid-size
    synthetic caps (np400, ha_14). With a drop-safe inner solver the burst
    can shrink toward "a few", directly attacking that residual.
 
@@ -112,11 +112,11 @@ inner solvers exist during evaluation — stage 1 depends on that.
 
 ## Staged plan
 
-### Stage 1 — reduced oracle only (no fast-path exposure)
+### Stage 1 — trust oracle only (no alternating-path exposure)
 
 Wire the away-step solver into `reduced.evalH` and the RECERT phase only;
-`solveFast` keeps today's `mveeFw` verbatim, so the default path stays
-bit-identical and NO fast CANARY can shift.
+`solveAlternating` keeps today's `mveeFw` verbatim, so the default path stays
+bit-identical and NO alternating-path CANARY can shift.
 
 Do in stage 1:
 - Implement + unit-test the line search (agreement with the pairwise step
@@ -125,7 +125,7 @@ Do in stage 1:
   gone, simplifying the stall exit.
 - Full battery, all of which exists on the branch and runs in minutes:
   - `zig build test -Dslow=true` — the reduced CANARY pins
-    (dggs_dnc_test "CANARY(reduced)" 0/3/0/3/3, a5_res0 reduced ceilings,
+    (dggs_dnc_test "CANARY(trust)" 0/3/0/3/3, a5_res0 trust ceilings,
     wide-cap ceilings in joint_test) are the tripwires; shifts here are
     *expected* and each needs a story.
   - probe14 (DGGS 30k × 2 tols: parity + floor counts), probe19
@@ -133,32 +133,32 @@ Do in stage 1:
     (rotations 160/160), probe13 (a5_res0), probe22 (canary cells),
     `zig build ex-compare` (manifest mean + wide-cap grid).
 - Success criteria: all convergence counts hold or improve; np400/ha_14
-  ratio vs fast improves measurably (target ≤ 1.5×); no new failure
+  ratio vs alternating improves measurably (target ≤ 1.5×); no new failure
   shapes. The catalogued shapes to watch: oracle (value, gradient)
   inconsistency read as a wrong TR slope; corrupted-state stall exits;
   cert-edge thrash.
 
-### Stage 2 — fast-path adoption + gate deletion (CANARY sign-off)
+### Stage 2 — alternating-path adoption + gate deletion (CANARY sign-off)
 
-Swap `solveFast`'s inner solver to away-step, revert init to plain uniform
+Swap `solveAlternating`'s inner solver to away-step, revert init to plain uniform
 everywhere, delete `algo.SEED_SPARSE_*` + `farthestPointSeed` + the
 `initWeights` branch.
 
-- **Every fast CANARY pin will likely shift** — per repo policy each shift
+- **Every alternating-path CANARY pin will likely shift** — per repo policy each shift
   is flagged and explained to a human, never silently bumped. This is the
   step that requires explicit sign-off before starting.
 - Acceptance (the original note's gauntlet, all harnesses now in-repo):
   a5_res0 12/12 at strict default **with uniform init**, few iters, wall
-  time ≤ current (~74 µs-class); symmetric small cells stay ~1 fast outer
+  time ≤ current (~74 µs-class); symmetric small cells stay ~1 alternating outer
   iteration with uniform init (the whole point — no symmetric-cell
   regression); `ex-bench` per-case small cells not slower (ignore TOTAL);
   DGGS floor DNC counts unchanged at 1e-6; states/countries unchanged;
   full slow suite with reconciled canaries.
 - Only after stage 2 lands does the doc cleanup happen: update
   a5_res0_dnc_report.md (the gate it documents is gone) and
-  reduced-solver.md (drop-hazard notes become history).
+  trust-solver.md (drop-hazard notes become history).
 
-Stage 1 is worth doing even if stage 2 stalls: the reduced path is the
+Stage 1 is worth doing even if stage 2 stalls: the trust path is the
 consumer that actually steps on the hazard, and months of stage-1 burn-in
 is exactly the evidence stage 2's sign-off wants.
 
@@ -168,11 +168,11 @@ is exactly the evidence stage 2's sign-off wants.
   guard; keep `tol.WEIGHT_ACTIVE`; property-test that weights stay in the
   simplex.
 - **Warm-start coupling** (bigger deal now than when first written): the
-  reduced path warm-starts weights across axis moves and re-runs the
+  trust path warm-starts weights across axis moves and re-runs the
   solver at converged designs — the exact regime where the old solver
   misbehaved. Stage 1's battery covers it; watch the oracle-consistency
   failure shape specifically.
-- **Aggressive draining destabilizing the fast path's damping** (stage 2
+- **Aggressive draining destabilizing the alternating path's damping** (stage 2
   only): away steps change the weight trajectory feeding the axis update;
   the damped controller was co-tuned with the old cadence. If ha_*-band
   cells wobble, that's the first place to look.
@@ -185,9 +185,9 @@ is exactly the evidence stage 2's sign-off wants.
 
 - `src/skar.zig` — `mveeFw` (the loop to replace), `initWeights` /
   `farthestPointSeed` (stage-2 deletions), `newtonPolish` interaction.
-- `src/reduced.zig` — `evalH` + RECERT phase (stage-1 call sites),
-  `config.reduced.INNER_*` (burst defense to retire).
-- `docs/reduced-solver.md` — the four drop-step incidents, the
+- `src/trust.zig` — `evalH` + RECERT phase (stage-1 call sites),
+  `config.trust.INNER_*` (burst defense to retire).
+- `docs/trust-solver.md` — the four drop-step incidents, the
   oracle-consistency lesson, and the validation ledger this proposal's
   battery mirrors.
 - `docs/a5_res0_dnc_report.md` — the drain story and boost-vs-sparse

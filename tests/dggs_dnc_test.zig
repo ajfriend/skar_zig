@@ -277,13 +277,13 @@ test "CANARY: a harder A5 r30 cell takes more than 2 outer iterations" {
 
 // ── Reduced-path CANARIES (same cells, same spirit) ──────────────────────
 //
-// Iteration pins for the EXPERIMENTAL `.reduced` path on the same five
-// cells the fast-path canaries pin. Same policy: a trip is a signal to
+// Iteration pins for the EXPERIMENTAL `.trust` path on the same five
+// cells the alternating-path canaries pin. Same policy: a trip is a signal to
 // understand what changed and call it out — never quietly bump.
 //
-// The counts read differently from the fast path's: `outer_iters` here
+// The counts read differently from the alternating path's: `outer_iters` here
 // counts trust-region iterations plus RECERT-phase attempts. The pattern
-// to know (see docs/reduced-solver.md):
+// to know (see docs/trust-solver.md):
 //  - 0 = the initial certificate at the halfspace axis already passes
 //    (the axis is optimal on arrival; no iteration needed);
 //  - 3 = a cert-edge cell — the initial cert lands just above tol, the
@@ -293,44 +293,44 @@ test "CANARY: a harder A5 r30 cell takes more than 2 outer iterations" {
 //    26-rejection Δ-collapse thrash that survey means had smeared
 //    (H3 r9 read 27 before the pred-noise exit landed).
 
-test "CANARY(reduced): H3 r15 cell converges in 0 iterations (strict default)" {
+test "CANARY(trust): H3 r15 cell converges in 0 iterations (strict default)" {
     const allocator = std.testing.allocator;
     const h3 = cases.byName("h3_r15_equator").?.points;
-    var outcome = try skar.solve(allocator, h3, .{ .method = .reduced });
+    var outcome = try skar.solve(allocator, h3, .{ .method = .trust });
     defer outcome.deinit();
 
     try std.testing.expect(std.meta.activeTag(outcome) == .converged);
     try std.testing.expectEqual(@as(u32, 0), outcome.converged.outer_iters);
 }
 
-test "CANARY(reduced): H3 r9 cell converges in 3 iterations (strict default)" {
+test "CANARY(trust): H3 r9 cell converges in 3 iterations (strict default)" {
     const allocator = std.testing.allocator;
-    var outcome = try skar.solve(allocator, &H3_R9_CELL, .{ .method = .reduced });
+    var outcome = try skar.solve(allocator, &H3_R9_CELL, .{ .method = .trust });
     defer outcome.deinit();
 
     try std.testing.expect(std.meta.activeTag(outcome) == .converged);
     try std.testing.expectEqual(@as(u32, 3), outcome.converged.outer_iters);
 }
 
-test "CANARY(reduced): S2 L30 cell converges in 0 iterations" {
+test "CANARY(trust): S2 L30 cell converges in 0 iterations" {
     const allocator = std.testing.allocator;
-    var outcome = try skar.solve(allocator, &S2_CELL, .{ .gap_tol = DGGS_GAP_TOL, .method = .reduced });
+    var outcome = try skar.solve(allocator, &S2_CELL, .{ .gap_tol = DGGS_GAP_TOL, .method = .trust });
     defer outcome.deinit();
 
     try std.testing.expect(std.meta.activeTag(outcome) == .converged);
     try std.testing.expectEqual(@as(u32, 0), outcome.converged.outer_iters);
 }
 
-test "CANARY(reduced): common and harder A5 r30 cells both take 3 iterations" {
-    // Under the reduced path the fast path's "hard tail" cell costs the
+test "CANARY(trust): common and harder A5 r30 cells both take 3 iterations" {
+    // Under the trust path the alternating path's "hard tail" cell costs the
     // same as the common one: both are cert-edge cells routed through
     // the RECERT phase, and the trust region's arrival at the axis
-    // optimum doesn't depend on the fast path's contraction rate. The
+    // optimum doesn't depend on the alternating path's contraction rate. The
     // equality is the interesting fact — pin both.
     const allocator = std.testing.allocator;
-    var common = try skar.solve(allocator, &A5_CELL, .{ .gap_tol = DGGS_GAP_TOL, .method = .reduced });
+    var common = try skar.solve(allocator, &A5_CELL, .{ .gap_tol = DGGS_GAP_TOL, .method = .trust });
     defer common.deinit();
-    var harder = try skar.solve(allocator, &A5_CELL_4ITER, .{ .gap_tol = DGGS_GAP_TOL, .method = .reduced });
+    var harder = try skar.solve(allocator, &A5_CELL_4ITER, .{ .gap_tol = DGGS_GAP_TOL, .method = .trust });
     defer harder.deinit();
 
     try std.testing.expect(std.meta.activeTag(common) == .converged);

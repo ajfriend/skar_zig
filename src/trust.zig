@@ -1,4 +1,4 @@
-//! EXPERIMENTAL reduced solver path (`SolveOptions.method = .reduced`).
+//! EXPERIMENTAL trust solver path (`SolveOptions.method = .trust`).
 //!
 //! Trust-region BFGS on the *reduced* convex objective
 //!
@@ -12,7 +12,7 @@
 //! fall into.
 //!
 //! The inner minimization at fixed b is EXACTLY the 2D lifted MVEE the
-//! fast path already solves in the gnomonic chart: the lifted points
+//! alternating path already solves in the gnomonic chart: the lifted points
 //! qᵢ = [pᵢ; 1] are the coordinates of zᵢ = xᵢ/(bᵀxᵢ) in the [Q̂ | b]
 //! basis, so the centered 3D D-optimal design on the zᵢ and the chart
 //! MVEE coincide, and D-optimal design values transform predictably
@@ -27,17 +27,17 @@
 //!              S = Σ wᵢ·qᵢ·qᵢᵀ the design moment in the scaled chart;
 //!  - gradient: by the envelope theorem ∇h(b) = −3·Σ wᵢ·zᵢ, whose
 //!              tangent component is −3·c where c is the weighted
-//!              centroid the fast path already computes — i.e. the
-//!              fast path IS gradient descent on h, minus the merit
+//!              centroid the alternating path already computes — i.e. the
+//!              alternating path IS gradient descent on h, minus the merit
 //!              function. This path adds the merit function and a
 //!              second-order (BFGS) model;
 //!  - cert:     `recoverAPerp` + `dualityGapConstructed`, identical to
-//!              the fast path; convergence is declared on the same
+//!              the alternating path; convergence is declared on the same
 //!              certified |gap| ≤ gap_tol.
 //!
 //! `outer_iters` on the returned outcome counts trust-region
 //! iterations (accepted + rejected trials), each costing one inner
-//! oracle evaluation — directly comparable to the fast path's outer
+//! oracle evaluation — directly comparable to the alternating path's outer
 //! count in per-iteration cost.
 
 const std = @import("std");
@@ -50,7 +50,7 @@ const Mat3 = linalg.Mat3;
 const Mat3x2 = linalg.Mat3x2;
 
 const config = @import("config.zig");
-const rc = config.reduced;
+const tc = config.trust;
 const algo = config.algo;
 const tol = config.tol;
 
@@ -160,15 +160,15 @@ fn evalH(
     // on large near-circular supports (ha_05 56 → 261 µs).
     var spent: u32 = 0;
     var h_prev: f64 = std.math.inf(f64);
-    while (spent < rc.INNER_ITERS) : (spent += rc.INNER_BURST) {
-        core.mveeFw(wb.Ps, rc.INNER_BURST, rc.INNER_TOL, wb.Ql, wb.w);
+    while (spent < tc.INNER_ITERS) : (spent += tc.INNER_BURST) {
+        core.mveeFw(wb.Ps, tc.INNER_BURST, tc.INNER_TOL, wb.Ql, wb.w);
         // Cheap progress check on the design value (one 3×3 Cholesky).
         var S_chk = Mat3.zero;
         for (wb.Ql, 0..) |q, i| S_chk.addSymRank1(wb.w[i], q);
         const L_chk = S_chk.cholesky() orelse break;
         const logdet_chk = 2.0 * (@log(L_chk.m[0]) + @log(L_chk.m[4]) + @log(L_chk.m[8]));
         const h_chk = 0.5 * (logdet_chk + 3.0 * @log(3.0)) + 2.0 * @log(s_scale);
-        if (h_chk >= h_prev - rc.INNER_STALL_REL * (1.0 + @abs(h_chk))) break;
+        if (h_chk >= h_prev - tc.INNER_STALL_REL * (1.0 + @abs(h_chk))) break;
         h_prev = h_chk;
     }
     const polished = newtonPolish(wb.Ql, wb.w, algo.ACTIVE_THRESH, 20, tol.NEWTON_INNER, &wb.newton_scratch);
@@ -284,8 +284,8 @@ fn doglegStep(B: Mat2, g: Vec2, delta: f64) TrStep {
 }
 
 /// Solve the preprocessed problem by trust-region BFGS on h(b) over
-/// the sphere. Same contract as `solveFast` / `solveJoint`.
-pub fn solveReduced(
+/// the sphere. Same contract as `solveAlternating` / `solveJoint`.
+pub fn solveTrust(
     allocator: std.mem.Allocator,
     scratch_alloc: std.mem.Allocator,
     prep: Prep,
@@ -309,7 +309,7 @@ pub fn solveReduced(
         }
     };
 
-    // Eager first certificate — the fast path's exact opening cadence
+    // Eager first certificate — the alternating path's exact opening cadence
     // (two FW steps, one polish, certify) BEFORE any full-precision
     // oracle work. On the DGGS hot path the certificate passes right
     // here and the solve ends having done essentially what the fast
@@ -335,7 +335,7 @@ pub fn solveReduced(
         const A_perp0 = try core.recoverAPerp(wb.P_buf, m0.M);
         last_gap = try core.dualityGapConstructed(wb.w, b, Xw, A_perp0, Q0, &wb.gap_scratch, wb.cert_active, wb.cert_lambdas);
         final_gap = last_gap.gap;
-        // Order matters (mirrors the fast path's break-before-guard):
+        // Order matters (mirrors the alternating path's break-before-guard):
         // a converged-at-noise-level gap can be slightly negative
         // (seen on H3 r15 cells, gap ~ −5e-9 from κ·ε noise) and must
         // be accepted before the hard NegGap guard fires.
@@ -348,7 +348,7 @@ pub fn solveReduced(
 
     // Full-precision evaluation at the initial axis (warm-started from
     // the eager phase's weights), certified again at oracle quality.
-    // Reuses the fast path's certification wholesale.
+    // Reuses the alternating path's certification wholesale.
     var cur: Eval = undefined;
     if (!converged) {
         cur = evalH(b, Xw, &wb, -std.math.inf(f64), false);
@@ -371,7 +371,7 @@ pub fn solveReduced(
     // Trust-region state. The model Hessian is per-evaluation (the
     // majorant Hessian computed by evalH) — no BFGS history, no
     // transport between tangent bases.
-    var delta: f64 = rc.DELTA0;
+    var delta: f64 = tc.DELTA0;
 
     while (!converged and outer_count < opts.max_outer) {
         outer_count += 1;
@@ -382,19 +382,19 @@ pub fn solveReduced(
         // circular-optimum limit) so the dogleg's prediction is
         // positive whenever g ≠ 0.
         var B = cur.B;
-        if (B.det() <= 0 or B.m[0] <= 0) B = .{ .m = .{ rc.B0, 0, 0, rc.B0 } };
+        if (B.det() <= 0 or B.m[0] <= 0) B = .{ .m = .{ tc.B0, 0, 0, tc.B0 } };
 
         var step = doglegStep(B, cur.g, delta);
         if (step.pred <= 0) {
-            B = .{ .m = .{ rc.B0, 0, 0, rc.B0 } };
+            B = .{ .m = .{ tc.B0, 0, 0, tc.B0 } };
             step = doglegStep(B, cur.g, delta);
         }
         if (step.pred <= 0 or !(step.u.norm() > 0)) break; // stationary: g ≈ 0
         // Below merit resolution the ratio test can never verify a
         // step — hand off to the re-cert phase instead of rejecting
         // the same unresolvable step until Δ hits its floor. See
-        // config.reduced.PRED_NOISE_REL.
-        if (step.pred <= rc.PRED_NOISE_REL * (1.0 + @abs(cur.h))) break;
+        // config.trust.PRED_NOISE_REL.
+        if (step.pred <= tc.PRED_NOISE_REL * (1.0 + @abs(cur.h))) break;
 
         const b_trial = Vec3.lincomb(1.0, b, 1.0, cur.Q.apply(step.u)).normalize();
 
@@ -402,13 +402,13 @@ pub fn solveReduced(
         const trial = evalH(b_trial, Xw, &wb, algo.FEAS_MARGIN, false);
 
         const rho: f64 = if (trial.ok) (cur.h - trial.h) / step.pred else -1.0;
-        if (rho < rc.ETA) {
+        if (rho < tc.ETA) {
             // Reject: restore the warm-start weights, shrink the radius
             // (relative to the step actually attempted, so interior
             // Newton steps shrink meaningfully too).
             @memcpy(wb.w, wb.w_bak);
-            delta = @min(delta, step.u.norm()) * rc.SHRINK;
-            if (delta < rc.DELTA_MIN) break;
+            delta = @min(delta, step.u.norm()) * tc.SHRINK;
+            if (delta < tc.DELTA_MIN) break;
             continue;
         }
 
@@ -418,12 +418,12 @@ pub fn solveReduced(
         b = b_trial;
         cur = trial;
 
-        // Certify the accepted iterate (fast-path machinery) — but only
+        // Certify the accepted iterate (alternating-path machinery) — but only
         // once the accepted step's predicted decrease is within a
         // couple of orders of gap_tol; while the model still predicts
         // ≫ gap_tol of remaining descent no certificate can pass. See
-        // config.reduced.CERT_PRED_FACTOR.
-        if (step.pred <= rc.CERT_PRED_FACTOR * opts.gap_tol) {
+        // config.trust.CERT_PRED_FACTOR.
+        if (step.pred <= tc.CERT_PRED_FACTOR * opts.gap_tol) {
             last_gap = try certify.run(cur, b, Xw, &wb);
             final_gap = last_gap.gap;
             if (@abs(final_gap) <= opts.gap_tol) {
@@ -433,15 +433,15 @@ pub fn solveReduced(
             if (final_gap < -tol.NEG_GAP) return SolveError.NegativeDualityGap;
         }
 
-        if (rho < rc.RHO_POOR) {
+        if (rho < tc.RHO_POOR) {
             // Accepted, but the quadratic model over-promised (higher
             // order terms dominate over this radius) — shrink gently so
             // the model regains fidelity instead of creeping at
             // ρ ≈ 0.15 or oscillating across the fidelity boundary.
-            delta = @min(delta, step.u.norm()) * rc.SHRINK_POOR;
-            if (delta < rc.DELTA_MIN) break;
-        } else if (rho >= rc.ETA_GOOD and step.u.norm() >= 0.8 * delta) {
-            delta = @min(delta * rc.GROW, rc.DELTA_MAX);
+            delta = @min(delta, step.u.norm()) * tc.SHRINK_POOR;
+            if (delta < tc.DELTA_MIN) break;
+        } else if (rho >= tc.ETA_GOOD and step.u.norm() >= 0.8 * delta) {
+            delta = @min(delta * tc.GROW, tc.DELTA_MAX);
         }
     }
 
@@ -453,11 +453,11 @@ pub fn solveReduced(
     // restores weights on no-improvement, a raw FW step is a no-op once
     // g_max < 3 numerically, and polish is at its fixed point — so
     // retrying at fixed b certifies the identical state forever. The
-    // fast path escapes this because its axis moves a little every
+    // alternating path escapes this because its axis moves a little every
     // outer iteration, re-projecting the points and re-sampling the
     // whole numerical state (measured on A5 res-30: fast's first cert
     // fails the same M-Cholesky; its second passes). So this phase IS
-    // a few fast-path outer iterations warm-started at the TR optimum:
+    // a few alternating-path outer iterations warm-started at the TR optimum:
     // FW step → polish → certify → damped axis micro-step. TR for the
     // global descent, fast iteration for the terminal certification.
     if (!converged) {
@@ -467,7 +467,7 @@ pub fn solveReduced(
         _ = projectGnomonic(Xw, b, Q, wb.P_buf, -std.math.inf(f64));
         var s_scale = core.rescaleP(wb.P_buf, wb.Ps);
         var attempts: u32 = 0;
-        while (attempts < rc.RECERT_MAX and outer_count < opts.max_outer) : (attempts += 1) {
+        while (attempts < tc.RECERT_MAX and outer_count < opts.max_outer) : (attempts += 1) {
             outer_count += 1;
             core.mveeFw(wb.Ps, 1, 0.0, wb.Ql, wb.w);
             if (!newtonPolish(wb.Ql, wb.w, algo.ACTIVE_THRESH, 20, tol.NEWTON_INNER, &wb.newton_scratch)) {
@@ -484,7 +484,7 @@ pub fn solveReduced(
             if (final_gap < -tol.NEG_GAP) return SolveError.NegativeDualityGap;
             // Axis micro-step along the h-gradient (plain, undamped —
             // ‖center‖ is at noise scale here). This is the numerical
-            // re-sample the fast path gets for free each iteration.
+            // re-sample the alternating path gets for free each iteration.
             const bstep = core.acceptBUpdate(Xw, b, Q, m.center, 1.0, wb.P_buf, wb.Ps);
             b = bstep.b;
             Q = bstep.Q;

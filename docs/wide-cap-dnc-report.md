@@ -1,7 +1,7 @@
 # Wide-angle inputs DNC: the outer axis iteration limit-cycles past ~81° cap radius
 
-**Status:** root cause characterized; resolved by the reduced solver path
-(`docs/reduced-solver.md`). The joint barrier-Newton solver prototyped below
+**Status:** root cause characterized; resolved by the trust solver path
+(`docs/trust-solver.md`). The joint barrier-Newton solver prototyped below
 served as the development-time reference oracle and was removed from the
 public API before merge (implementation in branch history, `src/joint.zig`
 at commit d3786e5; the Clarabel reference ARs in `tests/wide_cap_cells.zig`
@@ -16,7 +16,7 @@ iteration budget — the outer axis iteration falls into a **limit cycle**, not 
 slow crawl. The failure is **not intrinsic to the problem**: the primal SDP is
 jointly convex in `(A, b)` (paper, eq. primal), and a generic interior-point
 conic solver (Clarabel) solves every failing probe case to optimality with
-modest aspect ratios (1.16–1.54). The wall is an artifact of the fast path's
+modest aspect ratios (1.16–1.54). The wall is an artifact of the alternating path's
 nonconvex parametrization (axis fixed-point iteration + damping heuristic).
 
 This is the missing piece of the long-tail robustness picture. The other
@@ -121,7 +121,7 @@ is.
    O(n) to assemble a 9×9 KKT system; expect a few tens of Newton steps
    regardless of geometry (self-concordant barrier ⇒ polynomial, globally
    convergent for every feasible input including 89.9° caps). Run it **only
-   when the fast path returns `.did_not_converge`** (or trips an oscillation
+   when the alternating path returns `.did_not_converge`** (or trips an oscillation
    detector): zero cost on the hot DGGS path, and the library becomes
    robust-by-construction on the long tail. A native implementation should
    land in the tens-of-µs range for n ≤ a few hundred (hull-reduced) —
@@ -148,8 +148,8 @@ is.
 Fix direction #1 is now prototyped on this branch: `src/joint.zig`, a
 barrier-Newton interior-point method on the joint convex `(A, b)` formulation
 (9 unknowns, damped Newton + log-barrier path-following), selected via the
-experimental `SolveOptions.method` enum (`.fast` default = bit-identical old
-behavior; `.joint`; `.auto` = fast, then joint on DNC). Preprocessing
+experimental `SolveOptions.method` enum (`.alternating` default = bit-identical old
+behavior; `.joint`; `.auto` = alternating, then joint on DNC). Preprocessing
 (validation → Farkas → hull → coplanarity) is shared by both paths, and the
 joint path certifies through the *same* constructed-dual machinery
 (`dualityGapConstructed`), so both return identical `Outcome` semantics.
@@ -160,19 +160,19 @@ Measurements from `zig build ex-compare` (ReleaseFast, this machine):
 
 | method | DNC on the grid | worst cell |
 |--------|-----------------|------------|
-| fast   | up to 10/10 for n=200 at ≥ 84° (the wall) | — |
+| alternating | up to 10/10 for n=200 at ≥ 84° (the wall) | — |
 | joint  | **0 anywhere**, incl. 89.5°/200 pts | ~240 µs |
-| auto   | **0 anywhere** | ~440 µs (fast burn + joint solve) |
+| auto   | **0 anywhere** | ~440 µs (alternating-path burn + joint solve) |
 
 Joint's ARs match the Clarabel cross-check to ≤ ~1e-4 relative on the three
 committed fixtures (`tests/wide_cap_cells.zig`), with `checkFeasibility` at
 machine epsilon. The regression tests (`tests/joint_test.zig`) pin: joint and
-auto converge on all three fixtures; fast still DNCs on them; joint agrees
-with fast (AR rel ≤ 1e-4) across easy/medium manifest cases; auto is
-bit-identical to fast whenever fast converges.
+auto converge on all three fixtures; the alternating path still DNCs on them; joint agrees
+with the alternating path (AR rel ≤ 1e-4) across easy/medium manifest cases; auto is
+bit-identical to the alternating path whenever it converges.
 
 **Runtime — joint is a fallback, not a replacement.** Across the 54
-mutually-converged manifest cases, joint costs a mean ~12× the fast path's
+mutually-converged manifest cases, joint costs a mean ~12× the alternating path's
 median wall time (hex: 1 outer iter/≲1 µs vs 33 Newton steps/18 µs;
 np400: 14 → 85 µs; ha_14: 41 → 85 µs). Newton-step counts sit at 33–70 for
 nearly everything — geometry-independent, as IPM theory predicts — which is
@@ -183,33 +183,33 @@ keeps the hot path untouched by construction.
 4 of 61 manifest cases DNC under pure `.joint`: `h3_r12_ring10`,
 `h3_r15_midLat`, `h3_r15_pent`, `h3_r15_ring10` — finest-resolution cells
 with tangent eigenvalues σ ~ 1e6–1e7. The joint iterate *finds* the optimum
-(ARs match fast to 6–7 digits) but the certified gap floors at ~1e-5: the
+(ARs match the alternating path to 6–7 digits) but the certified gap floors at ~1e-5: the
 barrier multipliers λᵢ = 2sᵢ/(t·rᵢ) need rᵢ ~ 1/t, and in raw 3D coordinates
 rᵢ = sᵢ² − ‖A·xᵢ‖² drowns in κ·ε cancellation noise (~σ_max·ε ≈ 1e-9) once
-t ≳ 1e9. The fast path certifies these same cells fine because its inner
+t ≳ 1e9. The alternating path certifies these same cells fine because its inner
 machinery works in the rescaled gnomonic chart (`rescaleP`). Consequences:
 
-- `.auto` is unaffected — the fast path owns exactly these cells, so the
-  fallback never fires there (measured: auto = fast on all four).
+- `.auto` is unaffected — the alternating path owns exactly these cells, so the
+  fallback never fires there (measured: auto = alternating on all four).
 - Fix directions if pure joint ever needs them: certify in the scaled
   gnomonic chart (mirror `rescaleP`), or hand the joint axis b̂ to one
-  fast-path finalization cycle (inner MVEE + polish at fixed near-optimal
-  axis) — "joint for global convergence, fast for the finish."
+  alternating-path finalization cycle (inner MVEE + polish at fixed near-optimal
+  axis) — "joint for global convergence, alternating iteration for the finish."
 
 **Verdict.** `.auto` delivers the robustness goal — zero DNCs across the
 entire wide-cap grid and no change whatsoever to already-working inputs — at
 zero hot-path cost. Pure `.joint` is not competitive as a default (12× on
-easy cases) and shouldn't replace the fast path. Before flipping `.auto` on
+easy cases) and shouldn't replace the alternating path. Before flipping `.auto` on
 as the default: tune the barrier schedule (µ, warm-start t across stages) to
-cut the 33–70 Newton steps, consider an oscillation detector so the fast
+cut the 33–70 Newton steps, consider an oscillation detector so the alternating
 path bails before burning all `max_outer` iterations pre-fallback (~halves
 auto's worst-case), and decide whether the wide-cap fixtures should join the
 cases manifest with `.auto` expectations.
 
-**Superseding note:** the reduced path below dominates `.joint` on every
-axis measured; if it holds up, the `.auto` fallback (and possibly the fast
-path's role as the primary) should be re-pointed at `.reduced`. The reduced
-method now has its own tracking doc — **`docs/reduced-solver.md`** (writeup,
+**Superseding note:** the trust path below dominates `.joint` on every
+axis measured; if it holds up, the `.auto` fallback (and possibly the alternating
+path's role as the primary) should be re-pointed at `.trust`. The reduced
+method now has its own tracking doc — **`docs/trust-solver.md`** (writeup,
 measurements, validation ledger); the section below is the historical record
 of its first results.
 
@@ -221,45 +221,45 @@ trims ~25–40% then floors at ~40–55 steps; even hex costs 22, and µ = 1000
 destabilizes) and from there to the observation the joint IPM ignores: the
 problem has a *reduced* convex structure.
 
-**The reduction** (`src/reduced.zig`, `method = .reduced`). Define
+**The reduction** (`src/trust.zig`, `method = .trust`). Define
 h(b) = min_A { −log det A : ‖A·xᵢ‖ ≤ bᵀxᵢ }. Partial minimization of the
 jointly convex primal makes h convex on the unit ball and radially
 non-increasing, so its sphere minimum is the joint optimum and no spurious
 strict local minima exist for a descent method. Three exact identities make
 it cheap:
 
-- the inner problem at fixed b **is** the fast path's 2D lifted MVEE: the
+- the inner problem at fixed b **is** the alternating path's 2D lifted MVEE: the
   lifted points [pᵢ; 1] are the coordinates of zᵢ = xᵢ/(bᵀxᵢ) in the
   [Q̂ | b] basis (`initWeights` + `mveeFw` + `newtonPolish` reused verbatim);
 - h(b) = ½(log det S + 3·ln 3) + 2·ln s_scale from the design moment S in
   the rescaled chart;
 - the envelope theorem gives ∇h(b) = −3·Σwᵢzᵢ, whose tangent component is
-  −3·c — the weighted centroid the fast path already computes. **The fast
-  path is gradient descent on h minus the merit function**; the reduced path
+  −3·c — the weighted centroid the alternating path already computes. **The fast
+  path is gradient descent on h minus the merit function**; the trust path
   adds the merit function and a 2D trust-region BFGS model (dogleg steps,
   model reset on a non-positive prediction), certifying each accepted
-  iterate with the fast path's own `recoverAPerp` + `dualityGapConstructed`.
+  iterate with the alternating path's own `recoverAPerp` + `dualityGapConstructed`.
 
 **Measured** (`ex-compare`, same protocol):
 
-| axis | fast | joint | reduced |
+| axis | alternating | joint | trust |
 |------|------|-------|---------|
 | wide-cap grid DNC | wall at ~82° (10/10 at ≥84°, n=200) | 0 | **0** |
 | manifest DNC | 0 (by construction) | 4 (extreme-κ floor) | **0** |
-| mean slowdown vs fast (manifest) | 1× | 12.5× | **0.9×** |
+| mean slowdown vs alternating (manifest) | 1× | 12.5× | **0.9×** |
 | iterations | 1–30 outer | 33–119 Newton | **0–34 TR** |
 
 Highlights: hex converges in **0 iterations** (the initial certificate
-already passes), h3_res09 in 1 (vs fast's 4), ha_05 in 4 (vs 10), ha_14 in
-21 (vs 30); the wide caps take 9–34 TR iterations where fast limit-cycles
+already passes), h3_res09 in 1 (vs alternating's 4), ha_05 in 4 (vs 10), ha_14 in
+21 (vs 30); the wide caps take 9–34 TR iterations where the alternating path limit-cycles
 forever; and the extreme-κ finest-res cells converge in 0 iterations — the
 joint path's certification floor doesn't exist here because certification
 runs in the scaled chart. At the widest densest cells (89°+, 200 pts) the
-reduced path is the fastest method in *absolute* terms (~82–84 µs vs joint's
-~180–240 µs, vs fast burning ~210 µs failing). ARs agree with fast to ≤1e-7
+trust path is the fastest method in *absolute* terms (~82–84 µs vs joint's
+~180–240 µs, vs alternating burning ~210 µs failing). ARs agree with the alternating path to ≤1e-7
 relative on mutually-converged cases and with Clarabel on the fixtures.
 
-Where it's slower: dense mid-width caps (~60–80°, 200 pts) cost ~3–7× fast
+Where it's slower: dense mid-width caps (~60–80°, 200 pts) cost ~3–7× the alternating path
 (cold inner oracle runs the full FW budget on the first evaluation) — mean
 across the manifest is still 0.9× because it wins elsewhere. Obvious tuning:
 adaptive inner tolerance (loose early, tighten with the gap), and skipping
@@ -271,21 +271,21 @@ own prediction goes negative; the loop resets to the B₀·I model and retries
 instead of declaring stationarity (found on the n=20/88°/seed-6 grid cell,
 which now converges in 19 iterations to the same AR joint finds).
 
-**Verdict (updated).** `.reduced` matches or beats the fast path on
+**Verdict (updated).** `.trust` matches or beats the alternating path on
 iterations everywhere measured, closes the wide-angle hole with *better*
 wall-time than the joint IPM, has no extreme-κ blind spot, and reuses the
-fast path's inner machinery and certification wholesale. It is the natural
+alternating path's inner machinery and certification wholesale. It is the natural
 candidate to *replace* the two-path split: promote it to the `.auto`
 fallback first (strictly better than `.joint` there), and — after broader
 validation (full DGGS surveys at strict tol, states/countries, randomized
-stress with rotations) — consider it as the default solver. The fast path
+stress with rotations) — consider it as the default solver. The alternating path
 would remain as the specialized hot-path shortcut, or be retired if
-`.reduced`'s 0–1-iteration behavior on small cells holds up under the
+`.trust`'s 0–1-iteration behavior on small cells holds up under the
 CANARY-style scrutiny.
 
 The joint IPM keeps independent value as the *reference implementation*:
 its convergence is schedule-driven and geometry-blind, which is exactly
-what you want in a cross-check oracle (and it validated the reduced path's
+what you want in a cross-check oracle (and it validated the trust path's
 ARs here, alongside Clarabel).
 
 ## Reproducing
@@ -293,7 +293,7 @@ ARs here, alongside Clarabel).
 > The probe harnesses below were removed before merge per repo
 > convention; they live in the `investigate/wide-cap-dnc` branch
 > history. All their output tables are recorded in this file and in
-> docs/reduced-solver.md.
+> docs/trust-solver.md.
 
 All numbers from the probe harnesses on this branch:
 

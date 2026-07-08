@@ -51,7 +51,7 @@ still fast (`tests/a5_res0_test.zig`).
 - `docs/a5_res0_dnc_report.md` — the A5 res-0 convergence work (boost → DGGS
   survey → sparse FW init) and the boost-vs-sparse measurements.
 - `docs/away-step-fw.md` — staged proposal: away-step FW for the inner MVEE
-  solver (stage 1: reduced-oracle only, no fast-path risk; stage 2: fast-path
+  solver (stage 1: reduced-oracle only, no alternating-path risk; stage 2: alternating-path
   adoption + sparse-gate deletion, requires CANARY sign-off).
-- `docs/reduced-solver.md` — the EXPERIMENTAL reduced solver
+- `docs/trust-solver.md` — the EXPERIMENTAL trust solver
   (`SolveOptions.method`): writeup, measurements, validation ledger.

@@ -137,27 +137,29 @@ pub const SolveOptions = struct {
     /// EXPERIMENTAL — solver path selection (prototype on the
     /// `investigate/wide-cap-dnc` branch; see docs/wide-cap-dnc-report.md).
     ///
-    ///   .fast  — today's exact behavior: the alternating axis/MVEE
-    ///            outer loop. Fast on the DGGS hot path, but limit-cycles
-    ///            on dense inputs spanning ≳ 81° from the optimal axis.
-    ///   .reduced — trust-region descent on the reduced convex
+    ///   .alternating — the original solver: alternates single
+    ///            Frank–Wolfe weight steps with damped axis steps. Very
+    ///            fast on the DGGS hot path, but limit-cycles on dense
+    ///            inputs spanning ≳ 81° from the optimal axis.
+    ///   .trust — trust-region descent on the reduced convex
     ///            objective h(b) = min_A(−log det A) over the sphere,
-    ///            using the fast path's inner MVEE machinery as the
-    ///            oracle and the same certification. Converges on the
-    ///            wide-angle/elongated inputs the fast path cannot
-    ///            (see src/reduced.zig and docs/reduced-solver.md).
-    ///   .auto  — .fast first; if it returns `did_not_converge`, retry
-    ///            with .reduced on the same preprocessed working set and
-    ///            return the better outcome.
+    ///            using the alternating path's inner MVEE machinery as
+    ///            the oracle and the same certification. Converges on
+    ///            the wide-angle/elongated inputs the alternating path
+    ///            cannot (see src/trust.zig and docs/trust-solver.md).
+    ///   .auto  — .alternating first; if it returns
+    ///            `did_not_converge`, retry with .trust on the same
+    ///            preprocessed working set and return the better
+    ///            outcome.
     ///
-    /// Default .fast keeps existing behavior bit-identical while the
-    /// prototype is evaluated.
-    method: Method = .fast,
+    /// Default .alternating keeps existing behavior bit-identical while
+    /// the prototype is evaluated.
+    method: Method = .alternating,
 };
 
 /// Solver path selector for `SolveOptions.method` (see that field's
 /// doc-comment for the semantics of each variant).
-pub const Method = enum { fast, reduced, auto };
+pub const Method = enum { alternating, trust, auto };
 
 /// Active-set certificate. `indices` / `lambdas` are paired arrays:
 /// the indices into the caller's `X[]` of the active input points and

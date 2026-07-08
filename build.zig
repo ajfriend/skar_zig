@@ -72,7 +72,7 @@ pub fn build(b: *std.Build) void {
     addExample(b, skar_mod, cases_mod, target, optimize, "status", null, "Run examples/status.zig (full Outcome branching)");
     addExample(b, skar_mod, cases_mod, target, optimize, "cases", null, "Run examples/cases.zig (run a named case or --all)");
     addExample(b, skar_mod, cases_mod, target, optimize, "bench", .ReleaseFast, "Run examples/bench.zig (per-case timing, release-built)");
-    addExample(b, skar_mod, cases_mod, target, optimize, "compare", .ReleaseFast, "Run examples/compare.zig (fast vs reduced vs auto solver paths, release-built)");
+    addExample(b, skar_mod, cases_mod, target, optimize, "compare", .ReleaseFast, "Run examples/compare.zig (alternating vs trust vs auto solver paths, release-built)");
 
     // DGGS aspect-ratio survey (see docs/dggs-aspect-survey-plan.md
     // and scripts/dggs/). Standalone exec, not an example: lives under

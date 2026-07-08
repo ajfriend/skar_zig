@@ -116,7 +116,7 @@ pub const algo = struct {
     pub const SEED_SPARSE_MIN_POINTS: usize = 16;
     pub const SEED_SPARSE_K: usize = 5;
 
-    /// Noise-floor exit for `mveeFwAway` (the reduced path's inner
+    /// Noise-floor exit for `mveeFwAway` (the trust path's inner
     /// solver): stop when the solver's own optimality gap
     /// max(g_max − 3, 3 − g_min) has not improved by a factor of
     /// AWAY_GAP_IMPR within AWAY_STALL_ITERS iterations. On κ-limited
@@ -129,11 +129,11 @@ pub const algo = struct {
     pub const AWAY_STALL_ITERS: u32 = 24;
 };
 
-/// Tuning for the EXPERIMENTAL reduced solver path (`src/reduced.zig`,
-/// `SolveOptions.method = .reduced`): trust-region BFGS on the reduced
-/// convex objective h(b) over the sphere, with the fast path's inner
+/// Tuning for the EXPERIMENTAL trust solver path (`src/trust.zig`,
+/// `SolveOptions.method = .trust`): trust-region BFGS on the reduced
+/// convex objective h(b) over the sphere, with the alternating path's inner
 /// MVEE machinery as the oracle. Prototype values — not yet tuned.
-pub const reduced = struct {
+pub const trust = struct {
     /// Inner MVEE oracle per h-evaluation: FW in bursts of INNER_BURST
     /// steps with a stall exit — stop when a burst improves the design
     /// value by less than INNER_STALL_REL·(1+|h|) — up to the
@@ -210,7 +210,7 @@ pub const reduced = struct {
     /// a certified gap ≤ tol. Near the f64 gap floor the constructed
     /// certificate is sensitive to the incidental weight state at
     /// noise amplitude (measured on A5 res-30: the first cert's
-    /// M-Cholesky fails for the fast path too — it succeeds on its
+    /// M-Cholesky fails for the alternating path too — it succeeds on its
     /// second outer iteration purely by re-sampling w). Each attempt
     /// re-runs the oracle at the fixed near-optimal axis (FW steps at
     /// noise level + a fresh polish perturb w) and re-certifies.
