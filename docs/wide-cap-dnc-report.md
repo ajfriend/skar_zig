@@ -1,0 +1,158 @@
+# Wide-angle inputs DNC: the outer axis iteration limit-cycles past ~81° cap radius
+
+**Status:** investigated, root cause characterized, fix direction validated
+externally — no fix implemented yet. Probe harnesses live on this branch
+(`investigate/wide-cap-dnc`): `probe_dnc.zig` … `probe6.zig` at the repo root
+plus temporary `probe_*` knobs in `src/skar.zig` (all marked TEMPORARY; revert
+before merging anything to `main`).
+**Found:** 2026-07-07, sweeping randomized spherical caps of increasing angular
+radius (the `ha_*` construction) past the bundled `ha_14` (80°) case.
+**Summary:** For dense random inputs, the solver hits a **hard wall at cap
+radius ≈ 81–83°**: beyond it, `solve` returns `.did_not_converge` at *any*
+iteration budget — the outer axis iteration falls into a **limit cycle**, not a
+slow crawl. The failure is **not intrinsic to the problem**: the primal SDP is
+jointly convex in `(A, b)` (paper, eq. primal), and a generic interior-point
+conic solver (Clarabel) solves every failing probe case to optimality with
+modest aspect ratios (1.16–1.54). The wall is an artifact of the fast path's
+nonconvex parametrization (axis fixed-point iteration + damping heuristic).
+
+This is the missing piece of the long-tail robustness picture. The other
+long-tail families are in better shape:
+
+- **Redundant dense boundaries** (a5_res0, 320 pts): fixed in v0.4.0 via
+  size-gated sparse FW init; the away-step FW note
+  (`docs/away-step-fw.md`) covers retiring the size-gate proxy.
+- **Finest-resolution f64 gap floor** (S2 L30 / A5 r30): genuine κ-driven
+  floor, documented on `SolveOptions.gap_tol`; correctly DNCs at 1e-6.
+- **Extreme aspect ratio: NOT hard.** Symmetric stretched caps converge in
+  **1 outer iteration at AR 1000** (gap 6e-7); a 174°-span arc at AR 328
+  converges in 2. The `extreme_aspect_test.zig` "AR ≈ 80–100 plateau" on
+  near-antipodal arcs is the *width* mechanism below, not an AR limit.
+
+## Evidence
+
+### 1. The wall (200 random points per cap, `max_outer = 500`, 10 seeds)
+
+| cap radius | DNC /10 | median outer iters (converged) |
+|-----------|---------|-------------------------------|
+| 79°       | 0       | 19                            |
+| 80°       | 0       | 30                            |
+| 80.5°     | 0       | 35                            |
+| 81°       | 0       | 53                            |
+| 81.5°     | 4       | 102                           |
+| 82°       | 7       | 92                            |
+| 83°       | 10      | —                             |
+
+Iteration counts climb steeply approaching the wall — the classic signature of
+a first-order fixed-point iteration losing its contraction factor. `ha_14`'s
+"widest angular extent we converge on" description is this wall, measured.
+
+Raising `max_outer` to 2000 rescues nothing at ≥ 83°: the gap oscillates
+between ~1e0 and 1e30 (1e30 = the dual-certificate Cholesky fails outright)
+with the uncertified AR bouncing 1.1–44. One 82° seed crawled to gap 2e-4 at
+2000 iters; the rest cycle forever.
+
+### 2. It is width × density, not width alone (85° cap, 10 seeds)
+
+| n points | DNC /10 |
+|----------|---------|
+| 5        | 0       |
+| 10       | 0       |
+| 20       | 1       |
+| 50       | 4       |
+| 200      | 10      |
+
+Sparse wide inputs still converge; dense wide inputs never do.
+
+### 3. Trace of a failing case (85°, seed 1)
+
+`alpha` pins at `DAMP_MIN = 0.05` while the axis-gradient norm `c_norm`
+oscillates 1 → 1.6e3. Since the b-step rotates the axis by ≈ atan(α·‖u‖) with
+‖u‖ = c_norm, a pinned α of 0.05 against c_norm ~ 1e3 is a ~89° axis swing:
+the iterate repeatedly overshoots the optimum, walks to within 2e-4 of the
+feasible-cone boundary (points at 89.99° from the axis; `s_scale` = tan θ_max
+hits 4.8e3), rebounds, and never settles. The gap is frequently 1e30 because
+the constructed dual certificate's Cholesky fails far from optimality.
+
+### 4. Ruled-out cheap fixes (all measured, `max_outer = 500`)
+
+- **Better initial axis** — centroid warm-start produces a bit-identical
+  trajectory (the Farkas b is already centroid-like). Not the init.
+- **Trust-region cap on the axis step** (cap α·‖u‖ at 1.0 / 0.5 / 0.25 / 0.1):
+  no change in any DNC cell; converged cases unaffected. Even small feasible
+  steps fail ⇒ the *direction* is unreliable, not just the magnitude.
+- **Inner-FW budget boost** (K=100, tol 1e-9, i.e. solve the fixed-axis MVEE
+  well before each b-step), alone and combined with step caps: no change
+  (one 82° seed flipped to converged; everything ≥ 84° still 100% DNC).
+
+Mechanism, in short: the outer loop is a damped first-order fixed-point
+iteration on the axis with **no merit function** — steps are accepted on
+feasibility alone, and the damping controller only shrinks α *after* a bad
+step. The sensitivity of the projected centroid to axis motion grows like
+sec²(θ_max), so past ~81° the contraction condition would need α far below
+`DAMP_MIN` (and n-dependent), while the heuristic has no way to find it. No
+amount of step-size tuning fixes a non-descent iteration on this landscape.
+
+### 5. The problem itself is easy: generic conic solver cross-check
+
+The primal is jointly convex (paper, eq. primal): minimize −log det A subject
+to ‖A·xᵢ‖₂ ≤ b·xᵢ and ‖b‖₂ ≤ 1, over A ∈ S³₊₊ and b ∈ R³. Solving the three
+dumped failing cases with cvxpy + Clarabel (scratchpad `solve_sdp.py`):
+
+| case      | status  | AR       | max angle from axis | axis eigval        | max constraint viol |
+|-----------|---------|----------|---------------------|--------------------|---------------------|
+| cap82_s1  | optimal | 1.159634 | 81.98°              | 0.577356 (≈ 1/√3)  | 7e-10               |
+| cap85_s1  | optimal | 1.269181 | 84.99°              | 0.577369            | 1.4e-9              |
+| cap89_s3  | optimal | 1.542028 | 88.87°              | 0.577355            | 5e-9                |
+
+`b` comes out an eigenvector of `A` with eigenvalue 1/√3 to 1e-5, exactly as
+the paper's optimality property predicts. These are well-conditioned,
+modest-AR optima — nothing about the answers is extreme; only our path to them
+is.
+
+## Fix directions (ranked)
+
+1. **Joint convex fallback solve.** Implement a small primal-dual /
+   barrier-Newton method on the joint convex formulation — 9 unknowns
+   (6 for A, 3 for b), n SOC constraints, log-det objective. Per Newton step:
+   O(n) to assemble a 9×9 KKT system; expect a few tens of Newton steps
+   regardless of geometry (self-concordant barrier ⇒ polynomial, globally
+   convergent for every feasible input including 89.9° caps). Run it **only
+   when the fast path returns `.did_not_converge`** (or trips an oscillation
+   detector): zero cost on the hot DGGS path, and the library becomes
+   robust-by-construction on the long tail. A native implementation should
+   land in the tens-of-µs range for n ≤ a few hundred (hull-reduced) —
+   comparable to today's medium cases.
+2. **Oscillation detection → early DNC.** Independent of (1): today a
+   wide-cap input burns all `max_outer` iterations producing a garbage last
+   iterate (the DNC payload's uncertified AR can read 44 when the true
+   optimum is 1.27). Detect the limit cycle (e.g. gap not improving over a
+   window + `alpha` pinned at `DAMP_MIN`) and exit early — cheaper, and the
+   DNC diagnostics stop being misleading. With (1) in place this becomes the
+   fallback trigger.
+3. **Away-step FW** (`docs/away-step-fw.md`, already planned): orthogonal to
+   this — it addresses the redundant-boundary tail and the size-gate proxy,
+   not the wide-angle wall (probe 4 above shows inner-solve quality is not
+   the binding constraint here).
+4. **Interim documentation.** Until (1) lands, `SolveOptions` / readme should
+   state the supported regime: dense inputs are reliable up to ~80° angular
+   radius from the optimal axis; beyond that expect DNC (and the fixture
+   `ha_14` marks the edge). The infeasibility boundary at 90° is handled
+   correctly (Farkas cert) — the gap is only 81–90°.
+
+## Reproducing
+
+All numbers from the probe harnesses on this branch:
+
+- `probe_dnc.zig` — width sweep (wall discovery), AR sweeps (probes 2–4).
+- `probe2.zig` — failing-case trace + centroid-init A/B (uses
+  `skar.probe_trace` / `skar.probe_centroid_init`).
+- `probe3.zig` — trust-region step-cap sweep (`skar.probe_step_cap`).
+- `probe4.zig` — inner-FW budget × step cap grid (`skar.probe_inner_iters`).
+- `probe5.zig` — dumps failing cases as JSON for the SDP cross-check.
+- `probe6.zig` — wall localization + n-dependence.
+- `probe_sdp.py` (cvxpy/Clarabel, PEP 723; `uv run probe_sdp.py`) — the
+  convex cross-check; reads probe5's JSON dumps.
+
+`zig build test -Dslow=true` is green on this branch (probe knobs default
+off; the default path is bit-identical).

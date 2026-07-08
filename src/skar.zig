@@ -760,6 +760,14 @@ fn isCoplanarInput(points: []const Vec3, b: Vec3, threshold: f64) bool {
 /// rank-deficient X) propagate as `InputError` via `try`. `opts`
 /// controls convergence, preprocessing, and validation knobs — see
 /// `SolveOptions` for per-field docs and defaults.
+/// TEMPORARY probe knobs (see probe_dnc.zig) — revert before commit.
+pub var probe_centroid_init: bool = false;
+pub var probe_trace: bool = false;
+/// Max axis-rotation per b-step, as tan(angle): caps alpha·‖u‖. 0 = off.
+pub var probe_step_cap: f64 = 0;
+/// Inner FW budget per cycle (0 = default 1 step).
+pub var probe_inner_iters: u32 = 0;
+
 pub fn solve(
     allocator: std.mem.Allocator,
     X: []const [3]f64,
@@ -801,6 +809,16 @@ pub fn solve(
             .residual = hs.residual,
             .allocator = allocator,
         } };
+    }
+
+    // TEMPORARY probe: centroid warm-start (revert before commit).
+    if (probe_centroid_init) {
+        var csum = Vec3.zero;
+        for (Xv) |xi| csum = csum.add(xi);
+        const cdir = csum.normalize();
+        var mindot: f64 = 1e30;
+        for (Xv) |xi| mindot = @min(mindot, cdir.dot(xi));
+        if (mindot > algo.FEAS_MARGIN) b = cdir;
     }
 
     // 2) Optional hull preprocessing.
@@ -863,7 +881,11 @@ pub fn solve(
         while (cycle < algo.FW_PER_NEWTON) : (cycle += 1) {
             const is_full = (cycle == algo.FW_PER_NEWTON - 1);
 
-            mveeFw(wb.Ps, 1, 0.0, wb.Ql, wb.w);
+            if (probe_inner_iters > 0) {
+                mveeFw(wb.Ps, probe_inner_iters, 1e-9, wb.Ql, wb.w);
+            } else {
+                mveeFw(wb.Ps, 1, 0.0, wb.Ql, wb.w);
+            }
 
             if (is_full) {
                 if (!newtonPolish(wb.Ql, wb.w, algo.ACTIVE_THRESH, 20, tol.NEWTON_INNER, &wb.newton_scratch)) {
@@ -893,7 +915,17 @@ pub fn solve(
 
             const axis = quasiNewtonAxisDirection(outer, m.M, m.center);
             damp.tick(axis.c_norm);
-            const step = acceptBUpdate(Xw, b, Q, axis.u, damp.alpha, wb.P_buf, wb.Ps);
+            if (probe_trace and is_full) {
+                var mindot: f64 = 1e30;
+                for (Xw) |xi| mindot = @min(mindot, b.dot(xi));
+                std.debug.print("  it={d:4} gap={e:9.2} c_norm={e:9.2} alpha={d:.3} min_bx={e:9.2} s_scale={e:9.2}\n", .{ outer, last_gap.gap, axis.c_norm, damp.alpha, mindot, s_scale });
+            }
+            var alpha_eff = damp.alpha;
+            if (probe_step_cap > 0 and axis.c_norm > tol.TINY) {
+                const cap_alpha = probe_step_cap / axis.c_norm;
+                if (cap_alpha < alpha_eff) alpha_eff = cap_alpha;
+            }
+            const step = acceptBUpdate(Xw, b, Q, axis.u, alpha_eff, wb.P_buf, wb.Ps);
             b = step.b;
             Q = step.Q;
             s_scale = step.s_scale;
