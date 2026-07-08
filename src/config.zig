@@ -276,6 +276,13 @@ pub const tol = struct {
     /// strictly feasible margin-1e-7 rings. See the Infeasible outcome
     /// docs in api.zig for the caller-facing statement of this floor.
     pub const FW_Z_EXHAUSTED: f64 = 1e-16;
+    /// Sentinel gap meaning "no certificate could be constructed"
+    /// (zero active points, or the dual moment's Cholesky failed).
+    /// NOT a measured gap: gapConverged never accepts it (regardless
+    /// of gap_tol), gap_tol validation rejects tolerances at or above
+    /// it, and outcomes carrying it have an empty cert and
+    /// uninformative Q/sigma (documented on DidNotConverge.gap).
+    pub const GAP_UNCERTIFIED: f64 = 1e30;
     /// Underflow floor: pivot / scale / log argument.
     pub const UNDERFLOW: f64 = 1e-300;
     /// Relative cutoff for "FP noise" vs. "theorem violation" on values

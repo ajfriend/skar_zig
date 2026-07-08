@@ -638,7 +638,7 @@ pub const GapResult = struct {
     gap: f64,
     cert_n: usize,
     /// A's tangent-plane eigenvectors (lifted to 3D) and eigenvalues. Valid
-    /// only when gap < 1e30; `solve` reuses these to fill `info.Q`/`info.sigma`,
+    /// only when gap < tol.GAP_UNCERTIFIED; `solve` reuses these to fill `info.Q`/`info.sigma`,
     /// skipping a redundant eig2 + lift at the end of the outer loop.
     v1: Vec3,
     v2: Vec3,
@@ -697,7 +697,7 @@ pub fn dualityGapConstructed(
             k += 1;
         }
     }
-    if (k == 0) return .{ .gap = 1e30, .cert_n = 0, .v1 = v1, .v2 = v2, .sigma = sigma };
+    if (k == 0) return .{ .gap = tol.GAP_UNCERTIFIED, .cert_n = 0, .v1 = v1, .v2 = v2, .sigma = sigma };
 
     // Materialize A once; per-point matvec in the zᵢ loop is cheaper than a
     // structural A·x decomposition once there are ≥ 2 points.
@@ -732,7 +732,7 @@ pub fn dualityGapConstructed(
     // is the indefinite-dual guard — Z not PSD enough for log det.
     const M = L.transpose().mul(Z).mul(L).symmetrize();
     const Lm = M.cholesky() orelse
-        return .{ .gap = 1e30, .cert_n = 0, .v1 = v1, .v2 = v2, .sigma = sigma };
+        return .{ .gap = tol.GAP_UNCERTIFIED, .cert_n = 0, .v1 = v1, .v2 = v2, .sigma = sigma };
 
     var w_sum = Vec3.zero;
     for (0..k) |i| {
@@ -937,7 +937,7 @@ fn preprocess(
     //    perf cliffs. See the InputError doc-comments in api.zig for the
     //    contract on each tolerance.
     if (Xv.len < 3) return InputError.InsufficientPoints;
-    if (!std.math.isFinite(opts.gap_tol) or opts.gap_tol <= 0) return InputError.InvalidTolerance;
+    if (!std.math.isFinite(opts.gap_tol) or opts.gap_tol <= 0 or opts.gap_tol >= tol.GAP_UNCERTIFIED) return InputError.InvalidTolerance;
     if (std.math.isNan(opts.coplanarity_tol)) return InputError.InvalidTolerance;
 
     // 1) Feasibility via Farkas FW.
@@ -996,7 +996,7 @@ fn solveAlternating(
 
     // Eigen-data from the last gap call — feeds the converged/partial
     // outcome's Q/sigma at finalization without a redundant eig2 + lift.
-    var last_gap = GapResult{ .gap = 1e30, .cert_n = 0, .v1 = Vec3.zero, .v2 = Vec3.zero, .sigma = .{ 0, 0 } };
+    var last_gap = GapResult{ .gap = tol.GAP_UNCERTIFIED, .cert_n = 0, .v1 = Vec3.zero, .v2 = Vec3.zero, .sigma = .{ 0, 0 } };
     // Axis at which last_gap was computed. The outer loop steps b AFTER
     // certifying, so on DNC the final b is one step past the last
     // certificate — returning (b_cert, last_gap) keeps the outcome's
@@ -1089,6 +1089,10 @@ fn solveAlternating(
 /// fires; anything meaningfully negative beyond `tol.NEG_GAP` is a
 /// broken certificate and errors loudly.
 pub fn gapConverged(gap: f64, gap_tol: f64) SolveError!bool {
+    // The no-certificate sentinel is not a measured gap and must never
+    // certify, no matter how loose gap_tol is (validation additionally
+    // caps gap_tol below it, so this guard is belt-and-braces).
+    if (gap >= tol.GAP_UNCERTIFIED) return false;
     if (@abs(gap) <= gap_tol) return true;
     if (gap < -tol.NEG_GAP) return SolveError.NegativeDualityGap;
     return false;

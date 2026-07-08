@@ -78,8 +78,9 @@ pub const InputError = error{
     /// trivial bounding-cone routine.
     InsufficientPoints,
     /// A tolerance argument (`gap_tol` or `coplanarity_tol`) was not
-    /// finite, or had an invalid sign. See the parameter docs on
-    /// `solve` for the contract on each.
+    /// finite, had an invalid sign, or (gap_tol) was at or above the
+    /// internal no-certificate sentinel (1e30). See the parameter
+    /// docs on `solve` for the contract on each.
     InvalidTolerance,
     /// The input is rank-deficient at the feasible axis: the points'
     /// tangent-plane projections form a near-collinear 2D scatter, so
@@ -341,6 +342,11 @@ pub const DidNotConverge = struct {
     /// inspect alongside `diag` rather than as a uniform quality
     /// metric — unlike `Converged.gap`, this value is not certified
     /// to be below `gap_tol`.
+    ///
+    /// SENTINEL: gap == 1e30 means NO certificate could ever be
+    /// constructed (e.g. a degenerate dual moment); in that state
+    /// `cert` is empty and Q/sigma carry no information. It is not a
+    /// measured gap and can never satisfy any legal `gap_tol`.
     gap: f64,
     /// Algorithm-specific diagnostics; the tag records which solver
     /// path produced this outcome.
