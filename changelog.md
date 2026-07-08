@@ -17,6 +17,12 @@ cells certify at a strict tolerance shifts between paths (answers agree;
 see the PR). The wide-cap fixtures join the bundled case manifest.
 ([#6](https://github.com/ajfriend/skar_zig/pull/6))
 
+Pre-release hardening: fixes false infeasibility proofs on sub-1e-6-margin
+inputs, inconsistent `did_not_converge` snapshots, the un-certifiable
+1e30 sentinel gap, and per-path handling of degenerate inputs (now
+uniformly `CoplanarInput`); tester-facing docs corrected.
+([#7](https://github.com/ajfriend/skar_zig/pull/7))
+
 ## [0.5.0] - 2026-07-08
 
 New EXPERIMENTAL solver selection (`SolveOptions.method`): the `.trust`

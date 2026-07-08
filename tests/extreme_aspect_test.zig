@@ -347,26 +347,21 @@ test "coplanarity check flags great-circle inputs" {
         );
     }
 
-    // Sanity: same input does NOT flag when the check is disabled.
-    // Doc'd contract: when the caller opts out of the coplanarity
-    // gate, the solver must not crash, NaN, or return silent garbage
-    // Converged on degenerate input. The two paths honor that
-    // differently — pin both so a change to either shape is caught:
-    //  - .alternating runs to `max_outer` and returns DidNotConverge
-    //    (the inner FW weights can't concentrate on an active set for
-    //    a rank-deficient SDP, so the gap check never trips);
-    //  - .trust surfaces the rank deficiency immediately as the typed
-    //    SolveError.SingularMoment (its oracle Cholesky-factors the
-    //    design and a coplanar chart is exactly rank-deficient).
-    var unchecked = try sphar.solve(allocator, canon_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = -1, .max_outer = max_outer, .method = .alternating });
-    defer unchecked.deinit();
-    try std.testing.expect(std.meta.activeTag(unchecked) == .did_not_converge);
-    try std.testing.expectEqual(max_outer, unchecked.did_not_converge.diag.alternating.outer_iters);
-
-    try std.testing.expectError(
-        sphar.SolveError.SingularMoment,
-        sphar.solve(allocator, canon_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = -1, .max_outer = max_outer, .method = .trust }),
-    );
+    // Opt-out scope: `coplanarity_tol <= 0` disables only the
+    // NEAR-coplanar rejection. Exactly rank-deficient input has no
+    // meaningful enclosing-cone answer, so it is rejected as the same
+    // typed CoplanarInput on EVERY path even with the check disabled
+    // (tol.COPLANAR_FLOOR) — previously the paths diverged into
+    // per-path garbage on this input: .alternating burned max_outer
+    // to a sentinel-gap DNC, .trust surfaced an internal
+    // SolveError.SingularMoment that the docs told the caller to file
+    // as a library bug.
+    inline for (.{ sphar.Method.alternating, sphar.Method.trust }) |method| {
+        try std.testing.expectError(
+            sphar.InputError.CoplanarInput,
+            sphar.solve(allocator, canon_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = -1, .max_outer = max_outer, .method = method }),
+        );
+    }
 }
 
 test "solve rejects malformed inputs with typed errors" {

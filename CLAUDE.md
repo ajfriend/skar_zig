@@ -39,8 +39,11 @@ finest cells) — which solve in ~1–2 outer iterations and a few µs. Protect 
   iteration"), plus the iteration ceilings in `tests/a5_res0_test.zig`.
 - A CANARY iteration-count shift is a **regression signal**: understand what
   changed and flag it for human confirmation — do not silently bump the expected
-  value. (The finest-resolution S2/A5 cells genuinely DNC at the strict 1e-6
-  default — an f64 gap floor, not a bug; that's intended.)
+  value. (Many finest-resolution S2/A5 cells hit an f64 gap floor above the
+  strict 1e-6 tolerance and honestly DNC there — not a bug. WHICH cells sit
+  above vs below the floor is path-dependent at noise level: under the `.trust`
+  default some certify at 1e-6 that DNC under `.alternating`, and vice versa;
+  `tests/dggs_dnc_test.zig` pins the per-path facts.)
 
 When changing the solver, the full check is: `zig build test -Dslow=true` green
 (watch CANARY shifts) + `ex-bench` per-case (small cells not slower) + a5_res0

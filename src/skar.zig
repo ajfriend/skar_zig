@@ -489,6 +489,13 @@ fn farthestPointSeed(P: []const [2]f64, w: []f64, k_req: usize) void {
     picks[2] = p2;
 
     // Remaining picks: farthest-from-the-chosen-set (max-min distance).
+    // When every remaining point coincides with a pick (fewer distinct
+    // positions than k — possible with hull preprocessing disabled),
+    // best_mindist stays 0 and the argmax would re-pick an already
+    // chosen index; stop with the m distinct picks found instead
+    // (a duplicated index would silently collapse two weight shares
+    // and seed Σw < 1, which FW's pairwise steps and Newton's KKT
+    // both conserve — measured as a hard DNC on a trivial input).
     var m: usize = 3;
     while (m < k) : (m += 1) {
         var best: usize = 0;
@@ -505,13 +512,17 @@ fn farthestPointSeed(P: []const [2]f64, w: []f64, k_req: usize) void {
                 best = i;
             }
         }
+        if (!(best_mindist > 0)) break;
         picks[m] = best;
     }
 
-    // Weights: 1/m on the picks, 0 elsewhere.
+    // Weights: 1/m on the picks, 0 elsewhere. `+=` (not `=`) so the
+    // invariant Σw = 1 survives even if a duplicate pick ever slips
+    // through — two shares then land on one point instead of one
+    // share evaporating.
     for (w) |*wi| wi.* = 0;
     const wval = 1.0 / @as(f64, @floatFromInt(m));
-    for (0..m) |j| w[picks[j]] = wval;
+    for (0..m) |j| w[picks[j]] += wval;
 }
 
 /// Initialize the inner-FW weight vector, choosing the regime by working-set
@@ -638,7 +649,7 @@ pub const GapResult = struct {
     gap: f64,
     cert_n: usize,
     /// A's tangent-plane eigenvectors (lifted to 3D) and eigenvalues. Valid
-    /// only when gap < 1e30; `solve` reuses these to fill `info.Q`/`info.sigma`,
+    /// only when gap < tol.GAP_UNCERTIFIED; `solve` reuses these to fill `info.Q`/`info.sigma`,
     /// skipping a redundant eig2 + lift at the end of the outer loop.
     v1: Vec3,
     v2: Vec3,
@@ -697,7 +708,7 @@ pub fn dualityGapConstructed(
             k += 1;
         }
     }
-    if (k == 0) return .{ .gap = 1e30, .cert_n = 0, .v1 = v1, .v2 = v2, .sigma = sigma };
+    if (k == 0) return .{ .gap = tol.GAP_UNCERTIFIED, .cert_n = 0, .v1 = v1, .v2 = v2, .sigma = sigma };
 
     // Materialize A once; per-point matvec in the zᵢ loop is cheaper than a
     // structural A·x decomposition once there are ≥ 2 points.
@@ -732,7 +743,7 @@ pub fn dualityGapConstructed(
     // is the indefinite-dual guard — Z not PSD enough for log det.
     const M = L.transpose().mul(Z).mul(L).symmetrize();
     const Lm = M.cholesky() orelse
-        return .{ .gap = 1e30, .cert_n = 0, .v1 = v1, .v2 = v2, .sigma = sigma };
+        return .{ .gap = tol.GAP_UNCERTIFIED, .cert_n = 0, .v1 = v1, .v2 = v2, .sigma = sigma };
 
     var w_sum = Vec3.zero;
     for (0..k) |i| {
@@ -937,8 +948,13 @@ fn preprocess(
     //    perf cliffs. See the InputError doc-comments in api.zig for the
     //    contract on each tolerance.
     if (Xv.len < 3) return InputError.InsufficientPoints;
-    if (!std.math.isFinite(opts.gap_tol) or opts.gap_tol <= 0) return InputError.InvalidTolerance;
-    if (std.math.isNan(opts.coplanarity_tol)) return InputError.InvalidTolerance;
+    if (!std.math.isFinite(opts.gap_tol) or opts.gap_tol <= 0 or opts.gap_tol >= tol.GAP_UNCERTIFIED) return InputError.InvalidTolerance;
+    // Non-finite coplanarity_tol violates the InvalidTolerance
+    // contract ("not finite, or invalid sign"): +inf would reject
+    // every input as CoplanarInput (the check's RHS becomes inf).
+    // Negative-finite stays legal — it opts out of the near-coplanar
+    // rejection.
+    if (!std.math.isFinite(opts.coplanarity_tol)) return InputError.InvalidTolerance;
 
     // 1) Feasibility via Farkas FW.
     const hs = try halfspaceCheck(scratch_alloc, Xv);
@@ -964,7 +980,14 @@ fn preprocess(
     //      cone (one tangent eigenvalue → 0) and produces NaN downstream.
     //      Signaled as `InputError.CoplanarInput`, symmetric with
     //      `InsufficientPoints` — both are "X is structurally bad."
-    if (opts.coplanarity_tol > 0 and isCoplanarInput(hp.Xw, b, opts.coplanarity_tol)) {
+    //      `coplanarity_tol <= 0` opts out of the NEAR-coplanar
+    //      rejection only: exactly rank-deficient input is always
+    //      rejected (tol.COPLANAR_FLOOR), uniformly across solver
+    //      paths — there is no meaningful answer for it, and the
+    //      per-path alternatives were a max_outer burn vs. an internal
+    //      error mislabeled as a library bug.
+    const cop_tol = if (opts.coplanarity_tol > 0) opts.coplanarity_tol else tol.COPLANAR_FLOOR;
+    if (isCoplanarInput(hp.Xw, b, cop_tol)) {
         return InputError.CoplanarInput;
     }
 
@@ -996,7 +1019,12 @@ fn solveAlternating(
 
     // Eigen-data from the last gap call — feeds the converged/partial
     // outcome's Q/sigma at finalization without a redundant eig2 + lift.
-    var last_gap = GapResult{ .gap = 1e30, .cert_n = 0, .v1 = Vec3.zero, .v2 = Vec3.zero, .sigma = .{ 0, 0 } };
+    var last_gap = GapResult{ .gap = tol.GAP_UNCERTIFIED, .cert_n = 0, .v1 = Vec3.zero, .v2 = Vec3.zero, .sigma = .{ 0, 0 } };
+    // Axis at which last_gap was computed. The outer loop steps b AFTER
+    // certifying, so on DNC the final b is one step past the last
+    // certificate — returning (b_cert, last_gap) keeps the outcome's
+    // Q/sigma/gap a consistent snapshot of one iterate.
+    var b_cert = b;
 
     // Orthonormal tangent basis at the current b. Rebuilt after each
     // accepted step in the outer loop (trivial: one project-and-normalize
@@ -1041,6 +1069,7 @@ fn solveAlternating(
             if (is_full) {
                 const A_perp = try recoverAPerp(wb.P_buf, m.M);
                 last_gap = try dualityGapConstructed(wb.w, b, Xw, A_perp, Q, &wb.gap_scratch, wb.cert_active, wb.cert_lambdas);
+                b_cert = b;
                 // Convergence + broken-certificate guard (see
                 // gapConverged for the load-bearing ordering).
                 if (try gapConverged(last_gap.gap, opts.gap_tol)) {
@@ -1063,7 +1092,7 @@ fn solveAlternating(
     return buildOutcome(
         allocator,
         converged,
-        b,
+        b_cert,
         last_gap,
         .{ .alternating = .{
             .outer_iters = outer_count,
@@ -1083,6 +1112,10 @@ fn solveAlternating(
 /// fires; anything meaningfully negative beyond `tol.NEG_GAP` is a
 /// broken certificate and errors loudly.
 pub fn gapConverged(gap: f64, gap_tol: f64) SolveError!bool {
+    // The no-certificate sentinel is not a measured gap and must never
+    // certify, no matter how loose gap_tol is (validation additionally
+    // caps gap_tol below it, so this guard is belt-and-braces).
+    if (gap >= tol.GAP_UNCERTIFIED) return false;
     if (@abs(gap) <= gap_tol) return true;
     if (gap < -tol.NEG_GAP) return SolveError.NegativeDualityGap;
     return false;
@@ -1093,6 +1126,10 @@ pub fn gapConverged(gap: f64, gap_tol: f64) SolveError!bool {
 /// eigendecomposition (Q's columns are (b, v1, v2) with eigenvalues
 /// (SIGMA_0, sigma[0], sigma[1]); v2 flipped if needed so det Q = +1),
 /// and wrap as Converged / DidNotConverge.
+/// `b` MUST be the axis at which `last_gap` was computed: Q's
+/// orthonormality (and the meaning of gap/sigma) depends on v1/v2
+/// being tangent to this exact axis. Callers track a `b_cert`
+/// alongside `last_gap` for this reason.
 pub fn buildOutcome(
     allocator: std.mem.Allocator,
     converged: bool,

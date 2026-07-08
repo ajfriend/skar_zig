@@ -41,3 +41,31 @@ test "max_outer cap forces DidNotConverge on any input" {
         try std.testing.expect(@abs(p.gap) > 1e-20);
     }
 }
+
+test "duplicate-heavy input with hull preprocessing disabled still converges" {
+    // Regression for pre-release review finding 7: farthestPointSeed's
+    // greedy pick loop could re-pick an already-chosen index when
+    // fewer distinct positions than SEED_SPARSE_K remain (only
+    // reachable with n_hull disabled — the hull dedupes exact
+    // duplicates), collapsing two weight shares and seeding Σw = 0.8.
+    // FW's pairwise steps and Newton's KKT both conserve the deficit,
+    // which surfaced as a hard DNC (gap ~0.069) on an input whose
+    // optimal AR is exactly 1.
+    const allocator = std.testing.allocator;
+    // 4 corners of a square on a small cap around +z, 5 copies each:
+    // 20 points (> SEED_SPARSE_MIN_POINTS) but 4 distinct positions.
+    const r = 0.1;
+    const zc = @sqrt(1.0 - 2.0 * r * r);
+    const corners = [_][3]f64{
+        .{ r, r, zc }, .{ -r, r, zc }, .{ -r, -r, zc }, .{ r, -r, zc },
+    };
+    var pts: [20][3]f64 = undefined;
+    for (0..20) |i| pts[i] = corners[i % 4];
+
+    for ([_]sphar.Method{ .alternating, .trust }) |method| {
+        var o = try sphar.solve(allocator, &pts, .{ .n_hull = -1, .method = method });
+        defer o.deinit();
+        try std.testing.expect(std.meta.activeTag(o) == .converged);
+        try std.testing.expectApproxEqAbs(@as(f64, 1.0), o.converged.aspectRatio(), 1e-6);
+    }
+}

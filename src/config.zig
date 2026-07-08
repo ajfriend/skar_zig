@@ -263,8 +263,37 @@ pub const tol = struct {
     pub const TINY: f64 = 1e-30;
     /// 2D det / scalar singular guard (denominator-is-zero cutoff).
     pub const NEAR_SING: f64 = 1e-15;
-    /// halfspaceCheck: z.dot(z) ceiling below which FW cannot make progress.
-    pub const FW_Z_EXHAUSTED: f64 = 1e-12;
+    /// halfspaceCheck: z.dot(z) floor below which the feasibility
+    /// question is f64-undecidable and the loop stops. For a FEASIBLE
+    /// input, ‖z‖ can never drop below the hemisphere margin m
+    /// (‖z‖ ≥ dist(0, conv X) = m), and the all-positive witness needs
+    /// the optimality bound xᵢ·z* ≥ m² to clear dot-product noise
+    /// (~1e-16) — so m ≳ 1e-8 is provable and the floor sits exactly
+    /// there: ‖z‖ < 1e-8 ⟺ z·z < 1e-16 means "infeasible, or margin
+    /// below ~1e-8". The previous value (1e-12, i.e. ‖z‖ < 1e-6)
+    /// falsely declared the whole (1e-8, 1e-6) margin band "proven
+    /// infeasible" — measured 200/200 false infeasibility proofs on
+    /// strictly feasible margin-1e-7 rings. See the Infeasible outcome
+    /// docs in api.zig for the caller-facing statement of this floor.
+    pub const FW_Z_EXHAUSTED: f64 = 1e-16;
+    /// Hard floor for the coplanarity gate: applied even when the
+    /// caller disables the tunable check (`coplanarity_tol <= 0`).
+    /// Exactly rank-deficient input has NO meaningful enclosing-cone
+    /// answer (one tangent eigenvalue -> 0, AR -> inf), and letting it
+    /// through only buys a max_outer burn (alternating) or an internal
+    /// SolveError mislabeled as a library bug (trust) — per-path
+    /// garbage for the same input. Several orders below the 1e-12
+    /// default so the opt-out keeps its meaning ("handle NEAR-coplanar
+    /// yourself") while f64-exact degeneracy is always rejected as the
+    /// typed InputError.CoplanarInput on every path.
+    pub const COPLANAR_FLOOR: f64 = 1e-24;
+    /// Sentinel gap meaning "no certificate could be constructed"
+    /// (zero active points, or the dual moment's Cholesky failed).
+    /// NOT a measured gap: gapConverged never accepts it (regardless
+    /// of gap_tol), gap_tol validation rejects tolerances at or above
+    /// it, and outcomes carrying it have an empty cert and
+    /// uninformative Q/sigma (documented on DidNotConverge.gap).
+    pub const GAP_UNCERTIFIED: f64 = 1e30;
     /// Underflow floor: pivot / scale / log argument.
     pub const UNDERFLOW: f64 = 1e-300;
     /// Relative cutoff for "FP noise" vs. "theorem violation" on values

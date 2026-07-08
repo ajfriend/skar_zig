@@ -433,6 +433,11 @@ pub fn solveTrust(
     var eager_certified = false;
 
     var last_gap: GapResult = undefined;
+    // Axis at which last_gap was computed (see buildOutcome's contract):
+    // TR-loop certification is gated on pred, and the RECERT loop can be
+    // budget-skipped, so on DNC the final b may be several accepted
+    // steps past the last certificate.
+    var b_cert = b;
 
     // Eager first certificate — the alternating path's exact opening cadence
     // (two FW steps, one polish, certify) BEFORE any full-precision
@@ -459,6 +464,7 @@ pub fn solveTrust(
         }
         var m = core.computeMoments(wb.Ps, wb.w, s_scale);
         last_gap = try certifyAt(m.M, Q, b, Xw, &wb);
+        b_cert = b;
         if (try core.gapConverged(last_gap.gap, opts.gap_tol)) {
             converged = true;
             eager_certified = true;
@@ -494,6 +500,7 @@ pub fn solveTrust(
             if (is_full) {
                 open_iters += 1;
                 last_gap = try certifyAt(m.M, Q, b, Xw, &wb);
+                b_cert = b;
                 if (try core.gapConverged(last_gap.gap, opts.gap_tol)) converged = true;
             }
         }
@@ -513,6 +520,7 @@ pub fn solveTrust(
         if (cur.polish_failed) polish_failures += 1;
 
         last_gap = try certifyAt(cur.moments.M, cur.Q, b, Xw, &wb);
+        b_cert = b;
         converged = try core.gapConverged(last_gap.gap, opts.gap_tol);
     }
 
@@ -530,7 +538,7 @@ pub fn solveTrust(
         // circular-optimum limit) so the dogleg's prediction is
         // positive whenever g ≠ 0.
         var B = cur.B;
-        if (B.det() <= 0 or B.m[0] <= 0) B = .{ .m = .{ tc.B0, 0, 0, tc.B0 } };
+        if (!(B.det() > 0) or !(B.m[0] > 0)) B = .{ .m = .{ tc.B0, 0, 0, tc.B0 } }; // negated form: NaN falls back too
 
         var step = doglegStep(B, cur.g, delta);
         if (step.pred <= 0) {
@@ -550,7 +558,9 @@ pub fn solveTrust(
         const trial = evalH(b_trial, Xw, &wb, algo.FEAS_MARGIN);
 
         const rho: f64 = if (trial) |t| (cur.h - t.h) / step.pred else -1.0;
-        if (rho < tc.ETA) {
+        // !(rho >= ETA), not rho < ETA: a NaN ratio (h from a poisoned
+        // state) must REJECT the trial, not accept it.
+        if (!(rho >= tc.ETA)) {
             // Reject: restore the warm-start weights, shrink the radius
             // (relative to the step actually attempted, so interior
             // Newton steps shrink meaningfully too).
@@ -573,6 +583,7 @@ pub fn solveTrust(
         // config.trust.CERT_PRED_FACTOR.
         if (step.pred <= tc.CERT_PRED_FACTOR * opts.gap_tol) {
             last_gap = try certifyAt(cur.moments.M, cur.Q, b, Xw, &wb);
+            b_cert = b;
             if (try core.gapConverged(last_gap.gap, opts.gap_tol)) {
                 converged = true;
                 break;
@@ -620,6 +631,7 @@ pub fn solveTrust(
             }
             const m = core.computeMoments(wb.Ps, wb.w, s_scale);
             last_gap = try certifyAt(m.M, Q, b, Xw, &wb);
+            b_cert = b;
             if (try core.gapConverged(last_gap.gap, opts.gap_tol)) {
                 converged = true;
                 break;
@@ -637,7 +649,7 @@ pub fn solveTrust(
     return core.buildOutcome(
         allocator,
         converged,
-        b,
+        b_cert,
         last_gap,
         .{ .trust = .{
             .eager_certified = eager_certified,

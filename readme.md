@@ -40,11 +40,18 @@ switch (outcome) {
 `b()`, `A()` only exist on the `Converged` variant — there's no
 top-level method to accidentally call on a non-converged result.
 
+Solver selection: `SolveOptions.method` defaults to `.auto`, an alias
+for the library's recommended method (currently `.trust`, a
+trust-region solver — the default since 0.6.0). Pin `.trust` or
+`.alternating` (the original solver, bit-stable with pre-0.6.0
+defaults) if you need version-stable behavior.
+
 ## Layout
 
 - `src/root.zig` — public API re-exports
 - `src/api.zig` — public API surface (types + methods + `checkFeasibility`)
-- `src/skar.zig` — solver core (std-only)
+- `src/skar.zig` — solver core: preprocessing, the alternating path, dispatch (std-only)
+- `src/trust.zig` — the trust-region solver path (what `.auto` resolves to)
 - `src/linalg.zig`, `src/halfspace.zig`, `src/newton.zig`, `src/config.zig` — internal modules
 - `tests/*_test.zig` — top-level tests (run via `zig build test`)
 - `tests/cases/cases.zig` — comptime manifest over the .zon files; exposed as the `cases` build module
@@ -53,6 +60,7 @@ top-level method to accidentally call on a non-converged result.
 - `test_root.zig` — test-target root at repo level
 - `examples/basic.zig`, `examples/status.zig`, `examples/cases.zig` — end-user usage demos
 - `examples/bench.zig` — per-case timing (release-built; run via `zig build ex-bench`)
+- `examples/compare.zig` — alternating-vs-trust comparison (release-built; `zig build ex-compare`)
 - `dev.md` — developer-workflow guide (coverage, layout, conventions)
 
 ## Build
@@ -64,12 +72,12 @@ zig build ex-status    # runs examples/status.zig
 zig build ex-cases -- hex      # runs one bundled case
 zig build ex-cases -- --all    # runs every bundled case
 zig build ex-bench     # runs the per-case timing bench (release-built)
-zig build test         # runs tests under kcov via `just test`; see dev.md
+zig build test         # fast unit suite (no coverage)
 ```
 
-Equivalent `just` targets are in `justfile`. The `test` recipe
-enforces 100% line coverage via kcov (see `dev.md` for the full
-workflow).
+Equivalent `just` targets are in `justfile`. The full suite +
+100% line-coverage gate under kcov is `just test-slow` (the
+pre-commit / CI check); see `dev.md` for the full workflow.
 
 ## License
 

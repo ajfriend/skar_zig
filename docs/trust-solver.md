@@ -24,8 +24,11 @@ and every ingredient a second-order method needs is already in the
 codebase: the inner minimization at fixed b is exactly the alternating path's
 2D MVEE, the gradient of h falls out of the inner solution for free,
 and h itself is computable — so descent can be *verified*, not hoped
-for. The trust solver is a textbook trust-region BFGS on h over the
-sphere, built entirely from parts the alternating path already had.
+for. The trust solver is a textbook trust-region method on h over the
+sphere — with an exact envelope Hessian since the
+`perf/trust-losing-cases` work (the model started as BFGS, then the
+fixed-w Hessian, then the exact one; see the dated sections below) —
+built entirely from parts the alternating path already had.
 
 ## Everything, seen through h
 
@@ -146,7 +149,7 @@ trust-region constants), tuned in the sessions recorded below.
 ## Performance so far (2026-07-07, `zig build ex-compare`, ReleaseFast)
 
 All measurements in this section (ex-compare, the probes, and the
-`joint_test.zig` assertions) solve to the library default
+`methods_test.zig` assertions) solve to the library default
 **`gap_tol = 1e-6`** — a *certified* duality gap: convergence means the
 constructed dual certificate proves the iterate is within 1e-6 of
 optimal in −log det units, not that iteration merely stalled. "DNC"
@@ -452,9 +455,9 @@ Done (this branch):
 - [x] `zig build test -Dslow=true` green with `.trust` tests included;
       no CANARY shifts (default path untouched).
 - [x] Wide-cap fixtures (`tests/wide_cap_cells.zig`): converge, AR vs
-      Clarabel ≤ ~1e-4 rel, feasibility ≤ 1e-12 (`tests/joint_test.zig`).
+      Clarabel ≤ ~1e-4 rel, feasibility ≤ 1e-12 (`tests/methods_test.zig`).
 - [x] Manifest agreement vs alternating incl. the extreme-κ cells pure joint
-      fails on (`tests/joint_test.zig`).
+      fails on (`tests/methods_test.zig`).
 - [x] Wide-cap grid 0 DNC (ex-compare part 2).
 - [x] a5_res0 dense 12/12 in ≤ 2 iterations (probe13).
 - [x] Cross-validated against two independent oracles: Clarabel (SDP)
@@ -615,16 +618,15 @@ Open, roughly in order:
       RECERT; notable: the alternating path's "hard tail" A5 cell costs the
       same as the common one under reduced);
       `tests/a5_res0_test.zig` (dense ≤ 8, sparse ≤ 2);
-      `tests/joint_test.zig` (wide-cap fixture ceilings 30 / 50 / 25).
+      `tests/methods_test.zig` (wide-cap fixture ceilings 30 / 50 / 25).
       These pins already paid for themselves once — asking "how does
       reduced do on the canaries?" is what surfaced the 26-rejection
       Δ-collapse thrash the survey means had hidden.
-- [ ] **Decide the endgame**: `.trust` as default with the alternating path retired,
-      or the alternating path kept as the small-cell shortcut. Requires the tuning item
-      and a bench story on the 4–10-point hot path.
-- [ ] Revert the TEMPORARY probe knobs (`skar.probe_*`,
-      `reduced.probe_trace`, `config.joint.probe_mu`) and decide the
-      probes' fate before anything merges to `main`.
+- [x] **Decide the endgame** — decided and shipped: `.trust` is the
+      default (via the `.auto` alias) since 0.6.0, with the alternating
+      path kept available and bit-stable (PR #6).
+- [x] Revert the TEMPORARY probe knobs — done before the v0.5.0 merge
+      (commit 8a0ef43); no `probe_*` symbols remain in the tree.
 
 ## Reproducing
 
