@@ -130,6 +130,20 @@ optimum). All prototype values, untuned.
 
 ## Performance so far (2026-07-07, `zig build ex-compare`, ReleaseFast)
 
+All measurements in this section (ex-compare, the probes, and the
+`joint_test.zig` assertions) solve to the library default
+**`gap_tol = 1e-6`** — a *certified* duality gap: convergence means the
+constructed dual certificate proves the iterate is within 1e-6 of
+optimal in −log det units, not that iteration merely stalled. "DNC"
+likewise means "could not certify 1e-6," under the default
+`max_outer = 100` except where a probe says otherwise. Converged gaps
+in the tables often land well below the tolerance (e.g. 3e-11 on
+cap82_s1) because the last trust-region step overshoots it; AR
+agreement between converged solvers is correspondingly tighter than the
+gap bound (≤ 1e-7 relative vs fast; the looser ~1e-4 checks against the
+Clarabel references reflect the stored references' 7-significant-digit
+precision, not solver disagreement).
+
 Headline table:
 
 | axis | fast | joint IPM | reduced |
