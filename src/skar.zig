@@ -576,7 +576,7 @@ const newton = @import("newton.zig");
 const NewtonScratch = newton.NewtonScratch;
 const newtonPolish = newton.newtonPolish;
 
-// Alternative solver path (EXPERIMENTAL; `SolveOptions.method`).
+// The trust solver path (`SolveOptions.method`).
 const trust = @import("trust.zig");
 
 // ----------------------------------------------------------------
@@ -1167,35 +1167,10 @@ pub fn solve(
         .ready => |p| p,
     };
 
-    switch (opts.method) {
+    switch (opts.method.resolved()) {
         .alternating => return solveAlternating(allocator, scratch_alloc, prep, opts),
         .trust => return trust.solveTrust(allocator, scratch_alloc, prep, opts),
-        .auto => {
-            var fast_out = try solveAlternating(allocator, scratch_alloc, prep, opts);
-            if (fast_out != .did_not_converge) return fast_out;
-            // Fallback: the trust path (dominates the joint IPM on
-            // every measured axis — see docs/trust-solver.md).
-            var trust_out = try trust.solveTrust(allocator, scratch_alloc, prep, opts);
-            switch (trust_out) {
-                .converged => {
-                    fast_out.deinit();
-                    return trust_out;
-                },
-                .did_not_converge => |rd| {
-                    // Neither path converged: return the iterate with the
-                    // smaller (more trustworthy) gap, free the other.
-                    if (rd.gap <= fast_out.did_not_converge.gap) {
-                        fast_out.deinit();
-                        return trust_out;
-                    }
-                    trust_out.deinit();
-                    return fast_out;
-                },
-                // Feasibility was established in preprocess; the trust
-                // path never re-derives infeasibility.
-                .infeasible => unreachable,
-            }
-        },
+        .auto => unreachable, // resolved() maps .auto to Method.recommended
     }
 }
 

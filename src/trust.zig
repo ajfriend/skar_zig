@@ -1,4 +1,4 @@
-//! EXPERIMENTAL trust solver path (`SolveOptions.method = .trust`).
+//! The trust solver path (`SolveOptions.method = .trust`, the default).
 //!
 //! Trust-region descent on the *reduced* convex objective
 //!

@@ -134,39 +134,64 @@ pub const SolveOptions = struct {
     /// one Newton polish + one gap check.
     max_outer: u32 = 100,
 
-    /// EXPERIMENTAL — solver path selection (prototype on the
-    /// `investigate/wide-cap-dnc` branch; see docs/wide-cap-dnc-report.md).
+    /// Solver path selection.
     ///
-    ///   .alternating — the original solver: alternates single
-    ///            Frank–Wolfe weight steps with damped axis steps. Very
-    ///            fast on the DGGS hot path, but limit-cycles on dense
-    ///            inputs spanning ≳ 81° from the optimal axis.
+    ///   .auto  — the default: resolves to the library's recommended
+    ///            method for this version, `Method.recommended` (the
+    ///            single place the resolution is defined). The
+    ///            resolution MAY change between minor versions as
+    ///            methods improve; pin a concrete method below if you
+    ///            need version-stable solver behavior.
     ///   .trust — trust-region descent on the reduced convex
-    ///            objective h(b) = min_A(−log det A) over the sphere,
-    ///            using the alternating path's inner MVEE machinery as
-    ///            the oracle and the same certification. Converges on
-    ///            the wide-angle/elongated inputs the alternating path
-    ///            cannot (see src/trust.zig and docs/trust-solver.md).
-    ///   .auto  — .alternating first; if it returns
-    ///            `did_not_converge`, retry with .trust on the same
-    ///            preprocessed working set and return the better
-    ///            outcome.
+    ///            objective h(b) = min_A(−log det A) over the
+    ///            sphere, using the alternating path's inner MVEE
+    ///            machinery as the oracle and the same certification
+    ///            (see src/trust.zig and docs/trust-solver.md).
+    ///            Converges on every input family constructed to date,
+    ///            including the wide-angle/elongated inputs .alternating
+    ///            structurally cannot (dense caps past ~82°, regions
+    ///            like France at the default iteration budget), at DGGS
+    ///            success-speed parity.
+    ///   .alternating — the original solver: alternates single
+    ///            Frank–Wolfe weight steps with damped axis steps.
+    ///            Kept for continuity (bit-stable with pre-0.6.0
+    ///            defaults) and for large dense near-circular inputs,
+    ///            where it can still be ~2× faster; limit-cycles on
+    ///            dense inputs spanning ≳ 81° from the optimal axis.
     ///
-    /// Default .alternating keeps existing behavior bit-identical while
-    /// the prototype is evaluated.
-    method: Method = .alternating,
+    /// Which cells certify at a tolerance near the f64 gap floor
+    /// (finest-resolution S2/A5) differs between paths at noise level;
+    /// aspect ratios agree to ~1e-7 relative wherever both certify.
+    method: Method = .auto,
 };
 
 /// Solver path selector for `SolveOptions.method` (see that field's
 /// doc-comment for the semantics of each variant).
-pub const Method = enum { alternating, trust, auto };
+pub const Method = enum {
+    alternating,
+    trust,
+    auto,
+
+    /// The concrete method `.auto` resolves to in this version — THE
+    /// single source of truth for the alias. Re-pointing `.auto` in a
+    /// future version means changing this one declaration (and the
+    /// alias-identity test in tests/methods_test.zig, which pins it).
+    pub const recommended: Method = .trust;
+
+    /// Resolve `.auto` to its concrete method; concrete methods map to
+    /// themselves. `solve`'s dispatch switches on this.
+    pub fn resolved(self: Method) Method {
+        return if (self == .auto) recommended else self;
+    }
+};
 
 /// Per-algorithm diagnostics, tagged by the solver path that produced
 /// the outcome. The mathematical contract — Q, sigma, gap, cert — is
 /// shared and method-independent; everything in here is diagnostic and
 /// algorithm-specific, so each path gets its own well-typed struct
-/// instead of overloading shared counters. Under `method = .auto` the
-/// tag additionally records WHICH path produced the returned outcome.
+/// instead of overloading shared counters. The tag records the
+/// concrete path that ran; under `method = .auto` that is
+/// `Method.recommended`.
 pub const Diagnostics = union(enum) {
     alternating: AlternatingDiagnostics,
     trust: TrustDiagnostics,

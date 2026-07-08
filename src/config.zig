@@ -118,10 +118,12 @@ pub const algo = struct {
 
 };
 
-/// Tuning for the EXPERIMENTAL trust solver path (`src/trust.zig`,
-/// `SolveOptions.method = .trust`): trust-region descent on the reduced
+/// Tuning for the trust solver path (`src/trust.zig`, the
+/// `SolveOptions.method` default): trust-region descent on the reduced
 /// convex objective h(b) over the sphere, with the alternating path's inner
-/// MVEE machinery as the oracle. Prototype values — not yet tuned.
+/// MVEE machinery as the oracle. Values tuned and validated across the
+/// DGGS surveys, states/countries, and the wide-cap grid — see
+/// docs/trust-solver.md for the tuning history and measurements.
 pub const trust = struct {
     /// Alternating-cadence opening rounds after the eager iteration-0
     /// certificate, before any trust-region work. Each round is one

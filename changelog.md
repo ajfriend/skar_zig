@@ -5,6 +5,18 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-07-08
+
+Breaking: `SolveOptions.method` now defaults to `.auto`, redefined as a
+pure alias for the library's recommended method — currently `.trust`,
+which converges on every input family constructed to date (wide caps, all
+surveyed regions) at DGGS-speed parity. `.alternating` remains available
+and bit-stable with the previous default; `.auto`'s old
+alternating-then-trust fallback is removed. Near the f64 gap floor, which
+cells certify at a strict tolerance shifts between paths (answers agree;
+see the PR). The wide-cap fixtures join the bundled case manifest.
+([#6](https://github.com/ajfriend/skar_zig/pull/6))
+
 ## [0.5.0] - 2026-07-08
 
 New EXPERIMENTAL solver selection (`SolveOptions.method`): the `.trust`

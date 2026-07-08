@@ -123,22 +123,36 @@ test "S2 L30 cell certifies at an f64-achievable tolerance (cell 332c258c3f285f9
     try std.testing.expectApproxEqAbs(1.21362116, outcome.converged.aspectRatio(), 1e-4);
 }
 
-test "A5/S2 finest cells correctly DNC at the strict 1e-6 default" {
-    // The companion assertion: at the strict default the solver honestly
-    // declines to certify (the gap floor is above 1e-6). This is the key
-    // regression guard — it pins that a future change can't silently make
-    // these cells "converge" at 1e-6 via a non-certificate (the exact
-    // failure mode this investigation hit). Both named cells are asserted,
-    // symmetric with the 1e-3 convergence tests above.
+test "A5/S2 finest cells: honest decline at the strict 1e-6 tolerance" {
+    // The companion assertion: at the strict 1e-6 tolerance the solver
+    // honestly declines to certify when the f64 gap floor sits above it.
+    // This is the key regression guard — it pins that a change can't
+    // silently make floor cells "converge" at 1e-6 via a non-certificate
+    // (the exact failure mode this investigation hit).
+    //
+    // Which cells sit above vs below the floor is PATH-DEPENDENT at
+    // noise level (the certificate is noisier than the answer near the
+    // floor): under .alternating both cells DNC; under .trust (the
+    // default since the flip) this A5 cell still DNCs (gap ~3.3e-4)
+    // while the S2 cell legitimately certifies (gap ~4.9e-7 ≤ 1e-6 — a
+    // real certificate, not the guarded failure mode). Pin all three
+    // facts.
     const allocator = std.testing.allocator;
 
-    var oa = try skar.solve(allocator, &A5_CELL, .{}); // default gap_tol = 1e-6
+    for ([_][]const [3]f64{ &A5_CELL, &S2_CELL }) |cell| {
+        var o = try skar.solve(allocator, cell, .{ .method = .alternating }); // default gap_tol = 1e-6
+        defer o.deinit();
+        try std.testing.expect(std.meta.activeTag(o) == .did_not_converge);
+    }
+
+    var oa = try skar.solve(allocator, &A5_CELL, .{}); // default method (.trust), gap_tol = 1e-6
     defer oa.deinit();
     try std.testing.expect(std.meta.activeTag(oa) == .did_not_converge);
 
     var os = try skar.solve(allocator, &S2_CELL, .{});
     defer os.deinit();
-    try std.testing.expect(std.meta.activeTag(os) == .did_not_converge);
+    try std.testing.expect(std.meta.activeTag(os) == .converged);
+    try std.testing.expect(@abs(os.converged.gap) <= 1e-6);
 }
 
 test "H3 r9 near-circular hexagon converges at the strict 1e-6 default (cell 899f4d0cd47ffff)" {
@@ -196,7 +210,7 @@ test "H3 r9 cell: no artificial gap floor between gap_tol and ACTIVE_THRESH" {
     }
 }
 
-// ── Outer-iteration CANARIES (informational, NOT hard requirements) ──────
+// ── Alternating-path CANARIES (informational, NOT hard requirements) ─────
 //
 // These pin the exact/near-exact outer-iteration count on a few cells. They
 // are deliberately brittle: their job is to *flag the developer* when a
@@ -222,53 +236,53 @@ test "H3 r9 cell: no artificial gap floor between gap_tol and ACTIVE_THRESH" {
 // If you are updating these expected counts: that means solver behaviour
 // changed — call it out explicitly rather than quietly bumping the number.
 
-test "CANARY: H3 r15 cell converges in 1 outer iteration (strict default)" {
+test "CANARY(alternating): H3 r15 cell converges in 1 outer iteration (strict default)" {
     const allocator = std.testing.allocator;
     const h3 = cases.byName("h3_r15_equator").?.points;
-    var outcome = try skar.solve(allocator, h3, .{}); // default gap_tol = 1e-6
+    var outcome = try skar.solve(allocator, h3, .{ .method = .alternating }); // default gap_tol = 1e-6
     defer outcome.deinit();
 
     try std.testing.expect(std.meta.activeTag(outcome) == .converged);
     try std.testing.expectEqual(@as(u32, 1), outcome.converged.diag.alternating.outer_iters);
 }
 
-test "CANARY: H3 r9 near-circular hexagon converges in 2 outer iterations (strict default)" {
+test "CANARY(alternating): H3 r9 near-circular hexagon converges in 2 outer iterations (strict default)" {
     // Sister to the r15 canary: the well-conditioned mid-resolution band now
     // certifies the strict 1e-6 default. The degenerate design takes one extra
     // outer iteration to refine the small-weight binding constraints (2 vs r15's
     // 1). If this count shifts, solver behaviour changed — flag it, don't bump.
     const allocator = std.testing.allocator;
-    var outcome = try skar.solve(allocator, &H3_R9_CELL, .{}); // default gap_tol = 1e-6
+    var outcome = try skar.solve(allocator, &H3_R9_CELL, .{ .method = .alternating }); // default gap_tol = 1e-6
     defer outcome.deinit();
 
     try std.testing.expect(std.meta.activeTag(outcome) == .converged);
     try std.testing.expectEqual(@as(u32, 2), outcome.converged.diag.alternating.outer_iters);
 }
 
-test "CANARY: S2 L30 cell converges in 1 outer iteration" {
+test "CANARY(alternating): S2 L30 cell converges in 1 outer iteration" {
     const allocator = std.testing.allocator;
-    var outcome = try skar.solve(allocator, &S2_CELL, .{ .gap_tol = DGGS_GAP_TOL });
+    var outcome = try skar.solve(allocator, &S2_CELL, .{ .gap_tol = DGGS_GAP_TOL, .method = .alternating });
     defer outcome.deinit();
 
     try std.testing.expect(std.meta.activeTag(outcome) == .converged);
     try std.testing.expectEqual(@as(u32, 1), outcome.converged.diag.alternating.outer_iters);
 }
 
-test "CANARY: a common A5 r30 cell converges in exactly 2 outer iterations" {
+test "CANARY(alternating): a common A5 r30 cell converges in exactly 2 outer iterations" {
     const allocator = std.testing.allocator;
-    var outcome = try skar.solve(allocator, &A5_CELL, .{ .gap_tol = DGGS_GAP_TOL });
+    var outcome = try skar.solve(allocator, &A5_CELL, .{ .gap_tol = DGGS_GAP_TOL, .method = .alternating });
     defer outcome.deinit();
 
     try std.testing.expect(std.meta.activeTag(outcome) == .converged);
     try std.testing.expectEqual(@as(u32, 2), outcome.converged.diag.alternating.outer_iters);
 }
 
-test "CANARY: a harder A5 r30 cell takes more than 2 outer iterations" {
+test "CANARY(alternating): a harder A5 r30 cell takes more than 2 outer iterations" {
     // This cell currently takes 4 (the rare tail of the A5 distribution);
     // we only assert > 2 so the canary is about "demonstrably more work than
     // the common case", not the exact tail value.
     const allocator = std.testing.allocator;
-    var outcome = try skar.solve(allocator, &A5_CELL_4ITER, .{ .gap_tol = DGGS_GAP_TOL });
+    var outcome = try skar.solve(allocator, &A5_CELL_4ITER, .{ .gap_tol = DGGS_GAP_TOL, .method = .alternating });
     defer outcome.deinit();
 
     try std.testing.expect(std.meta.activeTag(outcome) == .converged);
@@ -277,7 +291,7 @@ test "CANARY: a harder A5 r30 cell takes more than 2 outer iterations" {
 
 // ── Trust-path CANARIES (same cells, same spirit) ────────────────────────
 //
-// Iteration pins for the EXPERIMENTAL `.trust` path on the same five
+// Iteration pins for the `.trust` path (the default) on the same five
 // cells the alternating-path canaries pin. Same policy: a trip is a signal to
 // understand what changed and call it out — never quietly bump.
 //
