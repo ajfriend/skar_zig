@@ -99,6 +99,9 @@ pub const all: []const Entry = &.{
     .{ .name = "oct_s1", .case = @import("zon/oct_s1.zon") },
     .{ .name = "oct_s2", .case = @import("zon/oct_s2.zon") },
     .{ .name = "oct_s3", .case = @import("zon/oct_s3.zon") },
+    .{ .name = "wide_cap82", .case = @import("zon/wide_cap82.zon") },
+    .{ .name = "wide_cap85", .case = @import("zon/wide_cap85.zon") },
+    .{ .name = "wide_cap89", .case = @import("zon/wide_cap89.zon") },
 };
 
 /// Look up a case by name. Linear scan; the manifest is tiny.
