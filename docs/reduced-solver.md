@@ -422,9 +422,22 @@ Done (this branch):
       reduced method's iteration 0 is now *literally* the fast path's
       first outer iteration, and the trust region is what happens
       instead of the damped wander when that first certificate doesn't
-      pass — the two designs have converged into one. The dedup half
-      of the fusion work (shared design state) was measured
-      unnecessary after this and skipped.
+      pass — the two designs have converged into one.
+
+      The dedup half of the fusion work (shared design state,
+      estimated 20–30% of a FULL-oracle evaluation) was DEFERRED, not
+      refuted: the eager certificate reroutes the hot path so it never
+      executes the full pipeline where those redundancies live — the
+      eager sequence has roughly the fast path's own redundancy level
+      — so the savings no longer touch the DGGS success-speed metric,
+      which reached parity without them. The unharvested 20–30% still
+      applies to evaluations that run the full oracle (TR iterations:
+      wide caps, geographies, the np400/ha mid-band), i.e. the
+      nice-to-have band; against that stands its cost — threading
+      polish internals across the newton/reduced boundary. Revisit
+      only if full-oracle-band speed ever becomes a priority. (The
+      dedup's own saving was never measured; what probe27 measured is
+      that the goal was met without it.)
 
       CANARY-cell comparison (fast pins vs reduced, post-fix): H3 r15
       1 → **0**, S2 L30 1 → **0**, A5 hard tail 4 → **3**, H3 r9
