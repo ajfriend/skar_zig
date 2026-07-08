@@ -206,7 +206,10 @@ cases manifest with `.auto` expectations.
 
 **Superseding note:** the reduced path below dominates `.joint` on every
 axis measured; if it holds up, the `.auto` fallback (and possibly the fast
-path's role as the primary) should be re-pointed at `.reduced`.
+path's role as the primary) should be re-pointed at `.reduced`. The reduced
+method now has its own tracking doc — **`docs/reduced-solver.md`** (writeup,
+measurements, validation ledger); the section below is the historical record
+of its first results.
 
 ## Prototype results (2026-07-07, later): reduced trust-region path
 
