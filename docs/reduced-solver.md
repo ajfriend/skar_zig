@@ -109,24 +109,33 @@ fast path, with the same gap semantics.
 
 ## The algorithm
 
-Standard 2D trust-region BFGS over the sphere (retraction:
-b′ = normalize(b + Q̂·u)):
+Standard 2D trust region over the sphere (retraction:
+b′ = normalize(b + Q̂·u)), with an *analytic per-evaluation model
+Hessian* — the majorant Hessian — instead of BFGS (see the
+majorant-model section below for the history):
 
-1. Evaluate h, g = −3c, and the certificate at the current b; stop when
-   the certified |gap| ≤ `gap_tol`.
-2. Dogleg step u against the 2×2 BFGS model B within radius Δ. If the
-   model's own predicted decrease is non-positive (BFGS can go
-   ill-conditioned near active-set kinks), reset B = B₀·I and re-solve
-   — with a fresh model the prediction is positive whenever g ≠ 0.
-3. Trial-evaluate h(b′) (weights snapshot/restored on rejection — the
-   warm start is part of the state). ρ = actual/predicted decrease;
-   reject and shrink Δ if ρ < 0.05; accept, certify, BFGS-update
-   (curvature-guarded, with the 2×2 model parallel-transported between
-   tangent bases), and possibly grow Δ otherwise.
+1. Evaluate h, g = −3c, the certificate, and the model Hessian B̃ at
+   the current b; stop when the certified |gap| ≤ `gap_tol`. B̃ is the
+   fixed-w (majorant) Hessian of h on the sphere, computed in chart
+   quantities from the design Cholesky already in hand:
+   B̃ = 3·Σwᵢgᵢ·pᵢpᵢᵀ − 2·Σᵢⱼwᵢwⱼc²ᵢⱼ·pᵢpⱼᵀ + (Σwᵢgᵢ)·I₂. Since
+   h̃_w ≥ h with equality at the current point, its curvature
+   over-estimates the envelope's — steps are conservative and nearly
+   always accepted. At a circular optimum B̃ → 3·I, which is where the
+   old BFGS seed B₀ = 3 came from; it survives only as the non-PD
+   fallback, now derived rather than fitted.
+2. Dogleg step u against B̃ within radius Δ (isotropic fallback if B̃
+   is non-PD from roundoff or far-field states).
+3. Trial-evaluate h(b′) (weights snapshot/restored on rejection).
+   ρ = actual/predicted decrease: reject and shrink if ρ < 0.05;
+   accept otherwise, shrinking gently if ρ < ¼ (the quadratic model
+   over-promised — third-order terms of h dominate over this radius;
+   without the textbook ρ < ¼ rule the loop creeps at ρ ≈ 0.15) and
+   growing on ρ ≥ 0.7 radius-limited steps. No model state crosses
+   iterations — nothing to transport, nothing to corrupt.
 
 Knobs live in `config.reduced` (inner oracle budget/tolerance,
-trust-region constants, B₀ = 3·I — the exact Hessian of h at a circular
-optimum). All prototype values, untuned.
+trust-region constants). All prototype values.
 
 ## Performance so far (2026-07-07, `zig build ex-compare`, ReleaseFast)
 
@@ -251,6 +260,55 @@ active set is w-thresholded). The fast path co-evolved with this sharp
 edge — it stops running FW the moment its cert passes. Any future
 oracle change (and the away-step FW work) should treat that fallback as
 the known hazard.
+
+## The majorant-Hessian model (option A, branch `exp/majorant-hessian`)
+
+The question "are we exploiting all the problem's properties?" had one
+big yes-we-aren't: the model curvature was generic BFGS, when the
+problem *offers* its Hessian. For frozen weights, h̃_w(b) is a smooth
+closed-form **global majorant of h touching at the current point**
+(h = min over inner states), so its Hessian — O(active²) from
+forward-solves against the already-factored design Cholesky — is a
+derived, per-evaluation model with a built-in safety property: model
+curvature ≥ envelope curvature, so steps are conservative and nearly
+always accepted.
+
+**What replacing BFGS with it bought, measured** (full battery vs the
+BFGS baseline at the `investigate/wide-cap-dnc` tip):
+
+- Convergence byte-parity everywhere it matters: DGGS counts identical
+  (incl. the 1e-6 floor), states 50/50 (max iters 44→5 for fast vs
+  reduced, reduced mean 2.4), countries 177/177 (mean 3.0), rotations
+  160/160, a5_res0 12/12, all CANARY pins unchanged (0/3/0/3/3).
+- Wide-cap fixtures 17/23/22 iterations vs BFGS's 20/34/14 — slightly
+  fewer total and much more uniform.
+- Wall-time a wash (manifest mean 1.5× vs 1.4×, within run noise).
+- **The real win is deletion**: the BFGS update, curvature guard,
+  tangent-basis transport, and the model-reset-on-corruption machinery
+  are gone. The model is recomputed fresh each evaluation from analytic
+  structure — the "model corruption masquerading as convergence"
+  failure shape (the seed-6 bug) is now structurally impossible.
+
+**Two trust-region lessons collected on the way** (both now in
+`config.reduced` doc-comments): without the textbook ρ < ¼
+shrink-on-accepted-step rule, the loop can creep at ρ ≈ 0.15 forever
+when h's third-order terms dominate the quadratic over the current
+radius (cap89: 83 iterations; 28 with the rule); and the shrink for
+accepted-but-poor steps must be gentler than the rejection shrink or Δ
+oscillates across the model-fidelity boundary with GROW (cap89: 28 →
+22 with SHRINK_POOR = 0.5). Notably, BFGS never showed the creep — its
+secant pairs *measure* the far-field stiffness the analytic quadratic
+can't see. The ρ-based radius rules recover that adaptivity while
+keeping the stateless model.
+
+**Option B (exact envelope Hessian via KKT sensitivity): assessed, not
+worth it now.** The remaining wide-cap iterations are spent in the
+far-field creep where the binding error is *third-order*, and the
+exact Hessian (≤ the majorant's) would over-promise *more* there, not
+less; its quadratic-convergence benefit only trims the ~2–4 tail
+iterations near the optimum. It would add KKT sensitivity solves and
+code for a marginal gain — revisit only if a workload emerges whose
+cost concentrates in the endgame iterations.
 
 ## Validation ledger
 

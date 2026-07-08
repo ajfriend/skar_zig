@@ -81,6 +81,10 @@ const Buffers = struct {
     w_round: []f64,
     cert_active: []usize,
     cert_lambdas: []f64,
+    /// Scratch for the model-Hessian computation: active indices and
+    /// forward-solved design vectors yᵢ = L⁻¹qᵢ.
+    act_idx: []usize,
+    Yf: []Vec3,
     newton_scratch: NewtonScratch,
     gap_scratch: GapScratch,
 
@@ -94,6 +98,8 @@ const Buffers = struct {
             .w_round = try scratch.alloc(f64, nw),
             .cert_active = try scratch.alloc(usize, nw),
             .cert_lambdas = try scratch.alloc(f64, nw),
+            .act_idx = try scratch.alloc(usize, nw),
+            .Yf = try scratch.alloc(Vec3, nw),
             .newton_scratch = try NewtonScratch.init(scratch, nw),
             .gap_scratch = try GapScratch.init(scratch, nw),
         };
@@ -109,12 +115,15 @@ const Eval = struct {
     h: f64,
     /// Tangent gradient of h at b in the Q basis: g = −3·c.
     g: Vec2,
+    /// Model Hessian: the fixed-w (majorant) Hessian of h on the
+    /// sphere at b, in the same tangent basis. See evalH.
+    B: Mat2,
     Q: Mat3x2,
     moments: core.Moments,
     polish_failed: bool,
 };
 
-const EVAL_FAIL = Eval{ .ok = false, .h = 0, .g = Vec2.zero, .Q = undefined, .moments = undefined, .polish_failed = false };
+const EVAL_FAIL = Eval{ .ok = false, .h = 0, .g = Vec2.zero, .B = Mat2.zero, .Q = undefined, .moments = undefined, .polish_failed = false };
 
 /// Evaluate h(b), its tangent gradient, and the chart data needed for
 /// certification. Mutates wb.w (warm start) — caller snapshots/restores
@@ -171,11 +180,66 @@ fn evalH(
     const logdet_s = 2.0 * (@log(L.m[0]) + @log(L.m[4]) + @log(L.m[8]));
     const h = 0.5 * (logdet_s + 3.0 * @log(3.0)) + 2.0 * @log(s_scale);
 
+    // Model Hessian: the fixed-w (majorant) Hessian of h̃_w on the
+    // sphere, entirely in chart quantities. For frozen weights,
+    // h̃_w(b) = ½·log det(3·Σ wᵢzᵢzᵢᵀ) with zᵢ = xᵢ/(bᵀxᵢ) is a global
+    // majorant of h touching at the current point (h = min over inner
+    // states), so its curvature over-estimates the envelope's — steps
+    // modeled with it are conservative and nearly always accepted.
+    // Differentiating twice and retracting to the sphere
+    // (b(u) = normalize(b + Q̂u)) gives, with gᵢ = qᵢᵀS⁻¹qᵢ and
+    // cᵢⱼ = qᵢᵀS⁻¹qⱼ (both chart-scale invariant) and unscaled chart
+    // points pᵢ = s_scale·Ps[i]:
+    //
+    //   B̃ = 3·Σᵢ wᵢgᵢ·pᵢpᵢᵀ − 2·Σᵢⱼ wᵢwⱼcᵢⱼ²·pᵢpⱼᵀ + (Σᵢ wᵢgᵢ)·I₂
+    //
+    // (the identity term is the spherical retraction correction
+    // −(∇h̃ᵀb)·I with ∇h̃ᵀb = −Σwᵢgᵢ, via zᵢᵀb = 1). The gᵢ/cᵢⱼ come
+    // from forward-solves against the design Cholesky already in hand.
+    // At a circular optimum this reduces to ≈ 3·I — the old BFGS seed
+    // B0, now derived rather than fitted. Restricted to the active set
+    // (w > ACTIVE_THRESH): inactive points carry no design mass.
+    var k: usize = 0;
+    for (wb.w, 0..) |wi, i| {
+        if (wi > algo.ACTIVE_THRESH) {
+            wb.act_idx[k] = i;
+            wb.Yf[k] = L.forwardSolve(wb.Ql[i]);
+            k += 1;
+        }
+    }
+    var sum_wg: f64 = 0;
+    var Bm = Mat2.zero;
+    for (0..k) |i| {
+        const wi = wb.w[wb.act_idx[i]];
+        const gi = wb.Yf[i].dot(wb.Yf[i]);
+        sum_wg += wi * gi;
+        const p = Vec2{ .m = .{ wb.Ps[wb.act_idx[i]][0] * s_scale, wb.Ps[wb.act_idx[i]][1] * s_scale } };
+        Bm.addSymRank1(3.0 * wi * gi, p);
+    }
+    for (0..k) |i| {
+        const wi = wb.w[wb.act_idx[i]];
+        const pi0 = wb.Ps[wb.act_idx[i]][0] * s_scale;
+        const pi1 = wb.Ps[wb.act_idx[i]][1] * s_scale;
+        for (0..k) |j| {
+            const cij = wb.Yf[i].dot(wb.Yf[j]);
+            const coef = -2.0 * wi * wb.w[wb.act_idx[j]] * cij * cij;
+            const pj0 = wb.Ps[wb.act_idx[j]][0] * s_scale;
+            const pj1 = wb.Ps[wb.act_idx[j]][1] * s_scale;
+            Bm.m[0] += coef * pi0 * pj0;
+            Bm.m[1] += coef * pi0 * pj1;
+            Bm.m[2] += coef * pi1 * pj0;
+            Bm.m[3] += coef * pi1 * pj1;
+        }
+    }
+    Bm.m[0] += sum_wg;
+    Bm.m[3] += sum_wg;
+
     const m = core.computeMoments(wb.Ps, wb.w, s_scale);
     return .{
         .ok = true,
         .h = h,
         .g = m.center.scale(-3.0),
+        .B = Bm,
         .Q = Q,
         .moments = m,
         .polish_failed = !polished,
@@ -268,25 +332,24 @@ pub fn solveReduced(
         return SolveError.NegativeDualityGap;
     }
 
-    // Trust-region state: 2×2 BFGS model in the current tangent basis.
-    var B = Mat2{ .m = .{ rc.B0, 0, 0, rc.B0 } };
+    // Trust-region state. The model Hessian is per-evaluation (the
+    // majorant Hessian computed by evalH) — no BFGS history, no
+    // transport between tangent bases.
     var delta: f64 = rc.DELTA0;
 
     while (!converged and outer_count < opts.max_outer) {
         outer_count += 1;
 
-        // Reset a non-PD model (BFGS skips guarantee PD in exact
-        // arithmetic; this is the roundoff backstop).
+        // The majorant Hessian is PSD-in-exact-arithmetic near inner
+        // optimality but can go indefinite from roundoff or far-field
+        // states; fall back to the derived isotropic value (≈ its own
+        // circular-optimum limit) so the dogleg's prediction is
+        // positive whenever g ≠ 0.
+        var B = cur.B;
         if (B.det() <= 0 or B.m[0] <= 0) B = .{ .m = .{ rc.B0, 0, 0, rc.B0 } };
 
         var step = doglegStep(B, cur.g, delta);
         if (step.pred <= 0) {
-            // Non-positive predicted decrease means the BFGS model went
-            // bad (near active-set kinks the curvature pairs can leave B
-            // so ill-conditioned that the closed-form inverse fails its
-            // own model). Reset to the well-scaled initial model and
-            // recompute — with B = B0·I the dogleg's prediction is
-            // positive whenever g ≠ 0.
             B = .{ .m = .{ rc.B0, 0, 0, rc.B0 } };
             step = doglegStep(B, cur.g, delta);
         }
@@ -310,30 +373,18 @@ pub fn solveReduced(
             std.debug.print("         trial ok={} h={e:12.5} rho={e:9.2}\n", .{ trial.ok, trial.h, rho });
         }
         if (rho < rc.ETA) {
-            // Reject: restore the warm-start weights, shrink the radius.
+            // Reject: restore the warm-start weights, shrink the radius
+            // (relative to the step actually attempted, so interior
+            // Newton steps shrink meaningfully too).
             @memcpy(wb.w, wb.w_bak);
-            delta *= rc.SHRINK;
+            delta = @min(delta, step.u.norm()) * rc.SHRINK;
             if (delta < rc.DELTA_MIN) break;
             continue;
         }
 
-        // Accept. Transport the 2D model/gradient into the trial
-        // tangent basis: T = Q_trialᵀ·Q_cur (near-rotation for the
-        // small steps BFGS feeds on).
+        // Accept. The trial evaluation carries its own model Hessian in
+        // its own tangent basis — nothing to transport.
         if (trial.polish_failed) polish_failures += 1;
-        const T = Mat2{ .m = .{
-            trial.Q.e1.dot(cur.Q.e1), trial.Q.e1.dot(cur.Q.e2),
-            trial.Q.e2.dot(cur.Q.e1), trial.Q.e2.dot(cur.Q.e2),
-        } };
-        const g_old_t = T.apply(cur.g);
-        const s_t = T.apply(step.u);
-        B = .{ .m = .{
-            T.m[0] * (B.m[0] * T.m[0] + B.m[1] * T.m[1]) + T.m[1] * (B.m[2] * T.m[0] + B.m[3] * T.m[1]),
-            T.m[0] * (B.m[0] * T.m[2] + B.m[1] * T.m[3]) + T.m[1] * (B.m[2] * T.m[2] + B.m[3] * T.m[3]),
-            T.m[2] * (B.m[0] * T.m[0] + B.m[1] * T.m[1]) + T.m[3] * (B.m[2] * T.m[0] + B.m[3] * T.m[1]),
-            T.m[2] * (B.m[0] * T.m[2] + B.m[1] * T.m[3]) + T.m[3] * (B.m[2] * T.m[2] + B.m[3] * T.m[3]),
-        } };
-
         b = b_trial;
         cur = trial;
 
@@ -352,20 +403,14 @@ pub fn solveReduced(
             if (final_gap < -tol.NEG_GAP) return SolveError.NegativeDualityGap;
         }
 
-        // BFGS update with the transported pair (s, y); skip on flat
-        // curvature to keep B PD.
-        const y = cur.g.sub(g_old_t);
-        const curv = y.dot(s_t);
-        if (curv > rc.CURV_MIN_REL * y.norm() * s_t.norm()) {
-            const Bs = B.apply(s_t);
-            const sBs = s_t.dot(Bs);
-            if (sBs > 0) {
-                B = Mat2.lincomb(1.0, B, -1.0 / sBs, Mat2.outer(Bs, Bs));
-                B = Mat2.lincomb(1.0, B, 1.0 / curv, Mat2.outer(y, y));
-            }
-        }
-
-        if (rho >= rc.ETA_GOOD and step.u.norm() >= 0.8 * delta) {
+        if (rho < rc.RHO_POOR) {
+            // Accepted, but the quadratic model over-promised (higher
+            // order terms dominate over this radius) — shrink gently so
+            // the model regains fidelity instead of creeping at
+            // ρ ≈ 0.15 or oscillating across the fidelity boundary.
+            delta = @min(delta, step.u.norm()) * rc.SHRINK_POOR;
+            if (delta < rc.DELTA_MIN) break;
+        } else if (rho >= rc.ETA_GOOD and step.u.norm() >= 0.8 * delta) {
             delta = @min(delta * rc.GROW, rc.DELTA_MAX);
         }
     }

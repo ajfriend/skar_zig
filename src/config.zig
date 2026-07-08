@@ -199,19 +199,29 @@ pub const reduced = struct {
     pub const DELTA0: f64 = 0.5;
     pub const DELTA_MAX: f64 = 4.0;
     pub const SHRINK: f64 = 0.25;
-    pub const GROW: f64 = 2.5;
+    /// Gentler shrink for ACCEPTED-but-poor steps (ρ < RHO_POOR):
+    /// progress was made, the radius just overshot the model's
+    /// fidelity range — 0.25 here makes δ leapfrog the fidelity
+    /// boundary and oscillate with GROW (measured on cap89: alternating
+    /// ρ ≈ 0.2 / ρ ≈ 0.8 iterations).
+    pub const SHRINK_POOR: f64 = 0.5;
+    pub const GROW: f64 = 2.0;
     pub const DELTA_MIN: f64 = 1e-14;
     /// Step acceptance thresholds on ρ = actual/predicted decrease.
+    /// ETA gates acceptance; RHO_POOR triggers a radius shrink even on
+    /// an accepted step (the textbook ρ < ¼ rule — without it the loop
+    /// can creep at ρ ≈ 0.15 forever when third-order terms of h
+    /// dominate the quadratic model over the current radius, measured
+    /// on cap89 under the majorant model: 83 iterations → 15 with the
+    /// rule); ETA_GOOD + a radius-limited step triggers growth.
     pub const ETA: f64 = 0.05;
+    pub const RHO_POOR: f64 = 0.25;
     pub const ETA_GOOD: f64 = 0.7;
-    /// Initial BFGS model Hessian B = B0·I. For a near-circular cell
-    /// the true Hessian of h at the optimum is ≈ 3·I (h ≈ (3/2)‖c‖²
-    /// locally), so the first Newton-like step is well-scaled on the
-    /// hot-path geometry.
+    /// Fallback isotropic model Hessian B = B0·I, used when the
+    /// per-evaluation majorant Hessian goes non-PD (roundoff or
+    /// far-field states). 3·I is the majorant Hessian's own limit at a
+    /// circular optimum — the fallback is the derived value, not a fit.
     pub const B0: f64 = 3.0;
-    /// Skip the BFGS update when the curvature yᵀs falls below this
-    /// relative floor (keeps B PD without damping machinery).
-    pub const CURV_MIN_REL: f64 = 1e-12;
     /// Exit the trust-region loop (to the RECERT phase) when the
     /// step's predicted decrease falls below the merit function's own
     /// resolution, pred ≤ PRED_NOISE_REL·(1+|h|): the ratio test can
