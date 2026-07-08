@@ -1,8 +1,11 @@
 # Wide-angle inputs DNC: the outer axis iteration limit-cycles past ~81° cap radius
 
 **Status:** root cause characterized; resolved by the reduced solver path
-(`docs/reduced-solver.md`) with the joint barrier-Newton solver retained as a
-reference oracle — see **Prototype results** below for how both came to be.
+(`docs/reduced-solver.md`). The joint barrier-Newton solver prototyped below
+served as the development-time reference oracle and was removed from the
+public API before merge (implementation in branch history, `src/joint.zig`
+at commit d3786e5; the Clarabel reference ARs in `tests/wide_cap_cells.zig`
+are the durable cross-check).
 The probe harnesses referenced throughout were development tools, removed
 before merge; they live in the `investigate/wide-cap-dnc` branch history.
 **Found:** 2026-07-07, sweeping randomized spherical caps of increasing angular

@@ -51,7 +51,12 @@ one-line statement about h:
   groping toward a second-order model of h; the reduced path's BFGS is
   the same instinct with a merit function to keep it honest and a trust
   region to bound it.
-- **The joint IPM is what you pay for refusing the reduction.** It
+- **The joint IPM is what you pay for refusing the reduction.**
+  (Removed from the public API before merge — dominated on every
+  user-facing axis, its oracle role was a development role, and its
+  value is banked in the Clarabel reference ARs baked into the test
+  fixtures. The implementation lives in branch history, `src/joint.zig`
+  at commit d3786e5.) It
   solves the full 9-variable problem with a barrier schedule that is
   geometry-blind by design: ~33–119 Newton steps on everything,
   including 22 on hex (whose answer is nearly the identity). That

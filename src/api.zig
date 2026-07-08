@@ -140,17 +140,12 @@ pub const SolveOptions = struct {
     ///   .fast  — today's exact behavior: the alternating axis/MVEE
     ///            outer loop. Fast on the DGGS hot path, but limit-cycles
     ///            on dense inputs spanning ≳ 81° from the optimal axis.
-    ///   .joint — barrier-Newton interior-point method on the jointly
-    ///            convex (A, b) formulation (paper eq. primal). Globally
-    ///            convergent for any feasible input; more work per
-    ///            iterate than .fast on easy cases.
-    ///   .reduced — trust-region BFGS on the reduced convex objective
-    ///            h(b) = min_A(−log det A) over the sphere, using the
-    ///            fast path's inner MVEE machinery as the oracle and
-    ///            the same certification. Fast-path per-iteration cost
-    ///            with a merit function and second-order model — the
-    ///            candidate unification of .fast and .joint (see
-    ///            src/reduced.zig).
+    ///   .reduced — trust-region descent on the reduced convex
+    ///            objective h(b) = min_A(−log det A) over the sphere,
+    ///            using the fast path's inner MVEE machinery as the
+    ///            oracle and the same certification. Converges on the
+    ///            wide-angle/elongated inputs the fast path cannot
+    ///            (see src/reduced.zig and docs/reduced-solver.md).
     ///   .auto  — .fast first; if it returns `did_not_converge`, retry
     ///            with .reduced on the same preprocessed working set and
     ///            return the better outcome.
@@ -162,7 +157,7 @@ pub const SolveOptions = struct {
 
 /// Solver path selector for `SolveOptions.method` (see that field's
 /// doc-comment for the semantics of each variant).
-pub const Method = enum { fast, joint, reduced, auto };
+pub const Method = enum { fast, reduced, auto };
 
 /// Active-set certificate. `indices` / `lambdas` are paired arrays:
 /// the indices into the caller's `X[]` of the active input points and

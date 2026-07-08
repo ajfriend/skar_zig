@@ -564,8 +564,7 @@ const newton = @import("newton.zig");
 const NewtonScratch = newton.NewtonScratch;
 const newtonPolish = newton.newtonPolish;
 
-// Alternative solver paths (EXPERIMENTAL; `SolveOptions.method`).
-const joint = @import("joint.zig");
+// Alternative solver path (EXPERIMENTAL; `SolveOptions.method`).
 const reduced = @import("reduced.zig");
 
 // ----------------------------------------------------------------
@@ -1160,7 +1159,6 @@ pub fn solve(
 
     switch (opts.method) {
         .fast => return solveFast(allocator, scratch_alloc, prep, opts),
-        .joint => return joint.solveJoint(allocator, scratch_alloc, prep, opts),
         .reduced => return reduced.solveReduced(allocator, scratch_alloc, prep, opts),
         .auto => {
             var fast_out = try solveFast(allocator, scratch_alloc, prep, opts);

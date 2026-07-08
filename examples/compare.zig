@@ -1,14 +1,13 @@
-//! Fast-vs-joint solver path comparison (EXPERIMENTAL joint prototype;
-//! see docs/wide-cap-dnc-report.md).
+//! Fast-vs-reduced solver path comparison (EXPERIMENTAL `.reduced`
+//! prototype; see docs/reduced-solver.md).
 //!
-//! Part 1: every bundled manifest case × {fast, joint} — status,
-//! iterations (outer loops for fast, Newton steps for joint), min /
-//! median wall µs, aspect ratio, gap. Answers "what does joint cost on
-//! the cases fast already handles?"
+//! Part 1: every bundled manifest case × {fast, reduced} — status,
+//! iterations, min/median wall µs, aspect ratio. Answers "what does
+//! the reduced path cost on the cases fast already handles?"
 //!
 //! Part 2: the wide-cap robustness grid (random caps by width × seed
-//! × density) × {fast, joint, auto} — DNC counts and median times.
-//! Answers "does joint/auto close the wide-angle hole, and at what
+//! × density) × {fast, reduced, auto} — DNC counts and median times.
+//! Answers "does reduced/auto close the wide-angle hole, and at what
 //! price?"
 //!
 //! Force-built ReleaseFast (timing meaningless in Debug).
@@ -114,66 +113,56 @@ pub fn main() !void {
 
     var times: [N_RUNS]f64 = undefined;
 
-    // ---------- Part 1: bundled manifest, fast vs joint vs reduced ----------
-    try stdout.print("== part 1: bundled cases (n={d} runs; iters = outer loops for fast/reduced, Newton steps for joint) ==\n\n", .{N_RUNS});
-    try stdout.print("{s:22} {s:3} | {s:6} {s:5} {s:9} {s:11} | {s:6} {s:5} {s:9} | {s:7} {s:5} {s:9} {s:11}\n", .{
+    // ---------- Part 1: bundled manifest, fast vs reduced ----------
+    try stdout.print("== part 1: bundled cases (n={d} runs; iters = outer loops) ==\n\n", .{N_RUNS});
+    try stdout.print("{s:22} {s:3} | {s:6} {s:5} {s:9} {s:11} | {s:7} {s:5} {s:9} {s:11}\n", .{
         "case",    "n",
         "fast",    "iters", "min_us", "ar",
-        "joint",   "iters", "min_us",
         "reduced", "iters", "min_us", "ar_rel_diff",
     });
-    var n_joint: u32 = 0;
-    var joint_slowdown_sum: f64 = 0;
     var n_red: u32 = 0;
     var red_slowdown_sum: f64 = 0;
     for (cases.all) |entry| {
         const pts = entry.case.points;
         const f = try measure(allocator, pts, .fast, N_RUNS, &times);
-        const j = try measure(allocator, pts, .joint, N_RUNS, &times);
         const r = try measure(allocator, pts, .reduced, N_RUNS, &times);
         var ar_rel: f64 = 0;
         if (std.mem.eql(u8, f.status, "ok") and std.mem.eql(u8, r.status, "ok")) {
             ar_rel = @abs(r.ar - f.ar) / f.ar;
         }
         // Sub-µs fast solves are below the clock resolution; skip them
-        // in the ratios rather than dividing by ~0.
+        // in the ratio rather than dividing by ~0.
         if (f.t_median_us >= 1.0 and std.mem.eql(u8, f.status, "ok")) {
-            if (std.mem.eql(u8, j.status, "ok")) {
-                joint_slowdown_sum += j.t_median_us / f.t_median_us;
-                n_joint += 1;
-            }
             if (std.mem.eql(u8, r.status, "ok")) {
                 red_slowdown_sum += r.t_median_us / f.t_median_us;
                 n_red += 1;
             }
         }
-        try stdout.print("{s:22} {d:3} | {s:6} {d:5} {d:9.2} {d:11.6} | {s:6} {d:5} {d:9.2} | {s:7} {d:5} {d:9.2} {e:11.2}\n", .{
+        try stdout.print("{s:22} {d:3} | {s:6} {d:5} {d:9.2} {d:11.6} | {s:7} {d:5} {d:9.2} {e:11.2}\n", .{
             entry.name, pts.len,
             f.status,   f.iters, f.t_min_us, f.ar,
-            j.status,   j.iters, j.t_min_us,
             r.status,   r.iters, r.t_min_us, ar_rel,
         });
     }
-    try stdout.print("\nmean median-time slowdown vs fast (mutually-converged, fast ≥ 1µs): joint {d:.1}x ({d}), reduced {d:.1}x ({d})\n", .{
-        joint_slowdown_sum / @as(f64, @floatFromInt(n_joint)), n_joint,
-        red_slowdown_sum / @as(f64, @floatFromInt(n_red)),     n_red,
+    try stdout.print("\nmean median-time slowdown vs fast (mutually-converged, fast ≥ 1µs): reduced {d:.1}x ({d})\n", .{
+        red_slowdown_sum / @as(f64, @floatFromInt(n_red)), n_red,
     });
 
     // ---------- Part 2: wide-cap robustness grid ----------
     const widths = [_]f64{ 60, 75, 80, 81, 82, 84, 86, 88, 89, 89.5 };
     const ns = [_]usize{ 20, 200 };
     const n_seeds: u64 = 10;
-    const methods = [_]sphar.Method{ .fast, .joint, .reduced, .auto };
+    const methods = [_]sphar.Method{ .fast, .reduced, .auto };
 
     try stdout.print("\n== part 2: wide-cap grid, DNC counts /{d} seeds and median µs (n runs = {d}) ==\n\n", .{ n_seeds, GRID_RUNS });
-    try stdout.print("{s:5} {s:5} | {s:14} | {s:14} | {s:14} | {s:14}\n", .{ "n", "width", "fast", "joint", "reduced", "auto" });
-    try stdout.print("{s:5} {s:5} | {s:6} {s:7} | {s:6} {s:7} | {s:6} {s:7} | {s:6} {s:7}\n", .{ "", "", "DNC", "med_us", "DNC", "med_us", "DNC", "med_us", "DNC", "med_us" });
+    try stdout.print("{s:5} {s:5} | {s:14} | {s:14} | {s:14}\n", .{ "n", "width", "fast", "reduced", "auto" });
+    try stdout.print("{s:5} {s:5} | {s:6} {s:7} | {s:6} {s:7} | {s:6} {s:7}\n", .{ "", "", "DNC", "med_us", "DNC", "med_us", "DNC", "med_us" });
 
     var grid_times: [GRID_RUNS]f64 = undefined;
     for (ns) |n| {
         for (widths) |wdeg| {
-            var dnc = [_]u32{ 0, 0, 0, 0 };
-            var med = [_]f64{ 0, 0, 0, 0 };
+            var dnc = [_]u32{ 0, 0, 0 };
+            var med = [_]f64{ 0, 0, 0 };
             var seed: u64 = 1;
             while (seed <= n_seeds) : (seed += 1) {
                 var prng = std.Random.DefaultPrng.init(seed);
@@ -187,12 +176,11 @@ pub fn main() !void {
                 }
             }
             const denom: f64 = @floatFromInt(n_seeds);
-            try stdout.print("{d:5} {d:5.1} | {d:2}/10 {d:7.0} | {d:2}/10 {d:7.0} | {d:2}/10 {d:7.0} | {d:2}/10 {d:7.0}\n", .{
+            try stdout.print("{d:5} {d:5.1} | {d:2}/10 {d:7.0} | {d:2}/10 {d:7.0} | {d:2}/10 {d:7.0}\n", .{
                 n,            wdeg,
                 dnc[0],       med[0] / denom,
                 dnc[1],       med[1] / denom,
                 dnc[2],       med[2] / denom,
-                dnc[3],       med[3] / denom,
             });
         }
     }

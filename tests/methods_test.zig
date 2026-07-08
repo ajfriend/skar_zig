@@ -1,5 +1,7 @@
 //! Tests for the EXPERIMENTAL alternative solver paths
-//! (`SolveOptions.method`; `src/joint.zig` and `src/reduced.zig`).
+//! (`SolveOptions.method`; `src/reduced.zig`), incl. the away-step FW
+//! solver kept for the record and the wide-cap fixtures with their
+//! Clarabel reference aspect ratios.
 //!
 //! Coverage:
 //!  - the wide-cap fixtures (tests/wide_cap_cells.zig) that the fast
@@ -37,12 +39,6 @@ fn expectJointConverges(pts: []const [3]f64, method: sphar.Method, ref_ar: f64) 
     try std.testing.expect(sphar.checkFeasibility(c, pts) <= 1e-12);
     // Cross-check against the Clarabel reference.
     try std.testing.expect(@abs(c.aspectRatio() - ref_ar) <= AR_REF_REL_TOL * ref_ar);
-}
-
-test "joint: wide-cap fixtures converge and match the Clarabel reference AR" {
-    try expectJointConverges(&wide.CAP82_S1, .joint, wide.AR_CAP82_S1);
-    try expectJointConverges(&wide.CAP85_S1, .joint, wide.AR_CAP85_S1);
-    try expectJointConverges(&wide.CAP89_S3, .joint, wide.AR_CAP89_S3);
 }
 
 test "reduced: wide-cap fixtures converge and match the Clarabel reference AR" {
@@ -118,30 +114,6 @@ test "fast: wide-cap fixtures still DNC (the gap .auto exists to close)" {
     }
 }
 
-test "joint: agrees with fast on bundled cases across regimes" {
-    const allocator = std.testing.allocator;
-    // Hex (symmetric small), DGGS hexagon, random caps small and large,
-    // the widest converging ha case, and a small wide irregular case.
-    const names = [_][]const u8{ "hex", "h3_res09", "np20", "np400", "ha_05", "ha_14", "dnc_small_wide" };
-    for (names) |name| {
-        const case = cases.byName(name) orelse unreachable;
-        var fast_out = try sphar.solve(allocator, case.points, .{});
-        defer fast_out.deinit();
-        var joint_out = try sphar.solve(allocator, case.points, .{ .method = .joint });
-        defer joint_out.deinit();
-        try std.testing.expect(std.meta.activeTag(fast_out) == .converged);
-        try std.testing.expect(std.meta.activeTag(joint_out) == .converged);
-        const ar_f = fast_out.converged.aspectRatio();
-        const ar_j = joint_out.converged.aspectRatio();
-        if (@abs(ar_f - ar_j) > AR_AGREE_REL_TOL * ar_f) {
-            std.debug.print("joint/fast AR mismatch case={s}: fast={d:.10} joint={d:.10}\n", .{ name, ar_f, ar_j });
-            return error.JointFastArMismatch;
-        }
-        try std.testing.expect(@abs(joint_out.converged.gap) <= GAP_TOL);
-        try std.testing.expect(sphar.checkFeasibility(joint_out.converged, case.points) <= 1e-12);
-    }
-}
-
 test "auto: identical to fast when fast converges" {
     const allocator = std.testing.allocator;
     const names = [_][]const u8{ "hex", "h3_res09", "np100" };
@@ -192,15 +164,15 @@ test "mveeFwAway: converges the design and keeps weights in the simplex" {
     }
 }
 
-test "joint: certificate sanity on a wide-cap solve" {
+test "reduced: certificate sanity on a wide-cap solve" {
     const allocator = std.testing.allocator;
-    var outcome = try sphar.solve(allocator, &wide.CAP85_S1, .{ .method = .joint });
+    var outcome = try sphar.solve(allocator, &wide.CAP85_S1, .{ .method = .reduced });
     defer outcome.deinit();
     const c = outcome.converged;
     // Weak duality: certified gap is non-negative up to FP noise.
     try std.testing.expect(c.gap >= -1e-10);
-    // Dual multipliers are non-negative and the interior-point cert
-    // carries at least the ≥3 points any non-degenerate cone needs.
+    // Dual multipliers are non-negative and the cert carries at least
+    // the >= 3 points any non-degenerate cone needs.
     try std.testing.expect(c.cert.indices.len >= 3);
     for (c.cert.lambdas) |lam| try std.testing.expect(lam >= 0);
     // Indices point into the caller's array.

@@ -11,5 +11,5 @@ comptime {
     _ = @import("linalg_test.zig");
     _ = @import("dggs_dnc_test.zig");
     _ = @import("a5_res0_test.zig");
-    _ = @import("joint_test.zig");
+    _ = @import("methods_test.zig");
 }
