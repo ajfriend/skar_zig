@@ -254,15 +254,154 @@ pub fn mveeFw(
                 const det_G = linalg.diff_of_products(g_max, g_min, g_cross, g_cross);
                 var step: f64 = if (det_G > tol.NEAR_SING) a / (2.0 * det_G) else w[jm];
                 if (step > w[jm]) step = w[jm];
-                w[j_max] += step;
-                w[jm] -= step;
-                continue;
+                // Drop guard. A full-mass step (step = w[jm], zeroing the
+                // donor) is only justified when it genuinely improves the
+                // design. The exact log-det change of the rank-2 update
+                // S' = S + γ(q_a·q_aᵀ − q_b·q_bᵀ) is available in closed
+                // form from quantities already in hand:
+                //   det S'/det S = (1 + γ·g_max)(1 − γ·g_min) + γ²·g_cross²
+                // Take the drop only if that ratio exceeds 1 — a
+                // threshold-free real-improvement test. Without it, the
+                // near-singular fallback (and the cap when det_G is
+                // small-but-positive under an anisotropic inner metric)
+                // fires full drops on noise-level descent signals at
+                // converged designs, zeroing support points that
+                // newtonPolish cannot resurrect (its active set is
+                // w-thresholded) — the hazard that bit the reduced path's
+                // oracle four times (docs/reduced-solver.md). Interior
+                // steps (step < w[jm]) are exact 1-D line-search optima
+                // and need no guard. On a blocked drop, fall through to
+                // the vanilla FW step below.
+                var take = true;
+                if (step == w[jm]) {
+                    const ratio = (1.0 + step * g_max) * (1.0 - step * g_min) + step * step * g_cross * g_cross;
+                    take = ratio > 1.0;
+                }
+                if (take) {
+                    w[j_max] += step;
+                    w[jm] -= step;
+                    continue;
+                }
             }
         }
         // Vanilla FW fallback.
         const step = (g_max - 3.0) / (3.0 * (g_max - 1.0));
         for (w) |*wi| wi.* *= (1.0 - step);
         w[j_max] += step;
+    }
+}
+
+/// Away-step Frank–Wolfe for the lifted D-optimal design — stage 1 of
+/// docs/away-step-fw.md: used by the REDUCED path's oracle only; the
+/// fast path keeps `mveeFw` verbatim (so no fast-path CANARY exposure).
+///
+/// Same per-iteration quantities as `mveeFw` (gradients gᵢ = qᵢᵀS⁻¹qᵢ,
+/// toward-vertex j_max, away-vertex j_min), different decision: pick
+/// the direction with more first-order progress (toward: g_max − 3;
+/// away: 3 − g_min) and take the EXACT 1-D line-search step of the
+/// log-det objective along it:
+///
+///   toward  w ← (1−γ)w + γ·e_j,  γ* = (g−3)/(3(g−1)), capped at 1
+///   away    w ← (1+γ)w − γ·e_j,  γ* = (3−g)/(3(g−1)), capped at
+///           γmax = w[j]/(1−w[j]) — the drop boundary, where w[j]
+///           hits exactly 0. For g ≤ 1 (deep interior point) the
+///           objective is monotone along the away ray, so the full
+///           drop is optimal.
+///
+/// Because the step length is proportional to the gap it closes, a
+/// noise-level away gap produces a noise-level step — this solver
+/// cannot fire the full-mass drop `mveeFw`'s near-singular pairwise
+/// fallback takes on noise at converged designs (the hazard that bit
+/// the reduced path four times; see docs/reduced-solver.md).
+pub fn mveeFwAway(
+    P: []const [2]f64,
+    max_iter: u32,
+    inner_tol: f64,
+    Ql: []Vec3,
+    w: []f64,
+) void {
+    for (P, 0..) |p, i| Ql[i] = .{ .m = .{ p[0], p[1], 1.0 } };
+
+    var gap_best: f64 = std.math.inf(f64);
+    var since_best: u32 = 0;
+    var it: u32 = 0;
+    while (it < max_iter) : (it += 1) {
+        var S = Mat3.zero;
+        for (Ql, 0..) |qi, i| {
+            const wi = w[i];
+            const wq0 = wi * qi.m[0];
+            const wq1 = wi * qi.m[1];
+            const wq2 = wi * qi.m[2];
+            S.m[0] = @mulAdd(f64, wq0, qi.m[0], S.m[0]);
+            S.m[1] = @mulAdd(f64, wq0, qi.m[1], S.m[1]);
+            S.m[2] = @mulAdd(f64, wq0, qi.m[2], S.m[2]);
+            S.m[4] = @mulAdd(f64, wq1, qi.m[1], S.m[4]);
+            S.m[5] = @mulAdd(f64, wq1, qi.m[2], S.m[5]);
+            S.m[8] = @mulAdd(f64, wq2, qi.m[2], S.m[8]);
+        }
+        S.m[3] = S.m[1];
+        S.m[6] = S.m[2];
+        S.m[7] = S.m[5];
+
+        const L = S.cholesky() orelse break;
+
+        var j_max: usize = 0;
+        var j_min: ?usize = null;
+        var g_max: f64 = -1e30;
+        var g_min: f64 = 1e30;
+        for (Ql, 0..) |qi, i| {
+            const x = L.solve(qi);
+            const gi = qi.dot(x);
+            if (gi > g_max) {
+                g_max = gi;
+                j_max = i;
+            }
+            if (w[i] > tol.WEIGHT_ACTIVE and gi < g_min) {
+                g_min = gi;
+                j_min = i;
+            }
+        }
+
+        const toward_gap = g_max - 3.0;
+        const away_gap = if (j_min != null) 3.0 - g_min else -1e30;
+        const gap = @max(toward_gap, away_gap);
+        if (gap < inner_tol) break;
+        // Noise-floor exit on the solver's OWN optimality measure: when
+        // the gap stops improving geometrically it has hit the f64
+        // floor for this input (κ-limited cells never reach any fixed
+        // inner_tol) — stop instead of random-walking the budget away.
+        // This replaces the caller-side burst/stall machinery: the gap
+        // is a sound convergence signal; an h-sample window was a proxy
+        // that misread slow-but-genuine descent phases as stalls.
+        if (gap < algo.AWAY_GAP_IMPR * gap_best) {
+            gap_best = gap;
+            since_best = 0;
+        } else {
+            since_best += 1;
+            if (since_best >= algo.AWAY_STALL_ITERS) break;
+        }
+
+        if (toward_gap >= away_gap) {
+            const denom = 3.0 * (g_max - 1.0);
+            if (denom < tol.NEAR_SING) break;
+            var gamma = toward_gap / denom;
+            if (gamma > 1.0) gamma = 1.0;
+            for (w) |*wi| wi.* *= (1.0 - gamma);
+            w[j_max] += gamma;
+        } else {
+            const jm = j_min.?;
+            const one_minus = 1.0 - w[jm];
+            if (one_minus < tol.NEAR_SING) break; // sole support point
+            const gamma_max = w[jm] / one_minus;
+            var gamma: f64 = gamma_max;
+            if (g_min > 1.0 + tol.NEAR_SING) {
+                const g_star = away_gap / (3.0 * (g_min - 1.0));
+                if (g_star < gamma_max) gamma = g_star;
+            }
+            for (w) |*wi| wi.* *= (1.0 + gamma);
+            w[jm] -= gamma;
+            if (w[jm] < 0 or gamma == gamma_max) w[jm] = 0;
+        }
     }
 }
 

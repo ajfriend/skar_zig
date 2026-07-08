@@ -142,20 +142,22 @@ fn evalH(
 
     if (first) core.initWeights(wb.Ps, wb.w);
 
-    // Inner solve: FW in bursts with a stall exit, then ONE Newton
-    // polish. The stall exit stops κ-limited inputs (g-noise above any
-    // reachable tolerance) from grinding the whole budget at noise
-    // amplitude; the single final polish keeps the returned state
-    // inner-(near-)optimal, so the envelope gradient −3·c below is the
-    // gradient of the h reported. The burst is deliberately LARGE:
-    // mveeFw's destructive near-singular drop step can fire mid-burst
-    // at a converged design and needs room to self-heal (FW re-adds the
-    // dropped point) before the boundary h-sample — with a small burst,
-    // drop-and-recover nets out as "no progress" and the stall exit
-    // lands on a corrupted state (measured on New York). No snapshots,
-    // no restores — the reverted rounds-oracle experiments showed any
-    // state-juggling here hands the trust region (value, gradient)
-    // pairs that don't belong together. See config.reduced.INNER_*.
+    // Inner solve: pairwise FW in bursts with a stall exit on the
+    // design value, then ONE Newton polish. The stall exit stops
+    // κ-limited inputs (g-noise above any reachable tolerance) from
+    // grinding the budget at noise amplitude; the single final polish
+    // keeps the returned state inner-(near-)optimal, so the envelope
+    // gradient −3·c below is the gradient of the h reported. mveeFw's
+    // drop step is ratio-guarded at the source, so a burst can no
+    // longer end on a corrupted state; the burst stays LARGE anyway —
+    // measured (docs/away-step-fw.md findings): small windows misread
+    // mid-drain flat stretches as the noise floor and return
+    // under-refined states (New York DNC at burst 8/16/32, with or
+    // without the guard, with or without flat-burst patience), and
+    // don't even save time (np400 69 → 95 µs at burst 8). An
+    // away-step oracle (`mveeFwAway`) was also tried and reverted —
+    // hazard-free by construction but measurably slower than pairwise
+    // on large near-circular supports (ha_05 56 → 261 µs).
     var spent: u32 = 0;
     var h_prev: f64 = std.math.inf(f64);
     while (spent < rc.INNER_ITERS) : (spent += rc.INNER_BURST) {

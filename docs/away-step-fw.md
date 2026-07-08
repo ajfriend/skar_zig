@@ -1,13 +1,50 @@
 # Proposal: away-step Frank–Wolfe for the inner MVEE solver
 
-**Status:** proposed, staged — ready to execute in its own session(s) after
-the `investigate/wide-cap-dnc` branch lands. Supersedes the earlier
-future-work note at this path (written before the reduced solver existed;
-its goal stands, its context and plan are updated here).
-**Estimated size:** ~1 focused day of algorithm work + 1–2 days of
-validation/reconciliation, using the measurement infrastructure already on
-the branch. Stage 1 carries no fast-path risk; stage 2 is the
-CANARY-shifting step and needs explicit human sign-off.
+**Status:** stage 1 EXECUTED on `exp/majorant-hessian` (2026-07-07) with a
+**negative result for the oracle-speed motivation** and a **different fix
+landing for the hazard motivation** — see "Stage 1 findings" below before
+considering stage 2. The remaining live motivation for full away-step
+adoption is only the sparse-init gate deletion (stage 2), whose case is now
+weaker.
+**Estimated size (original):** ~1 focused day of algorithm work + 1–2 days
+of validation/reconciliation.
+
+## Stage 1 findings (2026-07-07, `exp/majorant-hessian`)
+
+`mveeFwAway` was implemented (kept in-tree in `src/skar.zig` for the
+record) and wired into the reduced oracle. Measured:
+
+1. **Away-step is slower than pairwise per unit progress on large
+   near-circular supports** — ha_05's evaluation chain went 56 → 261 µs;
+   geographies (states/countries) DNC'd under every stall heuristic tried
+   (h-sample windows at bursts 8–32, a gap-based patience inside the
+   solver). At burst 64 it matches pairwise's robustness but is
+   ~15–25% slower. The theoretical draw (fast pruning) pays on redundant
+   inputs, which the sparse init already covers; on near-uniform optimal
+   designs its one-vertex-at-a-time steps are simply a worse cadence than
+   pairwise swaps.
+2. **The drop hazard got fixed at the source instead, threshold-free.**
+   The full-mass drop is only taken when the exact log-det change of the
+   rank-2 update — (1 + γ·g_max)(1 − γ·g_min) + γ²·g_cross², from
+   quantities already in hand — exceeds 1. This ratio guard landed in the
+   shared `mveeFw` and **every fast-path CANARY pin held** (the
+   blocked-drop scenario never occurs on fast trajectories), so the
+   hazard motivation for away-step is resolved without it.
+3. **Small oracle bursts are a dead end regardless of inner solver** —
+   with the guard in place and drops impossible, burst 8/16/32 still
+   DNC'd New York (under-refined states from misread mid-drain flat
+   stretches) and made np400 *slower* (69 → 95 µs): the burst floor was
+   never the residual cost.
+
+Implication for stage 2: the fast path co-evolved with pairwise FW and
+the drop is now sound; switching it to away-step would trade a measured
+speed regression for the gate deletion alone. If the gate bothers us,
+cheaper options exist (e.g. the "smarter-than-size gate" note in
+a5_res0_dnc_report.md). Stage 2 as originally scoped is NOT recommended.
+
+---
+
+*The original staged proposal follows, for the record.*
 
 ## Why (three reasons now, was one)
 

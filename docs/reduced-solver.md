@@ -396,17 +396,21 @@ Done (this branch):
 
 Open, roughly in order:
 
-- [ ] **Guard `mveeFw`'s near-singular drop step at the source.** Now
-      bitten four times (h3_res09/cap82 during the rounds detour, New
-      York during tuning): when det_G ≤ NEAR_SING but the pairwise
-      progress `a = g_max − g_min` is noise-level, the full-mass drop
-      `step = w[jm]` destroys a needed support point that polish
-      cannot resurrect. Fixing it in `mveeFw` (e.g. require genuine
-      progress before the full drop, or take the vanilla step there)
-      would let the reduced oracle drop its burst-size defense — but
-      it changes the fast path, so it needs the CANARY gauntlet and a
-      human-confirmed decision. The away-step FW work
-      (docs/away-step-fw.md) subsumes this.
+- [x] **Guard `mveeFw`'s drop step at the source** — done on
+      `exp/majorant-hessian`, threshold-free: the full-mass drop is
+      taken only when the exact log-det change of the rank-2 update,
+      (1 + γ·g_max)(1 − γ·g_min) + γ²·g_cross² (all quantities already
+      in hand), exceeds 1. Ran the CANARY gauntlet on the shared
+      solver: **every fast-path pin held** — the blocked-drop scenario
+      never occurs on fast trajectories, so the guard is
+      behavior-invisible there while making oracle-state corruption
+      impossible. Two follow-on negative results recorded in
+      docs/away-step-fw.md "Stage 1 findings": away-step FW as the
+      oracle is slower than pairwise on large near-circular supports
+      (reverted; `mveeFwAway` kept in-tree for the record), and
+      shrinking the oracle burst below 64 harms robustness AND speed
+      even with the guard — the burst floor was never the residual
+      cost.
 - [x] **CANARY-style iteration pins for `.reduced`** — landed in three
       places, same flag-don't-bump policy as the fast pins:
       `tests/dggs_dnc_test.zig` "CANARY(reduced)" section (the same
