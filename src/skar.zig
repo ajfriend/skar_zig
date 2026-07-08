@@ -489,6 +489,13 @@ fn farthestPointSeed(P: []const [2]f64, w: []f64, k_req: usize) void {
     picks[2] = p2;
 
     // Remaining picks: farthest-from-the-chosen-set (max-min distance).
+    // When every remaining point coincides with a pick (fewer distinct
+    // positions than k — possible with hull preprocessing disabled),
+    // best_mindist stays 0 and the argmax would re-pick an already
+    // chosen index; stop with the m distinct picks found instead
+    // (a duplicated index would silently collapse two weight shares
+    // and seed Σw < 1, which FW's pairwise steps and Newton's KKT
+    // both conserve — measured as a hard DNC on a trivial input).
     var m: usize = 3;
     while (m < k) : (m += 1) {
         var best: usize = 0;
@@ -505,13 +512,17 @@ fn farthestPointSeed(P: []const [2]f64, w: []f64, k_req: usize) void {
                 best = i;
             }
         }
+        if (!(best_mindist > 0)) break;
         picks[m] = best;
     }
 
-    // Weights: 1/m on the picks, 0 elsewhere.
+    // Weights: 1/m on the picks, 0 elsewhere. `+=` (not `=`) so the
+    // invariant Σw = 1 survives even if a duplicate pick ever slips
+    // through — two shares then land on one point instead of one
+    // share evaporating.
     for (w) |*wi| wi.* = 0;
     const wval = 1.0 / @as(f64, @floatFromInt(m));
-    for (0..m) |j| w[picks[j]] = wval;
+    for (0..m) |j| w[picks[j]] += wval;
 }
 
 /// Initialize the inner-FW weight vector, choosing the regime by working-set
@@ -938,7 +949,12 @@ fn preprocess(
     //    contract on each tolerance.
     if (Xv.len < 3) return InputError.InsufficientPoints;
     if (!std.math.isFinite(opts.gap_tol) or opts.gap_tol <= 0 or opts.gap_tol >= tol.GAP_UNCERTIFIED) return InputError.InvalidTolerance;
-    if (std.math.isNan(opts.coplanarity_tol)) return InputError.InvalidTolerance;
+    // Non-finite coplanarity_tol violates the InvalidTolerance
+    // contract ("not finite, or invalid sign"): +inf would reject
+    // every input as CoplanarInput (the check's RHS becomes inf).
+    // Negative-finite stays legal — it opts out of the near-coplanar
+    // rejection.
+    if (!std.math.isFinite(opts.coplanarity_tol)) return InputError.InvalidTolerance;
 
     // 1) Feasibility via Farkas FW.
     const hs = try halfspaceCheck(scratch_alloc, Xv);

@@ -538,7 +538,7 @@ pub fn solveTrust(
         // circular-optimum limit) so the dogleg's prediction is
         // positive whenever g ≠ 0.
         var B = cur.B;
-        if (B.det() <= 0 or B.m[0] <= 0) B = .{ .m = .{ tc.B0, 0, 0, tc.B0 } };
+        if (!(B.det() > 0) or !(B.m[0] > 0)) B = .{ .m = .{ tc.B0, 0, 0, tc.B0 } }; // negated form: NaN falls back too
 
         var step = doglegStep(B, cur.g, delta);
         if (step.pred <= 0) {
@@ -558,7 +558,9 @@ pub fn solveTrust(
         const trial = evalH(b_trial, Xw, &wb, algo.FEAS_MARGIN);
 
         const rho: f64 = if (trial) |t| (cur.h - t.h) / step.pred else -1.0;
-        if (rho < tc.ETA) {
+        // !(rho >= ETA), not rho < ETA: a NaN ratio (h from a poisoned
+        // state) must REJECT the trial, not accept it.
+        if (!(rho >= tc.ETA)) {
             // Reject: restore the warm-start weights, shrink the radius
             // (relative to the step actually attempted, so interior
             // Newton steps shrink meaningfully too).
