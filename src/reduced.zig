@@ -78,6 +78,7 @@ const Buffers = struct {
     Ql: []Vec3,
     w: []f64,
     w_bak: []f64,
+    w_round: []f64,
     cert_active: []usize,
     cert_lambdas: []f64,
     newton_scratch: NewtonScratch,
@@ -90,6 +91,7 @@ const Buffers = struct {
             .Ql = try scratch.alloc(Vec3, nw),
             .w = try scratch.alloc(f64, nw),
             .w_bak = try scratch.alloc(f64, nw),
+            .w_round = try scratch.alloc(f64, nw),
             .cert_active = try scratch.alloc(usize, nw),
             .cert_lambdas = try scratch.alloc(f64, nw),
             .newton_scratch = try NewtonScratch.init(scratch, nw),
@@ -130,12 +132,20 @@ fn evalH(
     const s_scale = core.rescaleP(wb.P_buf, wb.Ps);
 
     if (first) core.initWeights(wb.Ps, wb.w);
+
+    // Inner solve: one FW run to tolerance + one Newton polish — the
+    // proven-simple oracle. Its states are inner-(near-)optimal, so the
+    // envelope gradient −3·c below is the gradient of the h reported.
+    // Floor-regime pathologies (certificates that fail at noise level
+    // no matter how the inner state is refined) are NOT the oracle's
+    // job — they're handled by the re-certification phase in
+    // solveReduced, which is where the fast path handles them too.
     core.mveeFw(wb.Ps, rc.INNER_ITERS, rc.INNER_TOL, wb.Ql, wb.w);
     const polished = newtonPolish(wb.Ql, wb.w, algo.ACTIVE_THRESH, 20, tol.NEWTON_INNER, &wb.newton_scratch);
 
-    // Design moment S = Σ wᵢ·qᵢ·qᵢᵀ in the scaled chart; h from its
-    // log-determinant plus the chart-scale correction (D-optimal
-    // design values shift by 2·ln s_scale under the rescaling).
+    // Design value in the scaled chart: h = ½(log det S + 3·ln 3) +
+    // 2·ln s_scale, S = Σ wᵢ·qᵢ·qᵢᵀ (D-optimal design values shift by
+    // 2·ln s_scale under the rescaling).
     var S = Mat3.zero;
     for (wb.Ql, 0..) |q, i| S.addSymRank1(wb.w[i], q);
     const L = S.cholesky() orelse return EVAL_FAIL;
@@ -229,8 +239,15 @@ pub fn solveReduced(
 
     last_gap = try certify.run(cur, b, Xw, &wb);
     final_gap = last_gap.gap;
-    if (@abs(final_gap) <= opts.gap_tol) converged = true;
-    if (final_gap < -tol.NEG_GAP) return SolveError.NegativeDualityGap;
+    // Order matters (mirrors the fast path's break-before-guard): a
+    // converged-at-noise-level gap can be slightly negative (seen on
+    // H3 r15 cells, gap ~ −5e-9 from κ·ε noise) and must be accepted
+    // before the hard NegGap guard fires.
+    if (@abs(final_gap) <= opts.gap_tol) {
+        converged = true;
+    } else if (final_gap < -tol.NEG_GAP) {
+        return SolveError.NegativeDualityGap;
+    }
 
     // Trust-region state: 2×2 BFGS model in the current tangent basis.
     var B = Mat2{ .m = .{ rc.B0, 0, 0, rc.B0 } };
@@ -320,6 +337,54 @@ pub fn solveReduced(
 
         if (rho >= rc.ETA_GOOD and step.u.norm() >= 0.8 * delta) {
             delta = @min(delta * rc.GROW, rc.DELTA_MAX);
+        }
+    }
+
+    // Re-certification phase: the trust region found h stationary but
+    // the certificate hasn't reached tol (or failed outright). Near the
+    // f64 floor the constructed cert is sensitive to the incidental
+    // numerical state at noise amplitude, and everything the TR loop
+    // can do at a bit-frozen axis is idempotent: the h-guarded oracle
+    // restores weights on no-improvement, a raw FW step is a no-op once
+    // g_max < 3 numerically, and polish is at its fixed point — so
+    // retrying at fixed b certifies the identical state forever. The
+    // fast path escapes this because its axis moves a little every
+    // outer iteration, re-projecting the points and re-sampling the
+    // whole numerical state (measured on A5 res-30: fast's first cert
+    // fails the same M-Cholesky; its second passes). So this phase IS
+    // a few fast-path outer iterations warm-started at the TR optimum:
+    // FW step → polish → certify → damped axis micro-step. TR for the
+    // global descent, fast iteration for the terminal certification.
+    if (!converged) {
+        var Q = cur.Q;
+        // The last trial may have been rejected, leaving the projection
+        // buffers at the rejected axis; re-project at the accepted b.
+        _ = projectGnomonic(Xw, b, Q, wb.P_buf, -std.math.inf(f64));
+        var s_scale = core.rescaleP(wb.P_buf, wb.Ps);
+        var attempts: u32 = 0;
+        while (attempts < rc.RECERT_MAX and outer_count < opts.max_outer) : (attempts += 1) {
+            outer_count += 1;
+            core.mveeFw(wb.Ps, 1, 0.0, wb.Ql, wb.w);
+            if (!newtonPolish(wb.Ql, wb.w, algo.ACTIVE_THRESH, 20, tol.NEWTON_INNER, &wb.newton_scratch)) {
+                polish_failures += 1;
+            }
+            const m = core.computeMoments(wb.Ps, wb.w, s_scale);
+            const A_perp = try core.recoverAPerp(wb.P_buf, m.M);
+            last_gap = try core.dualityGapConstructed(wb.w, b, Xw, A_perp, Q, &wb.gap_scratch, wb.cert_active, wb.cert_lambdas);
+            final_gap = last_gap.gap;
+            if (probe_trace) std.debug.print("  recert attempt={d:2} gap={e:10.3}\n", .{ attempts, final_gap });
+            if (@abs(final_gap) <= opts.gap_tol) {
+                converged = true;
+                break;
+            }
+            if (final_gap < -tol.NEG_GAP) return SolveError.NegativeDualityGap;
+            // Axis micro-step along the h-gradient (plain, undamped —
+            // ‖center‖ is at noise scale here). This is the numerical
+            // re-sample the fast path gets for free each iteration.
+            const bstep = core.acceptBUpdate(Xw, b, Q, m.center, 1.0, wb.P_buf, wb.Ps);
+            b = bstep.b;
+            Q = bstep.Q;
+            s_scale = bstep.s_scale;
         }
     }
 

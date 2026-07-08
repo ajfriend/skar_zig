@@ -151,7 +151,7 @@ Headline table:
 | wide-cap grid DNC (60–89.5° × 10 seeds × n ∈ {20, 200}) | wall at ~82°; 10/10 DNC ≥ 84° at n=200 | 0 | **0** |
 | bundled manifest DNC (61 cases) | 0 | 4 (extreme-κ floor) | **0** |
 | a5_res0 dense (12 × 320 pts) | 12/12, ~6 iters | not measured | **12/12, ≤ 2 iters** |
-| mean median-time vs fast (manifest, mutually converged) | 1× | 12.5× | **0.9×** |
+| mean median-time vs fast (manifest, mutually converged) | 1× | 12.5× | **0.9×** (1.7× after the re-cert phase landed — floor cells now buy their certificates; tuning item below) |
 | iterations | 1–30 outer | 33–119 Newton | **0–34 TR** |
 
 Selected per-case rows (iterations / min µs):
@@ -188,6 +188,70 @@ iterations to the AR the joint oracle confirms). Worth keeping in mind
 as the failure shape to watch for in stress tests: *model corruption
 masquerading as convergence*.
 
+## DGGS survey validation (2026-07-07, probe14: 10k cells × {h3 r15, s2 L30, a5 r30})
+
+Ledger item done. Matrix {fast, reduced} × {1e-3, 1e-6} (+ joint at 1e-6):
+
+| system, tol | fast DNC | reduced DNC | maxRelΔAR (both converged) |
+|-------------|----------|-------------|-----------------------------|
+| h3 @1e-3 and @1e-6 | 0 / 0 | **0 / 0** | 3.5e-8 |
+| s2 @1e-3 | 0 | **0** | 9.4e-8 |
+| s2 @1e-6 (floor) | 2173 | **1434** | 8.3e-8 |
+| a5 @1e-3 | 0 | **0** | 2.4e-7 |
+| a5 @1e-6 (floor) | 4739 | **4237** | 1.4e-7 |
+
+Full parity at the survey tolerance, and at the strict 1e-6 the reduced
+path certifies **more** of the floor-marginal population than fast on
+both S2 (+739 cells) and A5 (+502) — its axis sits at the h-minimum, so
+its certificate attempts are better centered than fast's wandering
+iterates. (The joint IPM certifies almost nothing here — 473 / 0 / 0 —
+its raw-3D certification floor, as documented.) Survey wall-times within
+~2× of fast.
+
+### What it took: the re-certification phase (and two reverted detours)
+
+Getting here surfaced a mechanism worth its own framing. On extreme-κ
+cells the constructed certificate is sensitive to the incidental
+numerical state at noise amplitude — the first cert's M-Cholesky fails
+*for the fast path too* (measured on A5 res-30); fast passes on its
+second outer iteration purely because iterating re-samples the state.
+The reduced path's TR loop, having *correctly* found h stationary,
+would compute one certificate and stop. And everything it can do at a
+bit-frozen axis is **idempotent**: an oracle re-run reproduces its
+state, a raw FW step is a no-op once g_max < 3 numerically, polish is
+at its fixed point. The sampling lever fast enjoys is axis motion. So
+the fix is honest about that: **the re-cert phase is a few fast-path
+outer iterations warm-started at the TR optimum** — FW step → polish →
+certify → damped axis micro-step (`config.reduced.RECERT_MAX` bounds
+it). TR for the global descent, fast iteration for the terminal
+certification.
+
+Fixed for real along the way: a **NEG_GAP ordering bug** — a
+converged-at-noise gap can be slightly negative (−5e-9 on H3 r15
+cells), so the acceptance check must run before the hard
+NegativeDualityGap guard, mirroring the fast path's break-before-guard
+ordering.
+
+Tried and reverted (history note on `config.reduced.INNER_*`): a
+rounds/burst/patience oracle that alternated short FW bursts with
+polish, with best-w tracking and a round-0 baseline. Every variant
+could return an *under-refined* inner state — and then the envelope
+gradient −3·c is not the gradient of the h being reported (that
+identity needs inner optimality). The trust region reads the mismatch
+as a systematically wrong slope (measured ρ → −7.95 as Δ → 0 on cap82)
+and stalls. Lesson, in the running framing: **the trust region is only
+as honest as its oracle's (value, gradient) consistency** — an oracle
+allowed to return non-optimal states must return the matching fixed-w
+gradient, and it's simpler to keep the oracle inner-optimal.
+
+Also isolated en route: `mveeFw`'s near-singular pairwise fallback
+(`step = w[jm]`, a full drop) fires at converged designs and
+obliterates a needed support point that polish cannot resurrect (its
+active set is w-thresholded). The fast path co-evolved with this sharp
+edge — it stops running FW the moment its cert passes. Any future
+oracle change (and the away-step FW work) should treat that fallback as
+the known hazard.
+
 ## Validation ledger
 
 Done (this branch):
@@ -203,12 +267,12 @@ Done (this branch):
 - [x] Cross-validated against two independent oracles: Clarabel (SDP)
       and the joint IPM.
 
+- [x] **DGGS surveys with `.reduced`** (h3/s2/a5, 10k cells each) at
+      1e-3 and 1e-6 — full parity at 1e-3; *better* than fast at the
+      1e-6 floor (see the DGGS survey validation section; probe14).
+
 Open, roughly in order:
 
-- [ ] **DGGS surveys with `.reduced`** (h3/s2/a5, 10k cells each) at
-      both 1e-3 and the strict 1e-6: DNC counts vs fast (expect: same
-      f64-floor DNCs at 1e-6 on finest cells — the floor is physics,
-      not method), AR deltas, wall-time.
 - [ ] **States/countries surveys with `.reduced`**: AR agreement +
       iteration counts (Tennessee at 41 fast outer iters is the
       interesting row).

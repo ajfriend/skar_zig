@@ -159,12 +159,20 @@ pub const joint = struct {
 /// convex objective h(b) over the sphere, with the fast path's inner
 /// MVEE machinery as the oracle. Prototype values — not yet tuned.
 pub const reduced = struct {
-    /// Inner MVEE oracle budget per h-evaluation. The oracle breaks
-    /// out early on INNER_TOL, so easy evaluations stay cheap; the
-    /// budget only binds on cold starts of dense inputs. Warm-started
-    /// re-evaluations typically use a handful of steps.
+    /// Inner MVEE oracle budget per h-evaluation: one FW run to
+    /// INNER_TOL (early exit — easy evaluations stay cheap) + one
+    /// Newton polish. Deliberately the simple form: its states are
+    /// inner-(near-)optimal so the envelope gradient −3·c is the
+    /// gradient of the h reported, keeping the trust region's
+    /// (value, gradient) pair consistent. History note: a
+    /// rounds/burst/patience oracle with best-w tracking was tried and
+    /// reverted — every variant could return under-refined states
+    /// whose reported gradient wasn't the gradient of the reported h,
+    /// which the trust region reads as a systematically wrong slope
+    /// (measured ρ → −7.95 as Δ → 0 on cap82). Floor-regime cert
+    /// pathologies are handled by the RECERT phase instead.
     pub const INNER_ITERS: u32 = 300;
-    pub const INNER_TOL: f64 = 1e-9;
+    pub const INNER_TOL: f64 = 1e-11;
     /// Trust-region radius: initial, max, shrink on rejection, growth
     /// on a very successful step (ratio ≥ ETA_GOOD with a full-length
     /// step), and the collapse threshold that ends the solve. Radii
@@ -185,6 +193,17 @@ pub const reduced = struct {
     /// Skip the BFGS update when the curvature yᵀs falls below this
     /// relative floor (keeps B PD without damping machinery).
     pub const CURV_MIN_REL: f64 = 1e-12;
+    /// Re-certification attempts after the trust region stalls without
+    /// a certified gap ≤ tol. Near the f64 gap floor the constructed
+    /// certificate is sensitive to the incidental weight state at
+    /// noise amplitude (measured on A5 res-30: the first cert's
+    /// M-Cholesky fails for the fast path too — it succeeds on its
+    /// second outer iteration purely by re-sampling w). Each attempt
+    /// re-runs the oracle at the fixed near-optimal axis (FW steps at
+    /// noise level + a fresh polish perturb w) and re-certifies.
+    /// Bounded so genuinely floored cells stop instead of burning the
+    /// whole outer budget at oracle prices.
+    pub const RECERT_MAX: u32 = 32;
 };
 
 /// Numerical tolerances — the "how small is small" guards.

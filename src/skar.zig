@@ -547,7 +547,10 @@ pub fn dualityGapConstructed(
             k += 1;
         }
     }
-    if (k == 0) return .{ .gap = 1e30, .cert_n = 0, .v1 = v1, .v2 = v2, .sigma = sigma };
+    if (k == 0) {
+        if (probe_gap_trace) std.debug.print("    [gap] k=0 (no active weights)\n", .{});
+        return .{ .gap = 1e30, .cert_n = 0, .v1 = v1, .v2 = v2, .sigma = sigma };
+    }
 
     // Materialize A once; per-point matvec in the zᵢ loop is cheaper than a
     // structural A·x decomposition once there are ≥ 2 points.
@@ -581,8 +584,15 @@ pub fn dualityGapConstructed(
     // convergence, so Cholesky on M is well-conditioned. A failed pivot
     // is the indefinite-dual guard — Z not PSD enough for log det.
     const M = L.transpose().mul(Z).mul(L).symmetrize();
-    const Lm = M.cholesky() orelse
+    const Lm = M.cholesky() orelse {
+        if (probe_gap_trace) {
+            std.debug.print("    [gap] M-chol FAIL k={d} sigma=({e:.3},{e:.3}) M=({e:.3},{e:.3},{e:.3};{e:.3},{e:.3},{e:.3};{e:.3},{e:.3},{e:.3})\n", .{
+                k, sigma[0], sigma[1],
+                M.m[0], M.m[1], M.m[2], M.m[3], M.m[4], M.m[5], M.m[6], M.m[7], M.m[8],
+            });
+        }
         return .{ .gap = 1e30, .cert_n = 0, .v1 = v1, .v2 = v2, .sigma = sigma };
+    };
 
     var w_sum = Vec3.zero;
     for (0..k) |i| {
@@ -763,6 +773,8 @@ pub var probe_trace: bool = false;
 pub var probe_step_cap: f64 = 0;
 /// Inner FW budget per cycle (0 = default 1 step).
 pub var probe_inner_iters: u32 = 0;
+/// Trace why dualityGapConstructed returns its 1e30 sentinel.
+pub var probe_gap_trace: bool = false;
 
 /// Preprocessed problem handed to a solver path: a strictly feasible
 /// axis, the (possibly hull-reduced) working point set, and the map
