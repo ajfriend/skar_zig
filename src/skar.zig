@@ -425,18 +425,21 @@ const newton = @import("newton.zig");
 const NewtonScratch = newton.NewtonScratch;
 const newtonPolish = newton.newtonPolish;
 
+// Joint convex solver path (EXPERIMENTAL; `SolveOptions.method`).
+const joint = @import("joint.zig");
+
 // ----------------------------------------------------------------
 // Dual-certificate gap scratch
 // ----------------------------------------------------------------
 
 /// Scratch for `dualityGapConstructed` (constructed dual certificate + gap).
-const GapScratch = struct {
+pub const GapScratch = struct {
     active_idx: []usize, // [nmax]  points with w > thresh
     lam: []f64, // [nmax]  dual lambdas: 3 w_i / (b·x_i)
     xa: []Vec3, // [nmax]  active x_i (from X_work)
     za: []Vec3, // [nmax]  normalized A x_i / ‖A x_i‖
 
-    fn init(allocator: std.mem.Allocator, nmax: usize) !GapScratch {
+    pub fn init(allocator: std.mem.Allocator, nmax: usize) !GapScratch {
         return .{
             .active_idx = try allocator.alloc(usize, nmax),
             .lam = try allocator.alloc(f64, nmax),
@@ -480,7 +483,7 @@ const WorkBuffers = struct {
 // Dual-certificate gap
 // ----------------------------------------------------------------
 
-const GapResult = struct {
+pub const GapResult = struct {
     gap: f64,
     cert_n: usize,
     /// A's tangent-plane eigenvectors (lifted to 3D) and eigenvalues. Valid
@@ -505,7 +508,7 @@ fn buildA(b: Vec3, v1: Vec3, v2: Vec3, sigma1: f64, sigma2: f64) Mat3 {
 /// Structural dual gap on (b, A_perp, Q_ortho). A's eigendecomposition falls out
 /// of eig(A_perp) + lifting through Q_ortho, so we build L = V·√Λ directly — no
 /// Cholesky with fallback.
-fn dualityGapConstructed(
+pub fn dualityGapConstructed(
     w: []const f64,
     b: Vec3,
     X_work: []const Vec3,
@@ -639,7 +642,7 @@ fn buildFarkasCert(allocator: std.mem.Allocator, hs: HalfspaceResult) !Cert {
 /// `X[]` indexing via `work_to_orig` (`null` when no hull reduction
 /// happened). The scalar quality measurement (the `gap` field) lives
 /// on the enclosing variant.
-fn buildPrimalCert(
+pub fn buildPrimalCert(
     allocator: std.mem.Allocator,
     cert_active: []const usize,
     cert_lambdas: []const f64,
@@ -752,14 +755,6 @@ fn isCoplanarInput(points: []const Vec3, b: Vec3, threshold: f64) bool {
     return tr <= 0 or 4.0 * det < threshold * tr * tr;
 }
 
-/// Main solver. Returns an `Outcome` tagged union — switch on the tag
-/// to dispatch (`converged` carries the cone's eigendecomposition +
-/// primal certificate; `infeasible` carries the Farkas certificate;
-/// `did_not_converge` carries the last iterate for diagnostics).
-/// Structural input problems (too few points, bad tolerance,
-/// rank-deficient X) propagate as `InputError` via `try`. `opts`
-/// controls convergence, preprocessing, and validation knobs — see
-/// `SolveOptions` for per-field docs and defaults.
 /// TEMPORARY probe knobs (see probe_dnc.zig) — revert before commit.
 pub var probe_centroid_init: bool = false;
 pub var probe_trace: bool = false;
@@ -768,28 +763,36 @@ pub var probe_step_cap: f64 = 0;
 /// Inner FW budget per cycle (0 = default 1 step).
 pub var probe_inner_iters: u32 = 0;
 
-pub fn solve(
+/// Preprocessed problem handed to a solver path: a strictly feasible
+/// axis, the (possibly hull-reduced) working point set, and the map
+/// back to the caller's original indices (`null` = identity).
+pub const Prep = struct {
+    b0: Vec3,
+    Xw: []const Vec3,
+    work_to_orig: ?[]const u32,
+};
+
+const PrepResult = union(enum) {
+    /// Input is infeasible; carries the ready-to-return outcome
+    /// (Farkas certificate already on the parent allocator).
+    infeasible: Outcome,
+    ready: Prep,
+};
+
+/// Steps shared by every solver path: input validation, Farkas
+/// feasibility check, optional hull reduction, coplanarity rejection.
+/// `scratch_alloc` backs `Xw`/`work_to_orig` (arena, freed by `solve`);
+/// `allocator` backs the Farkas cert on the infeasible branch.
+fn preprocess(
+    scratch_alloc: std.mem.Allocator,
     allocator: std.mem.Allocator,
-    X: []const [3]f64,
+    Xv: []const Vec3,
     opts: SolveOptions,
-) !Outcome {
-    // Arena for all transient scratch allocations in this solve call.
-    // Single backing alloc (bumped) + single free-all on deinit — vastly
-    // cheaper than per-buffer alloc/free. The returned cert (for the
-    // Converged / Infeasible / DidNotConverge variants) lives on the
-    // parent `allocator` so it outlives the arena.
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const scratch_alloc = arena.allocator();
-
-    // Cast once: Vec3 is an extern struct over [3]f64, so layout is shared.
-    // All internal routines work in []const Vec3.
-    const Xv: []const Vec3 = @ptrCast(X);
-
+) !PrepResult {
     // 0) Input validation. Catch malformed caller inputs at the boundary
     //    so they propagate as typed errors instead of slipping into the
     //    algorithm where they manifest as NaN-tainted statuses or silent
-    //    perf cliffs. See the InputError doc-comments above for the
+    //    perf cliffs. See the InputError doc-comments in api.zig for the
     //    contract on each tolerance.
     if (Xv.len < 3) return InputError.InsufficientPoints;
     if (!std.math.isFinite(opts.gap_tol) or opts.gap_tol <= 0) return InputError.InvalidTolerance;
@@ -804,11 +807,11 @@ pub fn solve(
         // Infeasible: Farkas cert lives on the parent allocator since it's
         // returned to the caller.
         const farkas = try buildFarkasCert(allocator, hs);
-        return .{ .infeasible = .{
+        return .{ .infeasible = .{ .infeasible = .{
             .cert = farkas,
             .residual = hs.residual,
             .allocator = allocator,
-        } };
+        } } };
     }
 
     // TEMPORARY probe: centroid warm-start (revert before commit).
@@ -823,18 +826,32 @@ pub fn solve(
 
     // 2) Optional hull preprocessing.
     const hp = try hullPreprocess(scratch_alloc, Xv, b, opts.n_hull);
-    const Xw = hp.Xw;
-    const work_to_orig = hp.work_to_orig;
-    const nw = Xw.len;
 
     // 2.5) Coplanarity check on the hulled subset — an input whose hull is
     //      collinear in the tangent plane drives the SDP to a degenerate
     //      cone (one tangent eigenvalue → 0) and produces NaN downstream.
     //      Signaled as `InputError.CoplanarInput`, symmetric with
     //      `InsufficientPoints` — both are "X is structurally bad."
-    if (opts.coplanarity_tol > 0 and isCoplanarInput(Xw, b, opts.coplanarity_tol)) {
+    if (opts.coplanarity_tol > 0 and isCoplanarInput(hp.Xw, b, opts.coplanarity_tol)) {
         return InputError.CoplanarInput;
     }
+
+    return .{ .ready = .{ .b0 = b, .Xw = hp.Xw, .work_to_orig = hp.work_to_orig } };
+}
+
+/// The fast path: alternating axis/MVEE outer loop (FW + Newton polish
+/// + constructed dual certificate). This is the original `solve` body;
+/// see the module doc-comment for the algorithm.
+fn solveFast(
+    allocator: std.mem.Allocator,
+    scratch_alloc: std.mem.Allocator,
+    prep: Prep,
+    opts: SolveOptions,
+) !Outcome {
+    var b = prep.b0;
+    const Xw = prep.Xw;
+    const work_to_orig = prep.work_to_orig;
+    const nw = Xw.len;
 
     // 3) Working buffers — all backed by the arena, freed once at the
     //    end of `solve`.
@@ -932,12 +949,43 @@ pub fn solve(
         }
     }
 
-    // 5) Build final cert (translate work indices back to original X indices).
-    const cert = try buildPrimalCert(allocator, wb.cert_active, wb.cert_lambdas, cert_n, work_to_orig);
+    // 5) Build final cert (translate work indices back to original X indices)
+    //    and bundle the outcome. Shared with the joint path.
+    return buildOutcome(
+        allocator,
+        converged,
+        b,
+        last_gap,
+        final_gap,
+        outer_count,
+        newton_polish_failures,
+        wb.cert_active,
+        wb.cert_lambdas,
+        cert_n,
+        work_to_orig,
+    );
+}
 
-    // Bundle the full eigendecomposition: Q's columns are (b, v1, v2) with
-    // eigenvalues (SIGMA_0, sigma[0], sigma[1]). Flip v2 if needed so (b, v1, v2) is
-    // right-handed (det Q = +1).
+/// Shared finalization for the fast and joint paths: translate the
+/// work-set certificate back to caller indices, bundle the full
+/// eigendecomposition (Q's columns are (b, v1, v2) with eigenvalues
+/// (SIGMA_0, sigma[0], sigma[1]); v2 flipped if needed so det Q = +1),
+/// and wrap as Converged / DidNotConverge.
+pub fn buildOutcome(
+    allocator: std.mem.Allocator,
+    converged: bool,
+    b: Vec3,
+    last_gap: GapResult,
+    final_gap: f64,
+    outer_count: u32,
+    newton_polish_failures: u32,
+    cert_active: []const usize,
+    cert_lambdas: []const f64,
+    cert_n: usize,
+    work_to_orig: ?[]const u32,
+) !Outcome {
+    const cert = try buildPrimalCert(allocator, cert_active, cert_lambdas, cert_n, work_to_orig);
+
     var v1 = last_gap.v1;
     var v2 = last_gap.v2;
     if (v1.cross(v2).dot(b) < 0) v2 = v2.scale(-1.0);
@@ -964,6 +1012,71 @@ pub fn solve(
             .cert = cert,
             .allocator = allocator,
         } };
+    }
+}
+
+/// Main solver. Returns an `Outcome` tagged union — switch on the tag
+/// to dispatch (`converged` carries the cone's eigendecomposition +
+/// primal certificate; `infeasible` carries the Farkas certificate;
+/// `did_not_converge` carries the last iterate for diagnostics).
+/// Structural input problems (too few points, bad tolerance,
+/// rank-deficient X) propagate as `InputError` via `try`. `opts`
+/// controls convergence, preprocessing, validation, and solver-path
+/// knobs — see `SolveOptions` for per-field docs and defaults.
+///
+/// Preprocessing (validation, Farkas feasibility, hull reduction,
+/// coplanarity rejection) is shared; `opts.method` selects the solver
+/// path that runs on the preprocessed working set (see `api.Method`).
+pub fn solve(
+    allocator: std.mem.Allocator,
+    X: []const [3]f64,
+    opts: SolveOptions,
+) !Outcome {
+    // Arena for all transient scratch allocations in this solve call.
+    // Single backing alloc (bumped) + single free-all on deinit — vastly
+    // cheaper than per-buffer alloc/free. The returned cert (for the
+    // Converged / Infeasible / DidNotConverge variants) lives on the
+    // parent `allocator` so it outlives the arena.
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const scratch_alloc = arena.allocator();
+
+    // Cast once: Vec3 is an extern struct over [3]f64, so layout is shared.
+    // All internal routines work in []const Vec3.
+    const Xv: []const Vec3 = @ptrCast(X);
+
+    const prep = switch (try preprocess(scratch_alloc, allocator, Xv, opts)) {
+        .infeasible => |outcome| return outcome,
+        .ready => |p| p,
+    };
+
+    switch (opts.method) {
+        .fast => return solveFast(allocator, scratch_alloc, prep, opts),
+        .joint => return joint.solveJoint(allocator, scratch_alloc, prep, opts),
+        .auto => {
+            var fast_out = try solveFast(allocator, scratch_alloc, prep, opts);
+            if (fast_out != .did_not_converge) return fast_out;
+            var joint_out = try joint.solveJoint(allocator, scratch_alloc, prep, opts);
+            switch (joint_out) {
+                .converged => {
+                    fast_out.deinit();
+                    return joint_out;
+                },
+                .did_not_converge => |jd| {
+                    // Neither path converged: return the iterate with the
+                    // smaller (more trustworthy) gap, free the other.
+                    if (jd.gap <= fast_out.did_not_converge.gap) {
+                        fast_out.deinit();
+                        return joint_out;
+                    }
+                    joint_out.deinit();
+                    return fast_out;
+                },
+                // Feasibility was established in preprocess; the joint
+                // path never re-derives infeasibility.
+                .infeasible => unreachable,
+            }
+        },
     }
 }
 

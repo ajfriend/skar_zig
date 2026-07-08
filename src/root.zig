@@ -33,6 +33,7 @@ pub const Cert = api.Cert;
 pub const SolveError = api.SolveError;
 pub const InputError = api.InputError;
 pub const SolveOptions = api.SolveOptions;
+pub const Method = api.Method;
 pub const checkFeasibility = api.checkFeasibility;
 
 // Solver entry point (`src/skar.zig`).

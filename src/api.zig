@@ -133,7 +133,29 @@ pub const SolveOptions = struct {
     /// Each outer iteration runs `algo.FW_PER_NEWTON` inner cycles +
     /// one Newton polish + one gap check.
     max_outer: u32 = 100,
+
+    /// EXPERIMENTAL — solver path selection (prototype on the
+    /// `investigate/wide-cap-dnc` branch; see docs/wide-cap-dnc-report.md).
+    ///
+    ///   .fast  — today's exact behavior: the alternating axis/MVEE
+    ///            outer loop. Fast on the DGGS hot path, but limit-cycles
+    ///            on dense inputs spanning ≳ 81° from the optimal axis.
+    ///   .joint — barrier-Newton interior-point method on the jointly
+    ///            convex (A, b) formulation (paper eq. primal). Globally
+    ///            convergent for any feasible input; more work per
+    ///            iterate than .fast on easy cases.
+    ///   .auto  — .fast first; if it returns `did_not_converge`, retry
+    ///            with .joint on the same preprocessed working set and
+    ///            return the better outcome.
+    ///
+    /// Default .fast keeps existing behavior bit-identical while the
+    /// prototype is evaluated.
+    method: Method = .fast,
 };
+
+/// Solver path selector for `SolveOptions.method` (see that field's
+/// doc-comment for the semantics of each variant).
+pub const Method = enum { fast, joint, auto };
 
 /// Active-set certificate. `indices` / `lambdas` are paired arrays:
 /// the indices into the caller's `X[]` of the active input points and

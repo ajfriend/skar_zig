@@ -6,8 +6,9 @@
 //! - `newtonPolish`: the inner iteration. Mutates the weight vector
 //!   `w` in place; inactive entries reset to 0 on exit.
 //!
-//! The bordered KKT linear solve + LU machinery is private to this
-//! module — `solveBorderedKkt` / `LU` aren't useful elsewhere.
+//! The bordered KKT linear solve is private to this module; the
+//! generic LU it rides on lives in `linalg.zig` (also used by the
+//! joint barrier solver's 9×9 Newton system).
 
 const std = @import("std");
 const linalg = @import("linalg.zig");
@@ -15,6 +16,7 @@ const config = @import("config.zig");
 
 const Vec3 = linalg.Vec3;
 const Mat3 = linalg.Mat3;
+const LU = linalg.LU;
 const tol = config.tol;
 
 /// Scratch for `newtonPolish` + `solveBorderedKkt` (active-set Newton's
@@ -49,73 +51,6 @@ pub const NewtonScratch = struct {
     }
 };
 
-/// LU factorization with partial pivoting. Storage (`data`, `piv`) is
-/// borrowed from the caller — `factorize` mutates `data` in place to hold
-/// the packed L\U factors. The returned handle just binds the dimension
-/// to those slices so `solve` can't mismatch them.
-const LU = struct {
-    data: []f64, // n·n, row-major; L (strict lower, unit diag) + U (upper)
-    piv: []usize, // n
-    n: usize,
-
-    /// In-place factorization. Returns null on singular.
-    fn factorize(data: []f64, n: usize, piv: []usize) ?LU {
-        for (0..n) |kk| {
-            var pmax = kk;
-            var vmax = @abs(data[kk * n + kk]);
-            for (kk + 1..n) |i| {
-                const v = @abs(data[i * n + kk]);
-                if (v > vmax) {
-                    vmax = v;
-                    pmax = i;
-                }
-            }
-            if (vmax < tol.UNDERFLOW) return null;
-            piv[kk] = pmax;
-            if (pmax != kk) {
-                for (0..n) |j| {
-                    const t = data[kk * n + j];
-                    data[kk * n + j] = data[pmax * n + j];
-                    data[pmax * n + j] = t;
-                }
-            }
-            const inv = 1.0 / data[kk * n + kk];
-            for (kk + 1..n) |i| {
-                data[i * n + kk] *= inv;
-                for (kk + 1..n) |j| {
-                    data[i * n + j] = @mulAdd(f64, -data[i * n + kk], data[kk * n + j], data[i * n + j]);
-                }
-            }
-        }
-        return .{ .data = data, .piv = piv, .n = n };
-    }
-
-    /// In-place solve: overwrites b with the solution of (P·L·U)·x = b.
-    fn solve(self: LU, b: []f64) void {
-        const n = self.n;
-        const data = self.data;
-        const piv = self.piv;
-        for (0..n) |kk| {
-            const p = piv[kk];
-            if (p != kk) {
-                const t = b[kk];
-                b[kk] = b[p];
-                b[p] = t;
-            }
-        }
-        for (1..n) |i| {
-            for (0..i) |j| b[i] = @mulAdd(f64, -data[i * n + j], b[j], b[i]);
-        }
-        var i: usize = n;
-        while (i > 0) {
-            i -= 1;
-            var j = i + 1;
-            while (j < n) : (j += 1) b[i] = @mulAdd(f64, -data[i * n + j], b[j], b[i]);
-            b[i] /= data[i * n + i];
-        }
-    }
-};
-
 /// Bordered KKT [H, 1; 1', 0] [Δw; -ν] = [g; 0] via LU on the (k+1)×(k+1)
 /// symmetric indefinite system.
 fn solveBorderedKkt(H: []const f64, k: usize, g: []const f64, delta_w: []f64, s: *NewtonScratch) bool {
@@ -132,7 +67,7 @@ fn solveBorderedKkt(H: []const f64, k: usize, g: []const f64, delta_w: []f64, s:
     for (0..k) |i| rhs[i] = g[i];
     rhs[k] = 0.0;
 
-    const lu = LU.factorize(K, n, s.piv) orelse return false;
+    const lu = LU.factorize(K, n, s.piv, tol.UNDERFLOW) orelse return false;
     lu.solve(rhs);
     for (0..k) |i| delta_w[i] = rhs[i];
     return true;

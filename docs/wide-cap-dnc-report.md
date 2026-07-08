@@ -1,10 +1,11 @@
 # Wide-angle inputs DNC: the outer axis iteration limit-cycles past ~81° cap radius
 
-**Status:** investigated, root cause characterized, fix direction validated
-externally — no fix implemented yet. Probe harnesses live on this branch
-(`investigate/wide-cap-dnc`): `probe_dnc.zig` … `probe6.zig` at the repo root
-plus temporary `probe_*` knobs in `src/skar.zig` (all marked TEMPORARY; revert
-before merging anything to `main`).
+**Status:** root cause characterized; fix direction #1 (joint barrier-Newton
+solver) **prototyped on this branch** — see **Prototype results** below.
+Probe harnesses live on this branch (`investigate/wide-cap-dnc`):
+`probe_dnc.zig` … `probe8.zig` at the repo root plus temporary `probe_*`
+knobs in `src/skar.zig` (all marked TEMPORARY; revert before merging anything
+to `main`).
 **Found:** 2026-07-07, sweeping randomized spherical caps of increasing angular
 radius (the `ha_*` construction) past the bundled `ha_14` (80°) case.
 **Summary:** For dense random inputs, the solver hits a **hard wall at cap
@@ -139,6 +140,69 @@ is.
    radius from the optimal axis; beyond that expect DNC (and the fixture
    `ha_14` marks the edge). The infeasibility boundary at 90° is handled
    correctly (Farkas cert) — the gap is only 81–90°.
+
+## Prototype results (2026-07-07): joint barrier-Newton path
+
+Fix direction #1 is now prototyped on this branch: `src/joint.zig`, a
+barrier-Newton interior-point method on the joint convex `(A, b)` formulation
+(9 unknowns, damped Newton + log-barrier path-following), selected via the
+experimental `SolveOptions.method` enum (`.fast` default = bit-identical old
+behavior; `.joint`; `.auto` = fast, then joint on DNC). Preprocessing
+(validation → Farkas → hull → coplanarity) is shared by both paths, and the
+joint path certifies through the *same* constructed-dual machinery
+(`dualityGapConstructed`), so both return identical `Outcome` semantics.
+Measurements from `zig build ex-compare` (ReleaseFast, this machine):
+
+**Robustness — the wide-angle hole is closed.** On the random-cap grid
+(widths 60–89.5° × 10 seeds × n ∈ {20, 200}):
+
+| method | DNC on the grid | worst cell |
+|--------|-----------------|------------|
+| fast   | up to 10/10 for n=200 at ≥ 84° (the wall) | — |
+| joint  | **0 anywhere**, incl. 89.5°/200 pts | ~240 µs |
+| auto   | **0 anywhere** | ~440 µs (fast burn + joint solve) |
+
+Joint's ARs match the Clarabel cross-check to ≤ ~1e-4 relative on the three
+committed fixtures (`tests/wide_cap_cells.zig`), with `checkFeasibility` at
+machine epsilon. The regression tests (`tests/joint_test.zig`) pin: joint and
+auto converge on all three fixtures; fast still DNCs on them; joint agrees
+with fast (AR rel ≤ 1e-4) across easy/medium manifest cases; auto is
+bit-identical to fast whenever fast converges.
+
+**Runtime — joint is a fallback, not a replacement.** Across the 54
+mutually-converged manifest cases, joint costs a mean ~12× the fast path's
+median wall time (hex: 1 outer iter/≲1 µs vs 33 Newton steps/18 µs;
+np400: 14 → 85 µs; ha_14: 41 → 85 µs). Newton-step counts sit at 33–70 for
+nearly everything — geometry-independent, as IPM theory predicts — which is
+exactly why it wins in the wide regime and loses on the hot path. `.auto`
+keeps the hot path untouched by construction.
+
+**Known limitation — extreme-κ certification floor (pure `.joint` only).**
+4 of 61 manifest cases DNC under pure `.joint`: `h3_r12_ring10`,
+`h3_r15_midLat`, `h3_r15_pent`, `h3_r15_ring10` — finest-resolution cells
+with tangent eigenvalues σ ~ 1e6–1e7. The joint iterate *finds* the optimum
+(ARs match fast to 6–7 digits) but the certified gap floors at ~1e-5: the
+barrier multipliers λᵢ = 2sᵢ/(t·rᵢ) need rᵢ ~ 1/t, and in raw 3D coordinates
+rᵢ = sᵢ² − ‖A·xᵢ‖² drowns in κ·ε cancellation noise (~σ_max·ε ≈ 1e-9) once
+t ≳ 1e9. The fast path certifies these same cells fine because its inner
+machinery works in the rescaled gnomonic chart (`rescaleP`). Consequences:
+
+- `.auto` is unaffected — the fast path owns exactly these cells, so the
+  fallback never fires there (measured: auto = fast on all four).
+- Fix directions if pure joint ever needs them: certify in the scaled
+  gnomonic chart (mirror `rescaleP`), or hand the joint axis b̂ to one
+  fast-path finalization cycle (inner MVEE + polish at fixed near-optimal
+  axis) — "joint for global convergence, fast for the finish."
+
+**Verdict.** `.auto` delivers the robustness goal — zero DNCs across the
+entire wide-cap grid and no change whatsoever to already-working inputs — at
+zero hot-path cost. Pure `.joint` is not competitive as a default (12× on
+easy cases) and shouldn't replace the fast path. Before flipping `.auto` on
+as the default: tune the barrier schedule (µ, warm-start t across stages) to
+cut the 33–70 Newton steps, consider an oscillation detector so the fast
+path bails before burning all `max_outer` iterations pre-fallback (~halves
+auto's worst-case), and decide whether the wide-cap fixtures should join the
+cases manifest with `.auto` expectations.
 
 ## Reproducing
 

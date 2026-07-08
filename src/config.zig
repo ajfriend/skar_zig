@@ -117,6 +117,40 @@ pub const algo = struct {
     pub const SEED_SPARSE_K: usize = 5;
 };
 
+/// Tuning for the EXPERIMENTAL joint barrier-Newton solver path
+/// (`src/joint.zig`, selected via `SolveOptions.method`). Standard
+/// log-barrier path-following constants; see the module doc-comment in
+/// joint.zig for the formulation. Prototype values — not yet tuned.
+pub const joint = struct {
+    /// Initial barrier parameter t (weight on the −log det A objective
+    /// relative to the constraint barriers).
+    pub const T0: f64 = 1.0;
+    /// Barrier growth factor between centering stages.
+    pub const MU: f64 = 10.0;
+    /// Give up growing t past this — the constraint residuals r_i
+    /// shrink like 1/t on the central path, and beyond ~1e15 the f64
+    /// barrier arithmetic can't support a tighter certificate anyway.
+    pub const T_MAX: f64 = 1e15;
+    /// Newton-decrement convergence for a centering stage: stop when
+    /// λ² = Δᵀ∇²F Δ falls below this.
+    pub const NEWTON_DEC_TOL: f64 = 2e-10;
+    /// Cap on Newton steps within one centering stage.
+    pub const MAX_NEWTON_PER_STAGE: u32 = 50;
+    /// Global cap on Newton steps across all stages (runaway guard).
+    pub const MAX_NEWTON_TOTAL: u32 = 2000;
+    /// Backtracking line search: Armijo slope fraction, step shrink
+    /// factor, and max halvings. The domain check (A ≻ 0, r_i > 0,
+    /// ‖b‖ < 1) runs before the Armijo test at each trial.
+    pub const ARMIJO: f64 = 0.25;
+    pub const LS_BETA: f64 = 0.5;
+    pub const MAX_LS: u32 = 60;
+    /// Strictly-interior start: b0 = B0_SHRINK · (halfspace axis),
+    /// A0 = A0_SHRINK · min_i(b0·xᵢ) · I — both constraints hold with
+    /// slack, so the first barrier evaluation is finite.
+    pub const B0_SHRINK: f64 = 0.9;
+    pub const A0_SHRINK: f64 = 0.9;
+};
+
 /// Numerical tolerances — the "how small is small" guards.
 /// These guard against divide-by-zero, underflow, and spurious convergence.
 /// Tuned to f64 precision; not exposed to callers.
