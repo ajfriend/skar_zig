@@ -212,6 +212,15 @@ pub const reduced = struct {
     /// Skip the BFGS update when the curvature yᵀs falls below this
     /// relative floor (keeps B PD without damping machinery).
     pub const CURV_MIN_REL: f64 = 1e-12;
+    /// Exit the trust-region loop (to the RECERT phase) when the
+    /// step's predicted decrease falls below the merit function's own
+    /// resolution, pred ≤ PRED_NOISE_REL·(1+|h|): the ratio test can
+    /// never verify such a step, so every trial is a rejection and Δ
+    /// just marches to its floor one oracle evaluation at a time
+    /// (measured on the H3 r9 CANARY cell: |g| = 3e-10, pred = 2e-20,
+    /// 26 identical rejections before the re-cert phase fixed it in
+    /// one attempt).
+    pub const PRED_NOISE_REL: f64 = 1e-14;
     /// Re-certification attempts after the trust region stalls without
     /// a certified gap ≤ tol. Near the f64 gap floor the constructed
     /// certificate is sensitive to the incidental weight state at

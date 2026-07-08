@@ -294,6 +294,11 @@ pub fn solveReduced(
             std.debug.print("  it={d:3} h={e:12.5} gap={e:9.2} |g|={e:9.2} delta={e:9.2} pred={e:9.2}\n", .{ outer_count, cur.h, final_gap, cur.g.norm(), delta, step.pred });
         }
         if (step.pred <= 0 or !(step.u.norm() > 0)) break; // stationary: g ≈ 0
+        // Below merit resolution the ratio test can never verify a
+        // step — hand off to the re-cert phase instead of rejecting
+        // the same unresolvable step until Δ hits its floor. See
+        // config.reduced.PRED_NOISE_REL.
+        if (step.pred <= rc.PRED_NOISE_REL * (1.0 + @abs(cur.h))) break;
 
         const b_trial = Vec3.lincomb(1.0, b, 1.0, cur.Q.apply(step.u)).normalize();
 

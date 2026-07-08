@@ -298,15 +298,33 @@ Done (this branch):
       step's predicted decrease (`pred ≤ 100·gap_tol` — pred is in gap
       units, so the gate is scale-aware; a ‖g‖-based gate was tried
       first and mis-fired on elongated regions whose Hessian scale
-      ≫ B₀). Results, survey aggregates (the load-bearing numbers):
-      h3 10k 2.0× → **1.45×** fast; s2 10k @1e-6 → **0.84×** (faster
-      than fast); a5 10k @1e-6 **1.10×**; states/countries equal
-      wall-time. Residual gap confined to mid-size synthetic caps
+      ≫ B₀). A third change fell out of putting the fast path's CANARY
+      cells through `.reduced`: (c) a **pred-noise exit** — when the
+      step's predicted decrease falls below the merit function's own
+      resolution (pred ≤ 1e-14·(1+|h|)), the ratio test can never
+      verify a step, so the loop hands off to the RECERT phase instead
+      of rejecting the same unresolvable interior Newton step ~26 times
+      while Δ marches to its floor (measured on the H3 r9 canary:
+      |g| = 3e-10, pred = 2e-20, cert at 6.6e-6 vs tol 1e-6 — 27
+      iterations before the fix, 3 after; the A5 common canary went
+      30 → 3 and the a5 survey's mean iterations 14.0 → 3.0).
+
+      Results, survey aggregates (the load-bearing numbers): at the
+      strict 1e-6, **s2 0.70× and a5 0.64× — faster than fast while
+      converging more cells**; h3 1.1×; manifest mean 1.4×;
+      states/countries equal-or-faster wall-time at a fraction of the
+      iterations. Residual gap confined to mid-size synthetic caps
       (np400 ~2.3×, ha_14 ~2.7×) where mid-descent oracle evaluations
       legitimately run more FW than fast's 2-steps-per-outer. All
-      convergence numbers identical to pre-tuning (fixtures, DGGS
+      convergence behavior held across the battery (fixtures, DGGS
       parity, states 50/50, countries 177/177, a5_res0, rotations,
       slow suite green).
+
+      CANARY-cell comparison (fast pins vs reduced, post-fix): H3 r15
+      1 → **0**, S2 L30 1 → **0**, A5 hard tail 4 → **3**, H3 r9
+      2 → 3, A5 common 2 → 3. Reduced meets or beats the pins on cells
+      whose initial certificate passes outright and pays +1 on the two
+      cert-edge cells that route through the RECERT phase.
 
       Two failed variants documented for the record, both re-runs of
       the oracle-consistency lesson: a burst of 16 let mveeFw's
