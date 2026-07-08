@@ -281,17 +281,20 @@ test "CANARY: a harder A5 r30 cell takes more than 2 outer iterations" {
 // cells the alternating-path canaries pin. Same policy: a trip is a signal to
 // understand what changed and call it out — never quietly bump.
 //
-// The counts read differently from the alternating path's: `outer_iters` here
-// counts trust-region iterations plus RECERT-phase attempts. The pattern
+// The counts read differently from the alternating path's. The pattern
 // to know (see docs/trust-solver.md):
-//  - 0 = the initial certificate at the halfspace axis already passes
-//    (the axis is optimal on arrival; no iteration needed);
-//  - 3 = a cert-edge cell — the initial cert lands just above tol, the
-//    trust region correctly finds h stationary and exits via the
-//    pred-noise check, and the RECERT phase certifies within a couple
-//    of fast-style attempts. These pins are what caught the
-//    26-rejection Δ-collapse thrash that survey means had smeared
-//    (H3 r9 read 27 before the pred-noise exit landed).
+//  - eager_certified = the iteration-0 certificate at the halfspace
+//    axis already passes (the axis is optimal on arrival);
+//  - open_iters = 1, tr/recert = 0 = a cert-edge cell — the eager cert
+//    lands just above tol and ONE alternating-cadence opening round
+//    (axis motion + cheap FW + polish) certifies. Before the opening
+//    rounds landed (perf/trust-losing-cases branch) these cells read
+//    tr_iters = 1 + recert_attempts = 2: the trust region found h
+//    stationary, exited via the pred-noise check, and the RECERT
+//    phase certified on its 2nd fast-style attempt — the same
+//    escape, paid for at full-oracle price. Those older pins are what
+//    caught the 26-rejection Δ-collapse thrash that survey means had
+//    smeared (H3 r9 read 27 before the pred-noise exit landed).
 
 test "CANARY(trust): H3 r15 cell certifies eagerly at iteration 0 (strict default)" {
     const allocator = std.testing.allocator;
@@ -306,7 +309,7 @@ test "CANARY(trust): H3 r15 cell certifies eagerly at iteration 0 (strict defaul
     try std.testing.expectEqual(@as(u32, 0), d.recert_attempts);
 }
 
-test "CANARY(trust): H3 r9 is a cert-edge cell — 1 TR iteration + 2 recert attempts" {
+test "CANARY(trust): H3 r9 is a cert-edge cell — certifies in 1 opening round" {
     const allocator = std.testing.allocator;
     var outcome = try skar.solve(allocator, &H3_R9_CELL, .{ .method = .trust });
     defer outcome.deinit();
@@ -314,8 +317,9 @@ test "CANARY(trust): H3 r9 is a cert-edge cell — 1 TR iteration + 2 recert att
     try std.testing.expect(std.meta.activeTag(outcome) == .converged);
     const d = outcome.converged.diag.trust;
     try std.testing.expect(!d.eager_certified);
-    try std.testing.expectEqual(@as(u32, 1), d.tr_iters);
-    try std.testing.expectEqual(@as(u32, 2), d.recert_attempts);
+    try std.testing.expectEqual(@as(u32, 1), d.open_iters);
+    try std.testing.expectEqual(@as(u32, 0), d.tr_iters);
+    try std.testing.expectEqual(@as(u32, 0), d.recert_attempts);
 }
 
 test "CANARY(trust): S2 L30 cell certifies eagerly at iteration 0" {
@@ -332,12 +336,13 @@ test "CANARY(trust): S2 L30 cell certifies eagerly at iteration 0" {
 
 test "CANARY(trust): common and harder A5 r30 cells share the cert-edge signature" {
     // Under the trust path the alternating path's "hard tail" cell costs
-    // the same as the common one: both are cert-edge cells (eager cert
-    // just above tol → 1 TR iteration ending in the pred-noise exit →
-    // certified on the 2nd RECERT attempt), and the trust region's
-    // arrival at the axis optimum doesn't depend on the alternating
-    // path's contraction rate. The equality is the interesting fact —
-    // pin both.
+    // the same as the common one: both certify in ONE opening round
+    // (the eager cert lands just above tol; a single axis-motion round
+    // re-samples the numerical state and passes) — even though the
+    // harder cell needs 4 alternating iterations from a cold start.
+    // The eager phase's FW+polish opening is a stronger warm start
+    // than the alternating path's first cycles. The equality is the
+    // interesting fact — pin both.
     const allocator = std.testing.allocator;
     var common = try skar.solve(allocator, &A5_CELL, .{ .gap_tol = DGGS_GAP_TOL, .method = .trust });
     defer common.deinit();
@@ -349,7 +354,8 @@ test "CANARY(trust): common and harder A5 r30 cells share the cert-edge signatur
     for ([_]skar.Diagnostics{ common.converged.diag, harder.converged.diag }) |diag| {
         const d = diag.trust;
         try std.testing.expect(!d.eager_certified);
-        try std.testing.expectEqual(@as(u32, 1), d.tr_iters);
-        try std.testing.expectEqual(@as(u32, 2), d.recert_attempts);
+        try std.testing.expectEqual(@as(u32, 1), d.open_iters);
+        try std.testing.expectEqual(@as(u32, 0), d.tr_iters);
+        try std.testing.expectEqual(@as(u32, 0), d.recert_attempts);
     }
 }

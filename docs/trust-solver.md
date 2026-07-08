@@ -278,6 +278,15 @@ derived, per-evaluation model with a built-in safety property: model
 curvature ≥ envelope curvature, so steps are conservative and nearly
 always accepted.
 
+> **Errata (2026-07-08, `perf/trust-losing-cases`):** the majorant
+> claim above is backwards. The inner oracle MAXIMIZES the design
+> value over w, so h(b) = max_w h̃_w(b) and the frozen-w surface is a
+> global **minorant**; the fixed-w Hessian *under*-curves in the far
+> field — which is where the ρ ≈ 0.15 creep documented below actually
+> comes from. This also invalidates the option-B "not worth it"
+> reasoning at the end of this section; see "The exploration branch"
+> section for the correction and the measured result.
+
 **What replacing BFGS with it bought, measured** (full battery vs the
 BFGS baseline at the `investigate/wide-cap-dnc` tip):
 
@@ -331,6 +340,109 @@ the outcome, which `.auto` callers previously couldn't know. The trust
 CANARY pins upgraded from opaque totals (0/3/0/3/3) to typed
 signatures: eager-certified for the 0-cells, and (tr = 1, recert = 2)
 for the cert-edge cells — the pins now name the phase they guard.
+
+## The exploration branch: fixing where trust loses (2026-07-08, `perf/trust-losing-cases`)
+
+Post-0.5.0 exploration of the three loss classes from the fair-metric
+comparison (mid-size DGGS cells 3–6× on manifest rows, ha_* dense caps
+5–10×, a5 bulk tail ~15%). Seen through h, both fixes are the same
+statement: **trust's cost is oracle-quality (value, gradient) pairs,
+and it was buying them when cheap steps sufficed, or more often than
+the model required.**
+
+### Fix 1: the alternating-cadence opening round (`trust.OPEN_ROUNDS`)
+
+The cert-edge cells (H3 r9, common and hard A5 r30) fail the eager
+certificate by a hair and then paid the full apparatus — oracle-quality
+eval, one TR iteration, two RECERT attempts — for what is *mechanically
+the same escape* RECERT performs: axis motion re-sampling the numerical
+state. The fix moves that motion to the front: after the eager
+certificate fails, run up to OPEN_ROUNDS = 1 alternating-path outer
+iterations (axis step, cheap FW, polish, certificate) before any
+trust-region work. Opening certificates are upper-bound checks only —
+nothing feeds the TR model, so the oracle-consistency lesson is
+respected. New typed diagnostic `open_iters`; CANARY shifts (trust pins
+only, alternating untouched): r9 and both A5 cells now read
+open = 1, tr = 0, recert = 0 (was tr = 1, recert = 2).
+
+One residual cost, understood and accepted: cells that used to converge
+at the *initial full-oracle certificate* (the symmetric pent family —
+axis right, refinement wrong) now spend one cheap round they cannot
+use. A gate was probed (eager gap, ‖c‖, ‖c‖/s_scale) and none separates
+"needs axis motion" from "needs refinement" reliably — the round is
+bounded, explainable, and µs-scale, so it ships ungated.
+
+### Fix 2: the exact envelope Hessian (`trust.EXACT_HESSIAN`, option B)
+
+The correction of record: the earlier option-B assessment ("would
+over-promise more in the far field; not worth it") was reasoned from
+the majorant framing, which was backwards — h is a **max** over frozen-w
+members, the fixed-w Hessian *under*-curves in the far field, and the
+ρ ≈ 0.15 creep on dense near-circular caps was exactly that missing
+curvature. Danskin at second order supplies it: ∇²h = B̃ + Mᵀ(dw/du),
+with dw/du from differentiating the inner KKT system along the active
+simplex face and mᵢ = −gᵢpᵢ + Σⱼ wⱼcᵢⱼ²pⱼ, all from quantities the
+evaluation already has.
+
+The numerically load-bearing detail: C∘C has rank ≤ 6 *exactly* (Schur
+square of the rank-3 Gram), so on degenerate supports (ha_*: k ≫ 6
+active points) a Tikhonov-regularized k×k solve amplifies the
+null-space component of m — active-set and oracle-stall noise — by 1/ε
+(measured: model entries blew up to ~1e5 on a 60-point ring). Flat
+directions of the degenerate optimal face carry no curvature and must
+be projected out, not amplified: the pseudo-inverse is computed in the
+exact 6-dim range space (vᵢ = symmetric outer product of yᵢ), a
+bordered 7×7 solve, O(k·36) build — cheaper than the k×k LU it
+replaces.
+
+Validation: `tests/trust_hessian_test.zig` FD-checks uᵀBu against
+value-based second differences along the sphere retraction (frame-free
+by construction): 2% agreement on irregular small supports (exact
+regime), 1–4% on dense degenerate rings (regularized regime), gradient
+checked in the same sweep. Full `-Dslow` suite green; alternating path
+untouched (two symbols made `pub`).
+
+### Measured (quiet machine; fair metric: mutual-converged timing only)
+
+Bulk surveys, trust/alt total-time ratio (10k cells each):
+
+| dataset  | @1e-6 before → after | @1e-3 before → after |
+|----------|----------------------|----------------------|
+| h3 r5    |  (1.10×*) → 1.12×    |  — → 1.00×           |
+| h3 r9    |  (1.10×*) → 1.11×    |  — → 0.98×           |
+| h3 r15   |  0.98× → 0.98×       |  0.98× → 0.98×       |
+| s2 r30   |  1.13× → 1.09×       |  0.80× → 0.83×       |
+| a5 r29   |  1.14× → 0.99×       |  1.17× → 0.93×       |
+| states   |  0.83× → 0.89×       |                      |
+| countries|  0.98× → 0.93×       |                      |
+
+(*post-fix-1 measurement; the "3–6× on mid-res surveys" concern from
+manifest rows was refuted at bulk scale — mid-res bulk was already
+~1.10× before fix 2.) DNC counts unchanged in character: trust still
+converges more floor cells (s2 8452 vs 7827, a5 5707 vs 5261) and its
+failures stay ~4× cheaper (9–11 µs vs 37–39 µs); countries stay 177/177
+with France converging at the default budget.
+
+Manifest rows that motivated the branch (min µs, alt | trust
+before → after): h3_r9_equator 4 | 21 → 3; dnc_small_wide 20 | 35 → 19;
+ha_05 20 | 56 → 36; ha_08 29 | 84 → 37; ha_10 17 | 121 → 28;
+ha_12 18 | 204 → 44; ha_14 40 | 90 → 96. TR iteration counts on ha_*:
+8/11/17/32/13 → 3/4/3/4/8. Mean mutually-converged slowdown vs
+alternating: 1.6× → 1.1×.
+
+Wide-cap robustness grid: DNC still 0/200 everywhere for trust, and the
+n = 200 rows dropped ~2.5× (89.5°: 128 → 52 µs) — trust is now
+*faster* than alternating from 82° up (where alternating is burning its
+budget to fail).
+
+### Not attempted
+
+The inexact-oracle scheme (accuracy-proportional inner stopping) stays
+unstarted per plan: three budget-based attempts were reverted for
+oracle-inconsistency (ρ → −7.95), a principled gap-conditioned rule
+walks the same cliff, and after fixes 1–2 the remaining gap it would
+address (mid-res bulk ~1.1×, ha_12 ~2.4×) no longer justifies the
+risk.
 
 ## Validation ledger
 
