@@ -1,115 +1,158 @@
-# TODO: away-step Frank–Wolfe to retire the sparse-init size gate
+# Proposal: away-step Frank–Wolfe for the inner MVEE solver
 
-**Status:** not started — design note / future work.
+**Status:** proposed, staged — ready to execute in its own session(s) after
+the `investigate/wide-cap-dnc` branch lands. Supersedes the earlier
+future-work note at this path (written before the reduced solver existed;
+its goal stands, its context and plan are updated here).
+**Estimated size:** ~1 focused day of algorithm work + 1–2 days of
+validation/reconciliation, using the measurement infrastructure already on
+the branch. Stage 1 carries no fast-path risk; stage 2 is the
+CANARY-shifting step and needs explicit human sign-off.
 
-The A5 res-0 fix has gone through two mechanisms: a size-gated inner-FW *boost*
-(v0.3.0) and a size-gated *sparse farthest-point init* (v0.4.0, current — see
-`a5_res0_dnc_report.md`). Both are gated on working-set size (`nw > 16`,
-`algo.SEED_SPARSE_MIN_POINTS`). This note records the deeper change that would
-remove the gate entirely.
+## Why (three reasons now, was one)
 
-## Why the gate exists (and why it's a proxy)
+1. **Retire the sparse-init size gate** (the original motivation). The MVEE
+   inner FW grows support well but prunes poorly, so init quality matters
+   and is input-dependent: uniform is optimal for symmetric small cells,
+   sparse seeding for redundant dense boundaries (a5_res0). The
+   `algo.SEED_SPARSE_*` size gate is a proxy for "support sparsity" and
+   misses small irregular polygons. An inner solver that prunes fast makes
+   the init irrelevant: uniform everywhere, delete `farthestPointSeed`,
+   `SEED_SPARSE_MIN_POINTS`, `SEED_SPARSE_K`, and the gate branch.
 
-The MVEE inner solve moves Frank–Wolfe weight onto the support. FW **grows** the
-support well (each step pulls weight onto the most-violated point) but **prunes**
-it poorly: only a pairwise drop-step removes a point (~2 per outer iteration),
-and Newton's fraction-to-boundary step can never zero a weight.
+2. **Eliminate the near-singular drop-step hazard at the source.** The
+   pairwise step's fallback (`step = w[jm]` when `det_G ≤ NEAR_SING`,
+   `src/skar.zig` `mveeFw`) fires on noise-level descent signals at
+   converged designs and zeroes a genuine support point that `newtonPolish`
+   cannot resurrect (its active set is w-thresholded). This bit the reduced
+   path four times in one validation day (h3_res09 + cap82 during the
+   rounds-oracle detour; New York during burst tuning — see
+   docs/reduced-solver.md "What it took" and the tuning ledger entry). The
+   fast path is only accidentally shielded: it runs 2 FW steps per outer
+   and stops iterating the moment its certificate passes, so it rarely
+   executes FW at a converged design. Away-step FW replaces the ad-hoc
+   drop with a line-search-justified away step whose drop boundary is a
+   deliberate event.
 
-So the *quality of the weight init* is "how close it starts to the optimal weight
-vector," and the optimum's shape is input-dependent:
+3. **Shrink the reduced oracle's burst defense.** `config.reduced.
+   INNER_BURST = 64` exists specifically so a mid-burst noise-drop can
+   self-heal before the stall-exit h-sample. That minimum evaluation cost
+   is the main residual of the reduced path's 2–3× gap on mid-size
+   synthetic caps (np400, ha_14). With a drop-safe inner solver the burst
+   can shrink toward "a few", directly attacking that residual.
 
-- **Near-circular small cells** (e.g. H3 hexagons): the enclosing ellipse touches
-  *all* vertices, so the optimal weights are near-**uniform**. `w = 1/n` is
-  already the answer → converges in ~1 outer iteration. A sparse seed *breaks the
-  symmetry* (skews the moment `M = Σ wᵢ·Pᵢ·Pᵢᵀ`, hence the recovered shape and the
-  cone-axis gradient), costing iterations to undo (~1 → ~11).
-- **Redundant/dense inputs** (a5_res0: 320 points, ellipse touches ~5): the
-  optimal support is **sparse**. Uniform init is far (must drain ~315 weights to
-  zero, ~2/iter → ~145 outer iters → DNC); a sparse seed is close.
+## The algorithm
 
-The real discriminator is **support sparsity** (`support/n`), not size. The size
-gate is a cheap proxy and is imperfect: small *irregular* polygons have sparse
-support and would benefit from sparse init, but the gate skips them (measured:
-ungated sparse beat the gate on states/countries iteration counts).
+Current `mveeFw` per iteration: build S = Σ wᵢqᵢqᵢᵀ, Cholesky, gradients
+gᵢ = qᵢᵀS⁻¹qᵢ, toward-vertex `j_max` (max g), away-vertex `j_min` (min g
+among active), then either a pairwise swap with step `a/(2·det_G)` capped
+at `w[jm]` (with the hazardous near-singular fallback) or a vanilla FW
+step.
 
-No *pure init* escapes this. Fixing a5_res0 requires a hard-sparse active set
-(hard zeros); not regressing symmetric cells forbids zeroing an arbitrary subset
-of a symmetric point set. A soft weighting (e.g. `wᵢ ∝ dist-from-centroid`)
-preserves symmetry but leaves every point above the active threshold, so it
-doesn't drain a5_res0. The conflict is structural.
+Away-step FW keeps the same per-iteration quantities and changes the
+decision:
 
-## The fix: make the solver prune fast, so the init stops mattering
+- **Toward step** (mass onto `j_max`): first-order progress ∝ g_max − 3.
+- **Away step** (mass off `j_min`): progress ∝ 3 − g_min; direction
+  w + γ·(w − e_jmin); max step γ_max = w[jm]/(1 − w[jm]), and taking
+  γ_max zeroes `w[jm]` — the drop, now reached only when the 1-D line
+  search sends it there.
+- Pick the direction with more first-order progress; step size by the
+  closed-form 1-D minimizer of the log-det objective along the chosen
+  direction (the existing `det_G` machinery is exactly this quadratic for
+  the pairwise direction; derive the toward/away analogues — same
+  ingredients: g_max, g_min, g_cross), clamped to the boundary. Keep
+  `tol.WEIGHT_ACTIVE` semantics for the active set.
 
-Replace the plain/pairwise inner FW with an **away-step (a.k.a. fully-corrective)
-Frank–Wolfe** that can drive weights to **exactly zero** quickly — the standard
-Wolfe away-step MVEE algorithm (Todd & Yıldırım; Kumar & Yıldırım). Then:
+Literature anchors: Todd & Yıldırım (Khachiyan/MVEE); Kumar & Yıldırım
+(away-step / WAFW for MVEE). Linear convergence with away steps is the
+standard result; the practical draw here is O(log) support collapse from a
+uniform start instead of the current ~2-drops-per-outer drain.
 
-- Keep **uniform init everywhere** → symmetric small cells stay on their optimum
-  (no regression, no gate, no seed routine).
-- The away-step solver **drains the redundant points fast** from that uniform
-  start → a5_res0 converges in a handful of outer iterations too.
+~60–100 lines replacing the current loop body, plus config constants.
+Implement as a sibling function (or comptime flag) so both the old and new
+inner solvers exist during evaluation — stage 1 depends on that.
 
-This removes `algo.SEED_SPARSE_*`, the `nw > 16` branch in `solve()`, and
-`farthestPointSeed` — the init becomes irrelevant because the solver is robust to
-it.
+## Staged plan
 
-## Sketch
+### Stage 1 — reduced oracle only (no fast-path exposure)
 
-`mveeFw` (`src/skar.zig`) currently does, per inner iteration: build
-`S = Σ wᵢ·qᵢ·qᵢᵀ`, Cholesky, find `j_max` (max `gᵢ = qᵢᵀ S⁻¹ qᵢ`) and the
-min-gradient *active* point `j_min`, then a pairwise swap (move mass `j_min →
-j_max`) or a vanilla FW fallback.
+Wire the away-step solver into `reduced.evalH` and the RECERT phase only;
+`solveFast` keeps today's `mveeFw` verbatim, so the default path stays
+bit-identical and NO fast CANARY can shift.
 
-Away-step FW makes the **away direction first-class**:
+Do in stage 1:
+- Implement + unit-test the line search (agreement with the pairwise step
+  on non-degenerate pairs; drop boundary exactness; no negative weights).
+- Try shrinking `INNER_BURST` (64 → 8-ish) and, if the hazard is truly
+  gone, simplifying the stall exit.
+- Full battery, all of which exists on the branch and runs in minutes:
+  - `zig build test -Dslow=true` — the reduced CANARY pins
+    (dggs_dnc_test "CANARY(reduced)" 0/3/0/3/3, a5_res0 reduced ceilings,
+    wide-cap ceilings in joint_test) are the tripwires; shifts here are
+    *expected* and each needs a story.
+  - probe14 (DGGS 30k × 2 tols: parity + floor counts), probe19
+    (states 50/50, countries 177/177 at default budget), probe20
+    (rotations 160/160), probe13 (a5_res0), probe22 (canary cells),
+    `zig build ex-compare` (manifest mean + wide-cap grid).
+- Success criteria: all convergence counts hold or improve; np400/ha_14
+  ratio vs fast improves measurably (target ≤ 1.5×); no new failure
+  shapes. The catalogued shapes to watch: oracle (value, gradient)
+  inconsistency read as a wrong TR slope; corrupted-state stall exits;
+  cert-edge thrash.
 
-- **Toward step** (standard FW): add mass to `j_max`. Progress ∝ `g_max − 3`.
-- **Away step**: *remove* mass from `j_min` (the worst point still carrying
-  weight). Progress ∝ `3 − g_min`. The max away step is bounded by
-  `w[j_min]/(1 − w[j_min])`; taking the full max step **zeros** `w[j_min]` — the
-  drop that the current pairwise step only manages ~2/iter.
+### Stage 2 — fast-path adoption + gate deletion (CANARY sign-off)
 
-Each iteration pick whichever direction (toward / away) gives more progress, with
-the standard away-step line-search/step-size. This both grows and *aggressively
-prunes* the support, so a uniform start collapses to the true support in O(log)
-rather than O(n) steps. (The current pairwise swap is a restricted hybrid; the
-generalization is letting the away step run to the drop boundary on its own.)
+Swap `solveFast`'s inner solver to away-step, revert init to plain uniform
+everywhere, delete `algo.SEED_SPARSE_*` + `farthestPointSeed` + the
+`initWeights` branch.
 
-## Acceptance criteria (same gauntlet as the v0.4.0 change)
+- **Every fast CANARY pin will likely shift** — per repo policy each shift
+  is flagged and explained to a human, never silently bumped. This is the
+  step that requires explicit sign-off before starting.
+- Acceptance (the original note's gauntlet, all harnesses now in-repo):
+  a5_res0 12/12 at strict default **with uniform init**, few iters, wall
+  time ≤ current (~74 µs-class); symmetric small cells stay ~1 fast outer
+  iteration with uniform init (the whole point — no symmetric-cell
+  regression); `ex-bench` per-case small cells not slower (ignore TOTAL);
+  DGGS floor DNC counts unchanged at 1e-6; states/countries unchanged;
+  full slow suite with reconciled canaries.
+- Only after stage 2 lands does the doc cleanup happen: update
+  a5_res0_dnc_report.md (the gate it documents is gone) and
+  reduced-solver.md (drop-hazard notes become history).
 
-Prototype behind a toggle on an experiment branch and measure vs current main:
+Stage 1 is worth doing even if stage 2 stalls: the reduced path is the
+consumer that actually steps on the hazard, and months of stage-1 burn-in
+is exactly the evidence stage 2's sign-off wants.
 
-- **a5_res0** (`tests/a5_res0_cells_dense.zig`): 12/12 converge at strict
-  default, few outer iters, fast (target ≈ the v0.4.0 sparse numbers, ~74
-  µs/solve).
-- **Symmetric small cells** (h3 hexagons): with **uniform init**, must stay at ~1
-  outer iter (this is the whole point — no symmetric-cell regression).
-- **Medium/large** (`zig build ex-bench`, states/countries): wall-time ≤ v0.4.0.
-- **Finest f64 floor** (`zig build dggs-aspect` @ `gap_tol = 1e-6`): DNC counts
-  unchanged (s2 2173 / a5 4739).
-- **Full suite** `zig build test -Dslow=true` green. Expect **CANARY
-  iteration-count shifts** (away-step changes trajectories) — flag for human
-  confirmation per repo policy (`tests/dggs_dnc_test.zig`), don't silently bump.
+## Risks (updated from the original note)
 
-If all hold: delete `algo.SEED_SPARSE_*` + `farthestPointSeed` + the gate, revert
-init to plain uniform, and update `a5_res0_dnc_report.md`.
-
-## Risks / notes
-
-- **Numerical care** on the away step-size and the drop boundary (clamp like the
-  existing pairwise `step > w[jm]` guard; keep `tol.WEIGHT_ACTIVE`).
-- **Outer-loop coupling:** weights warm-start across outer iterations and feed
-  the b-axis; confirm the away step doesn't destabilize the damped axis update.
-- **Cholesky-break path** (`S.cholesky() orelse break`) must still behave when
-  the support is tiny early on.
-- Bigger change than the gated seed (~tens of lines of real algorithm + step-size
-  logic), hence its own branch + validation rather than a drive-by.
+- **Drop-boundary numerics**: clamp like the existing `step > w[jm]`
+  guard; keep `tol.WEIGHT_ACTIVE`; property-test that weights stay in the
+  simplex.
+- **Warm-start coupling** (bigger deal now than when first written): the
+  reduced path warm-starts weights across axis moves and re-runs the
+  solver at converged designs — the exact regime where the old solver
+  misbehaved. Stage 1's battery covers it; watch the oracle-consistency
+  failure shape specifically.
+- **Aggressive draining destabilizing the fast path's damping** (stage 2
+  only): away steps change the weight trajectory feeding the axis update;
+  the damped controller was co-tuned with the old cadence. If ha_*-band
+  cells wobble, that's the first place to look.
+- **Cholesky-break path**: `S.cholesky() orelse break` must still behave
+  when the support is tiny early on (sparse starts are gone in stage 2 —
+  uniform start keeps S full-rank from the outset, which actually
+  *removes* a risk).
 
 ## Pointers
 
-- `src/skar.zig` — `mveeFw` (inner solver), the gated init in `solve()`,
-  `farthestPointSeed`.
-- `src/config.zig` — `algo.SEED_SPARSE_{MIN_POINTS,K}` (to be removed).
-- `docs/a5_res0_dnc_report.md` — full history (boost → survey → sparse) and the
-  measured boost-vs-sparse comparison.
-- Literature: Todd & Yıldırım, "On Khachiyan's algorithm for the computation of
-  minimum-volume enclosing ellipsoids"; Kumar & Yıldırım, away-step / WAFW MVEE.
+- `src/skar.zig` — `mveeFw` (the loop to replace), `initWeights` /
+  `farthestPointSeed` (stage-2 deletions), `newtonPolish` interaction.
+- `src/reduced.zig` — `evalH` + RECERT phase (stage-1 call sites),
+  `config.reduced.INNER_*` (burst defense to retire).
+- `docs/reduced-solver.md` — the four drop-step incidents, the
+  oracle-consistency lesson, and the validation ledger this proposal's
+  battery mirrors.
+- `docs/a5_res0_dnc_report.md` — the drain story and boost-vs-sparse
+  history (stage 2 updates it).
+- Todd & Yıldırım; Kumar & Yıldırım (away-step MVEE).
