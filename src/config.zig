@@ -201,6 +201,27 @@ pub const trust = struct {
     /// far-field states). 3·I is the majorant Hessian's own limit at a
     /// circular optimum — the fallback is the derived value, not a fit.
     pub const B0: f64 = 3.0;
+    /// Exact envelope Hessian (option B of the trust-solver plan): add
+    /// the dw*/db correction — the response of the inner MVEE weights
+    /// to axis motion, an equality-constrained solve on the active set
+    /// — to the fixed-w Hessian. The fixed-w model under-curves away
+    /// from the touch point (h is a MAX over w of the fixed-w values,
+    /// so the envelope curves upward relative to every member), which
+    /// is exactly the ρ ≈ 0.15 far-field creep the SHRINK_POOR rule
+    /// papers over on dense near-circular caps. C∘C has rank ≤ 6
+    /// (Schur square of a rank-3 Gram), so the correction is computed
+    /// as a pseudo-inverse in the exact 6-dim range space (see evalH
+    /// part 2) — degenerate optimal-face directions carry no curvature
+    /// and are projected out, not Tikhonov-amplified. The trust
+    /// region's ρ test guards model quality either way. Toggle for
+    /// A/B measurement.
+    pub const EXACT_HESSIAN: bool = true;
+    /// Relative Tikhonov mass on the range-space normal matrix ½G²
+    /// (benign: the projected RHS has no null component to amplify).
+    pub const HESS_REG: f64 = 1e-10;
+    /// LU pivot floor for the 7×7 range-space solve; a factorization
+    /// falling below it skips the correction (fixed-w model kept).
+    pub const HESS_PIVOT_MIN: f64 = 1e-14;
     /// Exit the trust-region loop (to the RECERT phase) when the
     /// step's predicted decrease falls below the merit function's own
     /// resolution, pred ≤ PRED_NOISE_REL·(1+|h|): the ratio test can

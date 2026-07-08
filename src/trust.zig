@@ -30,7 +30,7 @@
 //!              centroid the alternating path already computes — i.e. the
 //!              alternating path IS gradient descent on h, minus the merit
 //!              function. This path adds the merit function and a
-//!              second-order (BFGS) model;
+//!              second-order (envelope-Hessian) model;
 //!  - cert:     `recoverAPerp` + `dualityGapConstructed`, identical to
 //!              the alternating path; convergence is declared on the same
 //!              certified |gap| ≤ gap_tol.
@@ -72,8 +72,9 @@ const Prep = core.Prep;
 const GapScratch = core.GapScratch;
 const GapResult = core.GapResult;
 
-/// Per-solve working buffers, all on the solve arena.
-const Buffers = struct {
+/// Per-solve working buffers, all on the solve arena. (`pub` so the
+/// FD Hessian-validation test can drive `evalH` directly.)
+pub const Buffers = struct {
     P_buf: [][2]f64,
     Ps: [][2]f64,
     Ql: []Vec3,
@@ -85,10 +86,14 @@ const Buffers = struct {
     /// forward-solved design vectors yᵢ = L⁻¹qᵢ.
     act_idx: []usize,
     Yf: []Vec3,
+    /// Per-active envelope cross-derivatives mᵢ for the exact-Hessian
+    /// dw/db correction (the 7×7 range-space solve itself lives on the
+    /// stack).
+    m_buf: [][2]f64,
     newton_scratch: NewtonScratch,
     gap_scratch: GapScratch,
 
-    fn init(scratch: std.mem.Allocator, nw: usize) !Buffers {
+    pub fn init(scratch: std.mem.Allocator, nw: usize) !Buffers {
         return .{
             .P_buf = try scratch.alloc([2]f64, nw),
             .Ps = try scratch.alloc([2]f64, nw),
@@ -99,6 +104,7 @@ const Buffers = struct {
             .cert_lambdas = try scratch.alloc(f64, nw),
             .act_idx = try scratch.alloc(usize, nw),
             .Yf = try scratch.alloc(Vec3, nw),
+            .m_buf = try scratch.alloc([2]f64, nw),
             .newton_scratch = try NewtonScratch.init(scratch, nw),
             .gap_scratch = try GapScratch.init(scratch, nw),
         };
@@ -129,8 +135,9 @@ const Eval = struct {
     h: f64,
     /// Tangent gradient of h at b in the Q basis: g = −3·c.
     g: Vec2,
-    /// Model Hessian: the fixed-w (majorant) Hessian of h on the
-    /// sphere at b, in the same tangent basis. See evalH.
+    /// Model Hessian: the envelope Hessian of h on the sphere at b
+    /// (fixed-w term + dw/db correction when EXACT_HESSIAN), in the
+    /// same tangent basis. See evalH.
     B: Mat2,
     Q: Mat3x2,
     moments: core.Moments,
@@ -165,8 +172,8 @@ fn designState(Ql: []const Vec3, w: []const f64, s_scale: f64) ?DesignState {
 /// certification. Mutates wb.w (warm start) — caller snapshots/restores
 /// around rejected trials. `margin` guards the projection (weights are
 /// always warm here: the eager phase seeds them via initWeights before
-/// the first call).
-fn evalH(
+/// the first call). (`pub` for the FD Hessian-validation test.)
+pub fn evalH(
     b: Vec3,
     Xw: []const Vec3,
     wb: *Buffers,
@@ -206,16 +213,19 @@ fn evalH(
     const ds = designState(wb.Ql, wb.w, s_scale) orelse return null;
     const L = ds.L;
 
-    // Model Hessian: the fixed-w (majorant) Hessian of h̃_w on the
+    // Model Hessian, part 1 — the fixed-w Hessian of h̃_w on the
     // sphere, entirely in chart quantities. For frozen weights,
     // h̃_w(b) = ½·log det(3·Σ wᵢzᵢzᵢᵀ) with zᵢ = xᵢ/(bᵀxᵢ) is a global
-    // majorant of h touching at the current point (h = min over inner
-    // states), so its curvature over-estimates the envelope's — steps
-    // modeled with it are conservative and nearly always accepted.
-    // Differentiating twice and retracting to the sphere
-    // (b(u) = normalize(b + Q̂u)) gives, with gᵢ = qᵢᵀS⁻¹qᵢ and
-    // cᵢⱼ = qᵢᵀS⁻¹qⱼ (both chart-scale invariant) and unscaled chart
-    // points pᵢ = s_scale·Ps[i]:
+    // MINORANT of h touching at the current point: the inner FW/polish
+    // MAXIMIZES the design value over w, so h(b) = max_w h̃_w(b) ≥
+    // h̃_w(b) for the frozen w — the envelope curves upward relative to
+    // every member. Its curvature therefore UNDER-estimates the
+    // envelope's away from the touch point (the measured ρ ≈ 0.15
+    // far-field creep on dense near-circular caps), which the dw/db
+    // correction in part 2 restores. Differentiating twice and
+    // retracting to the sphere (b(u) = normalize(b + Q̂u)) gives, with
+    // gᵢ = qᵢᵀS⁻¹qᵢ and cᵢⱼ = qᵢᵀS⁻¹qⱼ (both chart-scale invariant)
+    // and unscaled chart points pᵢ = s_scale·Ps[i]:
     //
     //   B̃ = 3·Σᵢ wᵢgᵢ·pᵢpᵢᵀ − 2·Σᵢⱼ wᵢwⱼcᵢⱼ²·pᵢpⱼᵀ + (Σᵢ wᵢgᵢ)·I₂
     //
@@ -241,6 +251,9 @@ fn evalH(
         sum_wg += wi * gi;
         const p = Vec2{ .m = .{ wb.Ps[wb.act_idx[i]][0] * s_scale, wb.Ps[wb.act_idx[i]][1] * s_scale } };
         Bm.addSymRank1(3.0 * wi * gi, p);
+        // Seed the envelope cross-derivative mᵢ = −gᵢpᵢ + Σⱼ wⱼcᵢⱼ²pⱼ
+        // (part 2); the Σⱼ term accumulates in the loop below.
+        wb.m_buf[i] = .{ -gi * p.m[0], -gi * p.m[1] };
     }
     for (0..k) |i| {
         const wi = wb.w[wb.act_idx[i]];
@@ -248,17 +261,113 @@ fn evalH(
         const pi1 = wb.Ps[wb.act_idx[i]][1] * s_scale;
         for (0..k) |j| {
             const cij = wb.Yf[i].dot(wb.Yf[j]);
-            const coef = -2.0 * wi * wb.w[wb.act_idx[j]] * cij * cij;
+            const cij2 = cij * cij;
+            const wj = wb.w[wb.act_idx[j]];
+            const coef = -2.0 * wi * wj * cij2;
             const pj0 = wb.Ps[wb.act_idx[j]][0] * s_scale;
             const pj1 = wb.Ps[wb.act_idx[j]][1] * s_scale;
             Bm.m[0] += coef * pi0 * pj0;
             Bm.m[1] += coef * pi0 * pj1;
             Bm.m[2] += coef * pi1 * pj0;
             Bm.m[3] += coef * pi1 * pj1;
+            wb.m_buf[i][0] += wj * cij2 * pj0;
+            wb.m_buf[i][1] += wj * cij2 * pj1;
         }
     }
     Bm.m[0] += sum_wg;
     Bm.m[3] += sum_wg;
+
+    // Model Hessian, part 2 — the exact envelope correction (see
+    // config.trust.EXACT_HESSIAN). Danskin at second order: with
+    // φ(w, u) the design value, ∂φ/∂wᵢ = gᵢ/2, ∂²φ/∂wᵢ∂wⱼ = −½cᵢⱼ²,
+    // and ∂²φ/∂wᵢ∂u = mᵢ = −gᵢpᵢ + Σⱼ wⱼcᵢⱼ²pⱼ. Differentiating the
+    // inner KKT conditions along the active face (Σ dw = 0) gives the
+    // weight response dw/du from
+    //
+    //   ½·(C∘C)·dw − ν·1 = m,   1ᵀ·dw = 0,
+    //
+    // and ∇²h = B̃ + Mᵀ·(dw/du) — a PSD add-on (C∘C is PSD by the
+    // Schur product theorem; the envelope of maxima curves at least as
+    // much as any member).
+    //
+    // C∘C has rank ≤ 6 exactly: (C∘C)ᵢⱼ = (yᵢᵀyⱼ)² = ⟨vᵢ, vⱼ⟩ with
+    // vᵢ ∈ R⁶ the symmetric outer product of yᵢ (√2 on off-diagonal
+    // slots). So for degenerate supports (k > 6, dense near-circular
+    // caps) the system is singular, and a Tikhonov-regularized k×k
+    // solve AMPLIFIES the null-space component of m (active-set and
+    // oracle-stall noise) by 1/ε — measured blowup to ~1e5 on a
+    // 60-point ring. The pseudo-inverse (null components projected
+    // out — flat directions of the optimal face carry no curvature)
+    // is computed exactly in the 6-dim range space: substituting
+    // dw = Vᵀα and projecting by V gives the bordered 7×7 system
+    //
+    //   [ ½·G²   −V·1 ] [α ]   [V·m]
+    //   [ (V·1)ᵀ   0  ] [ν ] = [ 0 ],    G = V·Vᵀ (6×6),
+    //
+    // whose RHS lies in range(G) by construction, and
+    // corr = (V·m_a)ᵀ·α_b per axis pair. O(k·36) build + 7³ solve —
+    // cheaper than the k×k LU it replaces. A pivot failure just keeps
+    // the fixed-w model; the ρ test guards model quality either way.
+    if (tc.EXACT_HESSIAN and k >= 2) {
+        const SQRT2 = std.math.sqrt2;
+        var G = [_]f64{0} ** 36; // V·Vᵀ, row-major 6×6
+        var v1 = [_]f64{0} ** 6; // V·1
+        var vmx = [_]f64{0} ** 6; // V·m_x
+        var vmy = [_]f64{0} ** 6; // V·m_y
+        for (0..k) |i| {
+            const y = wb.Yf[i].m;
+            const v = [6]f64{ y[0] * y[0], y[1] * y[1], y[2] * y[2], SQRT2 * y[0] * y[1], SQRT2 * y[0] * y[2], SQRT2 * y[1] * y[2] };
+            for (0..6) |a| {
+                v1[a] += v[a];
+                vmx[a] += v[a] * wb.m_buf[i][0];
+                vmy[a] += v[a] * wb.m_buf[i][1];
+                for (0..6) |bb| G[a * 6 + bb] += v[a] * v[bb];
+            }
+        }
+        // A = [½G², −v1; v1ᵀ, 0] with relative Tikhonov mass on the
+        // ½G² block (benign here: the RHS has no null component to
+        // amplify).
+        var A = [_]f64{0} ** 49;
+        var tr_g2: f64 = 0;
+        for (0..6) |a| {
+            for (0..6) |bb| {
+                var s: f64 = 0;
+                for (0..6) |cidx| s += G[a * 6 + cidx] * G[cidx * 6 + bb];
+                A[a * 7 + bb] = 0.5 * s;
+            }
+            tr_g2 += A[a * 7 + a];
+        }
+        const reg = tc.HESS_REG * (1.0 + tr_g2 / 6.0);
+        for (0..6) |a| {
+            A[a * 7 + a] += reg;
+            A[a * 7 + 6] = -v1[a];
+            A[6 * 7 + a] = v1[a];
+        }
+        A[6 * 7 + 6] = 0.0;
+
+        var piv: [7]usize = undefined;
+        if (linalg.LU.factorize(&A, 7, &piv, tc.HESS_PIVOT_MIN)) |lu| {
+            var ax: [7]f64 = .{ vmx[0], vmx[1], vmx[2], vmx[3], vmx[4], vmx[5], 0 };
+            var ay: [7]f64 = .{ vmy[0], vmy[1], vmy[2], vmy[3], vmy[4], vmy[5], 0 };
+            lu.solve(&ax);
+            lu.solve(&ay);
+            var corr00: f64 = 0;
+            var corr01: f64 = 0;
+            var corr10: f64 = 0;
+            var corr11: f64 = 0;
+            for (0..6) |a| {
+                corr00 += vmx[a] * ax[a];
+                corr01 += vmx[a] * ay[a];
+                corr10 += vmy[a] * ax[a];
+                corr11 += vmy[a] * ay[a];
+            }
+            const corr01s = 0.5 * (corr01 + corr10);
+            Bm.m[0] += corr00;
+            Bm.m[1] += corr01s;
+            Bm.m[2] += corr01s;
+            Bm.m[3] += corr11;
+        }
+    }
 
     return .{
         .h = ds.h,
@@ -305,7 +414,7 @@ fn doglegStep(B: Mat2, g: Vec2, delta: f64) TrStep {
     return .{ .u = u, .pred = model.pred(B, g, u) };
 }
 
-/// Solve the preprocessed problem by trust-region BFGS on h(b) over
+/// Solve the preprocessed problem by trust-region descent on h(b) over
 /// the sphere. Same contract as `solveAlternating`.
 pub fn solveTrust(
     allocator: std.mem.Allocator,
@@ -330,7 +439,7 @@ pub fn solveTrust(
     // oracle work. On the DGGS hot path the certificate passes right
     // here and the solve ends having done essentially what the fast
     // path's first outer iteration would have done; the full oracle
-    // (stall-quality FW refinement, gradient, majorant Hessian, trust
+    // (stall-quality FW refinement, gradient, envelope Hessian, trust
     // region) runs only when this certificate fails. Safe w.r.t. the
     // oracle-consistency lesson: this certificate is a pure
     // upper-bound check — it never feeds the trust-region model, and
@@ -408,14 +517,14 @@ pub fn solveTrust(
     }
 
     // Trust-region state. The model Hessian is per-evaluation (the
-    // majorant Hessian computed by evalH) — no BFGS history, no
-    // transport between tangent bases.
+    // envelope Hessian computed by evalH) — no quasi-Newton history,
+    // no transport between tangent bases.
     var delta: f64 = tc.DELTA0;
 
     while (!converged and open_iters + tr_iters < opts.max_outer) {
         tr_iters += 1;
 
-        // The majorant Hessian is PSD-in-exact-arithmetic near inner
+        // The model Hessian is PSD-in-exact-arithmetic near inner
         // optimality but can go indefinite from roundoff or far-field
         // states; fall back to the derived isotropic value (≈ its own
         // circular-optimum limit) so the dogleg's prediction is

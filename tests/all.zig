@@ -12,4 +12,5 @@ comptime {
     _ = @import("dggs_dnc_test.zig");
     _ = @import("a5_res0_test.zig");
     _ = @import("methods_test.zig");
+    _ = @import("trust_hessian_test.zig");
 }
