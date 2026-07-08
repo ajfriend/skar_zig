@@ -349,9 +349,18 @@ Open, roughly in order:
       it changes the fast path, so it needs the CANARY gauntlet and a
       human-confirmed decision. The away-step FW work
       (docs/away-step-fw.md) subsumes this.
-- [ ] **CANARY-style iteration pins for `.reduced`** on the small-cell
-      hot path (mirror `tests/dggs_dnc_test.zig`) before any default
-      flip.
+- [x] **CANARY-style iteration pins for `.reduced`** — landed in three
+      places, same flag-don't-bump policy as the fast pins:
+      `tests/dggs_dnc_test.zig` "CANARY(reduced)" section (the same
+      five cells, pinned at 0 / 3 / 0 / 3 / 3 — the 0s are
+      initial-cert-passes, the 3s are cert-edge cells routed through
+      RECERT; notable: the fast path's "hard tail" A5 cell costs the
+      same as the common one under reduced);
+      `tests/a5_res0_test.zig` (dense ≤ 8, sparse ≤ 2);
+      `tests/joint_test.zig` (wide-cap fixture ceilings 30 / 50 / 25).
+      These pins already paid for themselves once — asking "how does
+      reduced do on the canaries?" is what surfaced the 26-rejection
+      Δ-collapse thrash the survey means had hidden.
 - [ ] **Decide the endgame**: `.reduced` as default with fast retired,
       or fast kept as the small-cell shortcut. Requires the tuning item
       and a bench story on the 4–10-point hot path.

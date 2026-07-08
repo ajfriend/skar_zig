@@ -51,6 +51,26 @@ test "reduced: wide-cap fixtures converge and match the Clarabel reference AR" {
     try expectJointConverges(&wide.CAP89_S3, .reduced, wide.AR_CAP89_S3);
 }
 
+test "reduced: wide-cap fixture iteration ceilings (CANARY-style)" {
+    // Trust-region iteration guard on the wide-angle frontier (same
+    // flag-don't-bump policy as the dggs canaries). Observed: 20 / 34 /
+    // 14; ceilings leave headroom for FP drift across platforms while
+    // catching a trust-region or oracle regression that turns the
+    // frontier slow again.
+    const allocator = std.testing.allocator;
+    const fixtures = [_]struct { pts: []const [3]f64, ceiling: u32 }{
+        .{ .pts = &wide.CAP82_S1, .ceiling = 30 },
+        .{ .pts = &wide.CAP85_S1, .ceiling = 50 },
+        .{ .pts = &wide.CAP89_S3, .ceiling = 25 },
+    };
+    for (fixtures) |f| {
+        var o = try sphar.solve(allocator, f.pts, .{ .method = .reduced });
+        defer o.deinit();
+        try std.testing.expect(std.meta.activeTag(o) == .converged);
+        try std.testing.expect(o.converged.outer_iters <= f.ceiling);
+    }
+}
+
 test "reduced: agrees with fast on bundled cases incl. extreme-kappa cells" {
     const allocator = std.testing.allocator;
     // Superset of the joint agreement list: the reduced path certifies
