@@ -68,7 +68,7 @@ const SolveOptions = api.SolveOptions;
 /// Rescale P_buf into Ps so max ‖Ps‖ = 1 (numerical hygiene for FW).
 /// Returns the scale factor so callers can lift moments back to
 /// unscaled coordinates.
-inline fn rescaleP(P_buf: []const [2]f64, Ps: [][2]f64) f64 {
+pub inline fn rescaleP(P_buf: []const [2]f64, Ps: [][2]f64) f64 {
     var s2_max: f64 = 0;
     for (P_buf) |p| {
         const sq = @mulAdd(f64, p[1], p[1], p[0] * p[0]);
@@ -83,9 +83,9 @@ inline fn rescaleP(P_buf: []const [2]f64, Ps: [][2]f64) f64 {
 
 /// Weighted 2D moments of the scaled projected points, lifted back to
 /// original (unscaled) coordinates: center = Σ w·P, M = Σ w·P·Pᵀ.
-const Moments = struct { center: Vec2, M: Mat2 };
+pub const Moments = struct { center: Vec2, M: Mat2 };
 
-inline fn computeMoments(Ps: []const [2]f64, w: []const f64, s_scale: f64) Moments {
+pub inline fn computeMoments(Ps: []const [2]f64, w: []const f64, s_scale: f64) Moments {
     var center_s = Vec2.zero;
     var M_s = Mat2.zero;
     for (Ps, 0..) |p_arr, i| {
@@ -190,7 +190,7 @@ pub fn acceptBUpdate(
 // MVEE inner: pairwise FW on lifted points [P; 1]
 // ----------------------------------------------------------------
 
-fn mveeFw(
+pub fn mveeFw(
     P: []const [2]f64,
     max_iter: u32,
     inner_tol: f64,
@@ -254,15 +254,165 @@ fn mveeFw(
                 const det_G = linalg.diff_of_products(g_max, g_min, g_cross, g_cross);
                 var step: f64 = if (det_G > tol.NEAR_SING) a / (2.0 * det_G) else w[jm];
                 if (step > w[jm]) step = w[jm];
-                w[j_max] += step;
-                w[jm] -= step;
-                continue;
+                // Drop guard. A full-mass step (step = w[jm], zeroing the
+                // donor) is only justified when it genuinely improves the
+                // design. The exact log-det change of the rank-2 update
+                // S' = S + γ(q_a·q_aᵀ − q_b·q_bᵀ) is available in closed
+                // form from quantities already in hand:
+                //   det S'/det S = (1 + γ·g_max)(1 − γ·g_min) + γ²·g_cross²
+                // Take the drop only if that ratio exceeds 1 — a
+                // threshold-free real-improvement test. Without it, the
+                // near-singular fallback (and the cap when det_G is
+                // small-but-positive under an anisotropic inner metric)
+                // fires full drops on noise-level descent signals at
+                // converged designs, zeroing support points that
+                // newtonPolish cannot resurrect (its active set is
+                // w-thresholded) — the hazard that bit the trust path's
+                // oracle four times (docs/trust-solver.md). Interior
+                // steps (step < w[jm]) are exact 1-D line-search optima
+                // and need no guard. On a blocked drop, fall through to
+                // the vanilla FW step below.
+                var take = true;
+                if (step == w[jm]) {
+                    const ratio = (1.0 + step * g_max) * (1.0 - step * g_min) + step * step * g_cross * g_cross;
+                    take = ratio > 1.0;
+                }
+                if (take) {
+                    w[j_max] += step;
+                    w[jm] -= step;
+                    continue;
+                }
             }
         }
         // Vanilla FW fallback.
         const step = (g_max - 3.0) / (3.0 * (g_max - 1.0));
         for (w) |*wi| wi.* *= (1.0 - step);
         w[j_max] += step;
+    }
+}
+
+/// Noise-floor exit for `mveeFwAway`: stop when its optimality gap has
+/// not improved by AWAY_GAP_IMPR within AWAY_STALL_ITERS iterations.
+/// Local to the (unwired) experimental solver — deliberately NOT in
+/// `config.algo`, which is the audited tuning surface for shipping
+/// paths.
+const AWAY_GAP_IMPR: f64 = 0.9;
+const AWAY_STALL_ITERS: u32 = 24;
+
+/// Away-step Frank–Wolfe for the lifted D-optimal design. NOT wired
+/// into any solver path: it was stage 1 of docs/away-step-fw.md, tried
+/// as the trust path's oracle and reverted (measurably slower than
+/// pairwise on large near-circular supports — see the "Stage 1
+/// findings" there). Kept in-tree for the record with a bit-rot guard
+/// test in tests/methods_test.zig.
+///
+/// Same per-iteration quantities as `mveeFw` (gradients gᵢ = qᵢᵀS⁻¹qᵢ,
+/// toward-vertex j_max, away-vertex j_min), different decision: pick
+/// the direction with more first-order progress (toward: g_max − 3;
+/// away: 3 − g_min) and take the EXACT 1-D line-search step of the
+/// log-det objective along it:
+///
+///   toward  w ← (1−γ)w + γ·e_j,  γ* = (g−3)/(3(g−1)), capped at 1
+///   away    w ← (1+γ)w − γ·e_j,  γ* = (3−g)/(3(g−1)), capped at
+///           γmax = w[j]/(1−w[j]) — the drop boundary, where w[j]
+///           hits exactly 0. For g ≤ 1 (deep interior point) the
+///           objective is monotone along the away ray, so the full
+///           drop is optimal.
+///
+/// Because the step length is proportional to the gap it closes, a
+/// noise-level away gap produces a noise-level step — this solver
+/// cannot fire the full-mass drop `mveeFw`'s near-singular pairwise
+/// fallback takes on noise at converged designs (the hazard that bit
+/// the trust path four times; see docs/trust-solver.md).
+pub fn mveeFwAway(
+    P: []const [2]f64,
+    max_iter: u32,
+    inner_tol: f64,
+    Ql: []Vec3,
+    w: []f64,
+) void {
+    for (P, 0..) |p, i| Ql[i] = .{ .m = .{ p[0], p[1], 1.0 } };
+
+    var gap_best: f64 = std.math.inf(f64);
+    var since_best: u32 = 0;
+    var it: u32 = 0;
+    while (it < max_iter) : (it += 1) {
+        var S = Mat3.zero;
+        for (Ql, 0..) |qi, i| {
+            const wi = w[i];
+            const wq0 = wi * qi.m[0];
+            const wq1 = wi * qi.m[1];
+            const wq2 = wi * qi.m[2];
+            S.m[0] = @mulAdd(f64, wq0, qi.m[0], S.m[0]);
+            S.m[1] = @mulAdd(f64, wq0, qi.m[1], S.m[1]);
+            S.m[2] = @mulAdd(f64, wq0, qi.m[2], S.m[2]);
+            S.m[4] = @mulAdd(f64, wq1, qi.m[1], S.m[4]);
+            S.m[5] = @mulAdd(f64, wq1, qi.m[2], S.m[5]);
+            S.m[8] = @mulAdd(f64, wq2, qi.m[2], S.m[8]);
+        }
+        S.m[3] = S.m[1];
+        S.m[6] = S.m[2];
+        S.m[7] = S.m[5];
+
+        const L = S.cholesky() orelse break;
+
+        var j_max: usize = 0;
+        var j_min: ?usize = null;
+        var g_max: f64 = -1e30;
+        var g_min: f64 = 1e30;
+        for (Ql, 0..) |qi, i| {
+            const x = L.solve(qi);
+            const gi = qi.dot(x);
+            if (gi > g_max) {
+                g_max = gi;
+                j_max = i;
+            }
+            if (w[i] > tol.WEIGHT_ACTIVE and gi < g_min) {
+                g_min = gi;
+                j_min = i;
+            }
+        }
+
+        const toward_gap = g_max - 3.0;
+        const away_gap = if (j_min != null) 3.0 - g_min else -1e30;
+        const gap = @max(toward_gap, away_gap);
+        if (gap < inner_tol) break;
+        // Noise-floor exit on the solver's OWN optimality measure: when
+        // the gap stops improving geometrically it has hit the f64
+        // floor for this input (κ-limited cells never reach any fixed
+        // inner_tol) — stop instead of random-walking the budget away.
+        // This replaces the caller-side burst/stall machinery: the gap
+        // is a sound convergence signal; an h-sample window was a proxy
+        // that misread slow-but-genuine descent phases as stalls.
+        if (gap < AWAY_GAP_IMPR * gap_best) {
+            gap_best = gap;
+            since_best = 0;
+        } else {
+            since_best += 1;
+            if (since_best >= AWAY_STALL_ITERS) break;
+        }
+
+        if (toward_gap >= away_gap) {
+            const denom = 3.0 * (g_max - 1.0);
+            if (denom < tol.NEAR_SING) break;
+            var gamma = toward_gap / denom;
+            if (gamma > 1.0) gamma = 1.0;
+            for (w) |*wi| wi.* *= (1.0 - gamma);
+            w[j_max] += gamma;
+        } else {
+            const jm = j_min.?;
+            const one_minus = 1.0 - w[jm];
+            if (one_minus < tol.NEAR_SING) break; // sole support point
+            const gamma_max = w[jm] / one_minus;
+            var gamma: f64 = gamma_max;
+            if (g_min > 1.0 + tol.NEAR_SING) {
+                const g_star = away_gap / (3.0 * (g_min - 1.0));
+                if (g_star < gamma_max) gamma = g_star;
+            }
+            for (w) |*wi| wi.* *= (1.0 + gamma);
+            w[jm] -= gamma;
+            if (w[jm] < 0 or gamma == gamma_max) w[jm] = 0;
+        }
     }
 }
 
@@ -369,7 +519,7 @@ fn farthestPointSeed(P: []const [2]f64, w: []f64, k_req: usize) void {
 /// medium/large inputs); small inputs get the uniform start (already optimal for
 /// near-circular cells, where a sparse seed would break symmetry and slow them).
 /// `P` and `w` index the same working set. See `algo.SEED_SPARSE_MIN_POINTS`.
-fn initWeights(P: []const [2]f64, w: []f64) void {
+pub fn initWeights(P: []const [2]f64, w: []f64) void {
     if (P.len > algo.SEED_SPARSE_MIN_POINTS) {
         farthestPointSeed(P, w, algo.SEED_SPARSE_K);
     } else {
@@ -385,7 +535,7 @@ fn initWeights(P: []const [2]f64, w: []f64) void {
 /// A_perp is Minv_half scaled by √(2/(3·g_max)), where g_max = max_i pᵢᵀ·M⁻¹·pᵢ
 /// enforces the budget max_i ‖A_perp·pᵢ‖² = 2/3 that pins the axial eigenvalue
 /// of A to SIGMA_0.
-fn recoverAPerp(P: []const [2]f64, M: Mat2) SolveError!Mat2 {
+pub fn recoverAPerp(P: []const [2]f64, M: Mat2) SolveError!Mat2 {
     const Minv = M.inverse();
 
     // Max of pᵀ M⁻¹ p over points (used for scaling).
@@ -425,18 +575,21 @@ const newton = @import("newton.zig");
 const NewtonScratch = newton.NewtonScratch;
 const newtonPolish = newton.newtonPolish;
 
+// Alternative solver path (EXPERIMENTAL; `SolveOptions.method`).
+const trust = @import("trust.zig");
+
 // ----------------------------------------------------------------
 // Dual-certificate gap scratch
 // ----------------------------------------------------------------
 
 /// Scratch for `dualityGapConstructed` (constructed dual certificate + gap).
-const GapScratch = struct {
+pub const GapScratch = struct {
     active_idx: []usize, // [nmax]  points with w > thresh
     lam: []f64, // [nmax]  dual lambdas: 3 w_i / (b·x_i)
     xa: []Vec3, // [nmax]  active x_i (from X_work)
     za: []Vec3, // [nmax]  normalized A x_i / ‖A x_i‖
 
-    fn init(allocator: std.mem.Allocator, nmax: usize) !GapScratch {
+    pub fn init(allocator: std.mem.Allocator, nmax: usize) !GapScratch {
         return .{
             .active_idx = try allocator.alloc(usize, nmax),
             .lam = try allocator.alloc(f64, nmax),
@@ -480,7 +633,7 @@ const WorkBuffers = struct {
 // Dual-certificate gap
 // ----------------------------------------------------------------
 
-const GapResult = struct {
+pub const GapResult = struct {
     gap: f64,
     cert_n: usize,
     /// A's tangent-plane eigenvectors (lifted to 3D) and eigenvalues. Valid
@@ -505,7 +658,7 @@ fn buildA(b: Vec3, v1: Vec3, v2: Vec3, sigma1: f64, sigma2: f64) Mat3 {
 /// Structural dual gap on (b, A_perp, Q_ortho). A's eigendecomposition falls out
 /// of eig(A_perp) + lifting through Q_ortho, so we build L = V·√Λ directly — no
 /// Cholesky with fallback.
-fn dualityGapConstructed(
+pub fn dualityGapConstructed(
     w: []const f64,
     b: Vec3,
     X_work: []const Vec3,
@@ -596,8 +749,7 @@ fn dualityGapConstructed(
     // Routing through M (eigenvalues near 1 at convergence) avoids the
     // ~1e-3 error that sum-of-logs on Z's own ill-conditioned eigenvalues
     // would suffer (hex-degenerate cases, κ(Z) ~ 1e7).
-    const log_det_M = 2.0 * (@log(Lm.m[0]) + @log(Lm.m[4]) + @log(Lm.m[8]));
-    const gap = w_sum.norm() - 3.0 - log_det_M;
+    const gap = w_sum.norm() - 3.0 - Lm.logDet();
     return .{
         .gap = gap,
         .cert_n = k,
@@ -752,36 +904,36 @@ fn isCoplanarInput(points: []const Vec3, b: Vec3, threshold: f64) bool {
     return tr <= 0 or 4.0 * det < threshold * tr * tr;
 }
 
-/// Main solver. Returns an `Outcome` tagged union — switch on the tag
-/// to dispatch (`converged` carries the cone's eigendecomposition +
-/// primal certificate; `infeasible` carries the Farkas certificate;
-/// `did_not_converge` carries the last iterate for diagnostics).
-/// Structural input problems (too few points, bad tolerance,
-/// rank-deficient X) propagate as `InputError` via `try`. `opts`
-/// controls convergence, preprocessing, and validation knobs — see
-/// `SolveOptions` for per-field docs and defaults.
-pub fn solve(
+/// Preprocessed problem handed to a solver path: a strictly feasible
+/// axis, the (possibly hull-reduced) working point set, and the map
+/// back to the caller's original indices (`null` = identity).
+pub const Prep = struct {
+    b0: Vec3,
+    Xw: []const Vec3,
+    work_to_orig: ?[]const u32,
+};
+
+const PrepResult = union(enum) {
+    /// Input is infeasible; carries the ready-to-return outcome
+    /// (Farkas certificate already on the parent allocator).
+    infeasible: Outcome,
+    ready: Prep,
+};
+
+/// Steps shared by every solver path: input validation, Farkas
+/// feasibility check, optional hull reduction, coplanarity rejection.
+/// `scratch_alloc` backs `Xw`/`work_to_orig` (arena, freed by `solve`);
+/// `allocator` backs the Farkas cert on the infeasible branch.
+fn preprocess(
+    scratch_alloc: std.mem.Allocator,
     allocator: std.mem.Allocator,
-    X: []const [3]f64,
+    Xv: []const Vec3,
     opts: SolveOptions,
-) !Outcome {
-    // Arena for all transient scratch allocations in this solve call.
-    // Single backing alloc (bumped) + single free-all on deinit — vastly
-    // cheaper than per-buffer alloc/free. The returned cert (for the
-    // Converged / Infeasible / DidNotConverge variants) lives on the
-    // parent `allocator` so it outlives the arena.
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const scratch_alloc = arena.allocator();
-
-    // Cast once: Vec3 is an extern struct over [3]f64, so layout is shared.
-    // All internal routines work in []const Vec3.
-    const Xv: []const Vec3 = @ptrCast(X);
-
+) !PrepResult {
     // 0) Input validation. Catch malformed caller inputs at the boundary
     //    so they propagate as typed errors instead of slipping into the
     //    algorithm where they manifest as NaN-tainted statuses or silent
-    //    perf cliffs. See the InputError doc-comments above for the
+    //    perf cliffs. See the InputError doc-comments in api.zig for the
     //    contract on each tolerance.
     if (Xv.len < 3) return InputError.InsufficientPoints;
     if (!std.math.isFinite(opts.gap_tol) or opts.gap_tol <= 0) return InputError.InvalidTolerance;
@@ -796,33 +948,45 @@ pub fn solve(
         // Infeasible: Farkas cert lives on the parent allocator since it's
         // returned to the caller.
         const farkas = try buildFarkasCert(allocator, hs);
-        return .{ .infeasible = .{
+        return .{ .infeasible = .{ .infeasible = .{
             .cert = farkas,
             .residual = hs.residual,
             .allocator = allocator,
-        } };
+        } } };
     }
 
     // 2) Optional hull preprocessing.
     const hp = try hullPreprocess(scratch_alloc, Xv, b, opts.n_hull);
-    const Xw = hp.Xw;
-    const work_to_orig = hp.work_to_orig;
-    const nw = Xw.len;
 
     // 2.5) Coplanarity check on the hulled subset — an input whose hull is
     //      collinear in the tangent plane drives the SDP to a degenerate
     //      cone (one tangent eigenvalue → 0) and produces NaN downstream.
     //      Signaled as `InputError.CoplanarInput`, symmetric with
     //      `InsufficientPoints` — both are "X is structurally bad."
-    if (opts.coplanarity_tol > 0 and isCoplanarInput(Xw, b, opts.coplanarity_tol)) {
+    if (opts.coplanarity_tol > 0 and isCoplanarInput(hp.Xw, b, opts.coplanarity_tol)) {
         return InputError.CoplanarInput;
     }
+
+    return .{ .ready = .{ .b0 = b, .Xw = hp.Xw, .work_to_orig = hp.work_to_orig } };
+}
+
+/// The alternating path: alternating axis/MVEE outer loop (FW + Newton polish
+/// + constructed dual certificate). This is the original `solve` body;
+/// see the module doc-comment for the algorithm.
+fn solveAlternating(
+    allocator: std.mem.Allocator,
+    scratch_alloc: std.mem.Allocator,
+    prep: Prep,
+    opts: SolveOptions,
+) !Outcome {
+    var b = prep.b0;
+    const Xw = prep.Xw;
+    const work_to_orig = prep.work_to_orig;
+    const nw = Xw.len;
 
     // 3) Working buffers — all backed by the arena, freed once at the
     //    end of `solve`.
     var wb = try WorkBuffers.init(scratch_alloc, nw);
-    var cert_n: usize = 0;
-    var final_gap: f64 = 1e30;
 
     var damp = DampState{};
     var outer_count: u32 = 0;
@@ -876,19 +1040,12 @@ pub fn solve(
             if (is_full) {
                 const A_perp = try recoverAPerp(wb.P_buf, m.M);
                 last_gap = try dualityGapConstructed(wb.w, b, Xw, A_perp, Q, &wb.gap_scratch, wb.cert_active, wb.cert_lambdas);
-                final_gap = last_gap.gap;
-                cert_n = last_gap.cert_n;
-                // Convergence: |gap| ≤ tol. FP noise can push the gap
-                // slightly negative when the iteration has converged to
-                // a near-zero gap (seen on h3_r15_pent: gap = -8.5e-10
-                // with tol = 1e-6). Accept those as converged before the
-                // hard NegGap guard kicks in.
-                if (@abs(last_gap.gap) <= opts.gap_tol) {
+                // Convergence + broken-certificate guard (see
+                // gapConverged for the load-bearing ordering).
+                if (try gapConverged(last_gap.gap, opts.gap_tol)) {
                     converged = true;
                     break :outer_loop;
                 }
-                // Anything else negative is a broken certificate.
-                if (last_gap.gap < -tol.NEG_GAP) return SolveError.NegativeDualityGap;
             }
 
             const axis = quasiNewtonAxisDirection(outer, m.M, m.center);
@@ -900,12 +1057,53 @@ pub fn solve(
         }
     }
 
-    // 5) Build final cert (translate work indices back to original X indices).
-    const cert = try buildPrimalCert(allocator, wb.cert_active, wb.cert_lambdas, cert_n, work_to_orig);
+    // 5) Build final cert (translate work indices back to original X indices)
+    //    and bundle the outcome. Shared with the trust path.
+    return buildOutcome(
+        allocator,
+        converged,
+        b,
+        last_gap,
+        .{ .alternating = .{
+            .outer_iters = outer_count,
+            .newton_polish_failures = newton_polish_failures,
+        } },
+        wb.cert_active,
+        wb.cert_lambdas,
+        work_to_orig,
+    );
+}
 
-    // Bundle the full eigendecomposition: Q's columns are (b, v1, v2) with
-    // eigenvalues (SIGMA_0, sigma[0], sigma[1]). Flip v2 if needed so (b, v1, v2) is
-    // right-handed (det Q = +1).
+/// Classify a freshly computed certificate gap. Returns true when the
+/// solve is converged at `gap_tol`. ORDER MATTERS and is shared by
+/// every certification site in both solver paths: a converged-at-noise
+/// gap can be slightly negative (seen on H3 r15 cells, gap ~ −5e-9
+/// from κ·ε noise) and must be ACCEPTED before the hard NegGap guard
+/// fires; anything meaningfully negative beyond `tol.NEG_GAP` is a
+/// broken certificate and errors loudly.
+pub fn gapConverged(gap: f64, gap_tol: f64) SolveError!bool {
+    if (@abs(gap) <= gap_tol) return true;
+    if (gap < -tol.NEG_GAP) return SolveError.NegativeDualityGap;
+    return false;
+}
+
+/// Shared finalization for the alternating and trust paths: translate the
+/// work-set certificate back to caller indices, bundle the full
+/// eigendecomposition (Q's columns are (b, v1, v2) with eigenvalues
+/// (SIGMA_0, sigma[0], sigma[1]); v2 flipped if needed so det Q = +1),
+/// and wrap as Converged / DidNotConverge.
+pub fn buildOutcome(
+    allocator: std.mem.Allocator,
+    converged: bool,
+    b: Vec3,
+    last_gap: GapResult,
+    diag: api.Diagnostics,
+    cert_active: []const usize,
+    cert_lambdas: []const f64,
+    work_to_orig: ?[]const u32,
+) !Outcome {
+    const cert = try buildPrimalCert(allocator, cert_active, cert_lambdas, last_gap.cert_n, work_to_orig);
+
     var v1 = last_gap.v1;
     var v2 = last_gap.v2;
     if (v1.cross(v2).dot(b) < 0) v2 = v2.scale(-1.0);
@@ -916,9 +1114,8 @@ pub fn solve(
         return .{ .converged = .{
             .Q = Qmat,
             .sigma = sigma,
-            .gap = final_gap,
-            .outer_iters = outer_count,
-            .newton_polish_failures = newton_polish_failures,
+            .gap = last_gap.gap,
+            .diag = diag,
             .cert = cert,
             .allocator = allocator,
         } };
@@ -926,12 +1123,78 @@ pub fn solve(
         return .{ .did_not_converge = .{
             .Q = Qmat,
             .sigma = sigma,
-            .gap = final_gap,
-            .outer_iters = outer_count,
-            .newton_polish_failures = newton_polish_failures,
+            .gap = last_gap.gap,
+            .diag = diag,
             .cert = cert,
             .allocator = allocator,
         } };
+    }
+}
+
+/// Main solver. Returns an `Outcome` tagged union — switch on the tag
+/// to dispatch (`converged` carries the cone's eigendecomposition +
+/// primal certificate; `infeasible` carries the Farkas certificate;
+/// `did_not_converge` carries the last iterate for diagnostics).
+/// Structural input problems (too few points, bad tolerance,
+/// rank-deficient X) propagate as `InputError` via `try`. `opts`
+/// controls convergence, preprocessing, validation, and solver-path
+/// knobs — see `SolveOptions` for per-field docs and defaults.
+///
+/// Preprocessing (validation, Farkas feasibility, hull reduction,
+/// coplanarity rejection) is shared; `opts.method` selects the solver
+/// path that runs on the preprocessed working set (see `api.Method`).
+pub fn solve(
+    allocator: std.mem.Allocator,
+    X: []const [3]f64,
+    opts: SolveOptions,
+) !Outcome {
+    // Arena for all transient scratch allocations in this solve call.
+    // Single backing alloc (bumped) + single free-all on deinit — vastly
+    // cheaper than per-buffer alloc/free. The returned cert (for the
+    // Converged / Infeasible / DidNotConverge variants) lives on the
+    // parent `allocator` so it outlives the arena.
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const scratch_alloc = arena.allocator();
+
+    // Cast once: Vec3 is an extern struct over [3]f64, so layout is shared.
+    // All internal routines work in []const Vec3.
+    const Xv: []const Vec3 = @ptrCast(X);
+
+    const prep = switch (try preprocess(scratch_alloc, allocator, Xv, opts)) {
+        .infeasible => |outcome| return outcome,
+        .ready => |p| p,
+    };
+
+    switch (opts.method) {
+        .alternating => return solveAlternating(allocator, scratch_alloc, prep, opts),
+        .trust => return trust.solveTrust(allocator, scratch_alloc, prep, opts),
+        .auto => {
+            var fast_out = try solveAlternating(allocator, scratch_alloc, prep, opts);
+            if (fast_out != .did_not_converge) return fast_out;
+            // Fallback: the trust path (dominates the joint IPM on
+            // every measured axis — see docs/trust-solver.md).
+            var trust_out = try trust.solveTrust(allocator, scratch_alloc, prep, opts);
+            switch (trust_out) {
+                .converged => {
+                    fast_out.deinit();
+                    return trust_out;
+                },
+                .did_not_converge => |rd| {
+                    // Neither path converged: return the iterate with the
+                    // smaller (more trustworthy) gap, free the other.
+                    if (rd.gap <= fast_out.did_not_converge.gap) {
+                        fast_out.deinit();
+                        return trust_out;
+                    }
+                    trust_out.deinit();
+                    return fast_out;
+                },
+                // Feasibility was established in preprocess; the trust
+                // path never re-derives infeasibility.
+                .infeasible => unreachable,
+            }
+        },
     }
 }
 

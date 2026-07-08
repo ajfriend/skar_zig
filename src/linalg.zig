@@ -481,6 +481,80 @@ pub const Chol3 = struct {
     pub inline fn solve(self: Chol3, b: Vec3) Vec3 {
         return self.backSolve(self.forwardSolve(b));
     }
+
+    /// log det of the factored matrix: 2·Σ log(diagonal of L).
+    pub inline fn logDet(self: Chol3) f64 {
+        return 2.0 * (@log(self.m[0]) + @log(self.m[4]) + @log(self.m[8]));
+    }
+};
+
+/// LU factorization with partial pivoting, dimension-generic. Storage
+/// (`data`, `piv`) is borrowed from the caller — `factorize` mutates
+/// `data` in place to hold the packed L\U factors. The returned handle
+/// just binds the dimension to those slices so `solve` can't mismatch
+/// them. Used for the bordered KKT system in `newton.zig`.
+pub const LU = struct {
+    data: []f64, // n·n, row-major; L (strict lower, unit diag) + U (upper)
+    piv: []usize, // n
+    n: usize,
+
+    /// In-place factorization. Returns null when a pivot's magnitude
+    /// falls below `pivot_min` (singular for the caller's purposes).
+    pub fn factorize(data: []f64, n: usize, piv: []usize, pivot_min: f64) ?LU {
+        for (0..n) |kk| {
+            var pmax = kk;
+            var vmax = @abs(data[kk * n + kk]);
+            for (kk + 1..n) |i| {
+                const v = @abs(data[i * n + kk]);
+                if (v > vmax) {
+                    vmax = v;
+                    pmax = i;
+                }
+            }
+            if (vmax < pivot_min) return null;
+            piv[kk] = pmax;
+            if (pmax != kk) {
+                for (0..n) |j| {
+                    const t = data[kk * n + j];
+                    data[kk * n + j] = data[pmax * n + j];
+                    data[pmax * n + j] = t;
+                }
+            }
+            const inv = 1.0 / data[kk * n + kk];
+            for (kk + 1..n) |i| {
+                data[i * n + kk] *= inv;
+                for (kk + 1..n) |j| {
+                    data[i * n + j] = @mulAdd(f64, -data[i * n + kk], data[kk * n + j], data[i * n + j]);
+                }
+            }
+        }
+        return .{ .data = data, .piv = piv, .n = n };
+    }
+
+    /// In-place solve: overwrites b with the solution of (P·L·U)·x = b.
+    pub fn solve(self: LU, b: []f64) void {
+        const n = self.n;
+        const data = self.data;
+        const piv = self.piv;
+        for (0..n) |kk| {
+            const p = piv[kk];
+            if (p != kk) {
+                const t = b[kk];
+                b[kk] = b[p];
+                b[p] = t;
+            }
+        }
+        for (1..n) |i| {
+            for (0..i) |j| b[i] = @mulAdd(f64, -data[i * n + j], b[j], b[i]);
+        }
+        var i: usize = n;
+        while (i > 0) {
+            i -= 1;
+            var j = i + 1;
+            while (j < n) : (j += 1) b[i] = @mulAdd(f64, -data[i * n + j], b[j], b[i]);
+            b[i] /= data[i * n + i];
+        }
+    }
 };
 
 /// Eigenvalues (ascending) and eigenvectors (columns) of a 2x2 symmetric M.

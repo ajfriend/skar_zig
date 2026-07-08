@@ -229,7 +229,7 @@ test "CANARY: H3 r15 cell converges in 1 outer iteration (strict default)" {
     defer outcome.deinit();
 
     try std.testing.expect(std.meta.activeTag(outcome) == .converged);
-    try std.testing.expectEqual(@as(u32, 1), outcome.converged.outer_iters);
+    try std.testing.expectEqual(@as(u32, 1), outcome.converged.diag.alternating.outer_iters);
 }
 
 test "CANARY: H3 r9 near-circular hexagon converges in 2 outer iterations (strict default)" {
@@ -242,7 +242,7 @@ test "CANARY: H3 r9 near-circular hexagon converges in 2 outer iterations (stric
     defer outcome.deinit();
 
     try std.testing.expect(std.meta.activeTag(outcome) == .converged);
-    try std.testing.expectEqual(@as(u32, 2), outcome.converged.outer_iters);
+    try std.testing.expectEqual(@as(u32, 2), outcome.converged.diag.alternating.outer_iters);
 }
 
 test "CANARY: S2 L30 cell converges in 1 outer iteration" {
@@ -251,7 +251,7 @@ test "CANARY: S2 L30 cell converges in 1 outer iteration" {
     defer outcome.deinit();
 
     try std.testing.expect(std.meta.activeTag(outcome) == .converged);
-    try std.testing.expectEqual(@as(u32, 1), outcome.converged.outer_iters);
+    try std.testing.expectEqual(@as(u32, 1), outcome.converged.diag.alternating.outer_iters);
 }
 
 test "CANARY: a common A5 r30 cell converges in exactly 2 outer iterations" {
@@ -260,7 +260,7 @@ test "CANARY: a common A5 r30 cell converges in exactly 2 outer iterations" {
     defer outcome.deinit();
 
     try std.testing.expect(std.meta.activeTag(outcome) == .converged);
-    try std.testing.expectEqual(@as(u32, 2), outcome.converged.outer_iters);
+    try std.testing.expectEqual(@as(u32, 2), outcome.converged.diag.alternating.outer_iters);
 }
 
 test "CANARY: a harder A5 r30 cell takes more than 2 outer iterations" {
@@ -272,5 +272,84 @@ test "CANARY: a harder A5 r30 cell takes more than 2 outer iterations" {
     defer outcome.deinit();
 
     try std.testing.expect(std.meta.activeTag(outcome) == .converged);
-    try std.testing.expect(outcome.converged.outer_iters > 2);
+    try std.testing.expect(outcome.converged.diag.alternating.outer_iters > 2);
+}
+
+// ── Trust-path CANARIES (same cells, same spirit) ────────────────────────
+//
+// Iteration pins for the EXPERIMENTAL `.trust` path on the same five
+// cells the alternating-path canaries pin. Same policy: a trip is a signal to
+// understand what changed and call it out — never quietly bump.
+//
+// The counts read differently from the alternating path's: `outer_iters` here
+// counts trust-region iterations plus RECERT-phase attempts. The pattern
+// to know (see docs/trust-solver.md):
+//  - 0 = the initial certificate at the halfspace axis already passes
+//    (the axis is optimal on arrival; no iteration needed);
+//  - 3 = a cert-edge cell — the initial cert lands just above tol, the
+//    trust region correctly finds h stationary and exits via the
+//    pred-noise check, and the RECERT phase certifies within a couple
+//    of fast-style attempts. These pins are what caught the
+//    26-rejection Δ-collapse thrash that survey means had smeared
+//    (H3 r9 read 27 before the pred-noise exit landed).
+
+test "CANARY(trust): H3 r15 cell certifies eagerly at iteration 0 (strict default)" {
+    const allocator = std.testing.allocator;
+    const h3 = cases.byName("h3_r15_equator").?.points;
+    var outcome = try skar.solve(allocator, h3, .{ .method = .trust });
+    defer outcome.deinit();
+
+    try std.testing.expect(std.meta.activeTag(outcome) == .converged);
+    const d = outcome.converged.diag.trust;
+    try std.testing.expect(d.eager_certified);
+    try std.testing.expectEqual(@as(u32, 0), d.tr_iters);
+    try std.testing.expectEqual(@as(u32, 0), d.recert_attempts);
+}
+
+test "CANARY(trust): H3 r9 is a cert-edge cell — 1 TR iteration + 2 recert attempts" {
+    const allocator = std.testing.allocator;
+    var outcome = try skar.solve(allocator, &H3_R9_CELL, .{ .method = .trust });
+    defer outcome.deinit();
+
+    try std.testing.expect(std.meta.activeTag(outcome) == .converged);
+    const d = outcome.converged.diag.trust;
+    try std.testing.expect(!d.eager_certified);
+    try std.testing.expectEqual(@as(u32, 1), d.tr_iters);
+    try std.testing.expectEqual(@as(u32, 2), d.recert_attempts);
+}
+
+test "CANARY(trust): S2 L30 cell certifies eagerly at iteration 0" {
+    const allocator = std.testing.allocator;
+    var outcome = try skar.solve(allocator, &S2_CELL, .{ .gap_tol = DGGS_GAP_TOL, .method = .trust });
+    defer outcome.deinit();
+
+    try std.testing.expect(std.meta.activeTag(outcome) == .converged);
+    const d = outcome.converged.diag.trust;
+    try std.testing.expect(d.eager_certified);
+    try std.testing.expectEqual(@as(u32, 0), d.tr_iters);
+    try std.testing.expectEqual(@as(u32, 0), d.recert_attempts);
+}
+
+test "CANARY(trust): common and harder A5 r30 cells share the cert-edge signature" {
+    // Under the trust path the alternating path's "hard tail" cell costs
+    // the same as the common one: both are cert-edge cells (eager cert
+    // just above tol → 1 TR iteration ending in the pred-noise exit →
+    // certified on the 2nd RECERT attempt), and the trust region's
+    // arrival at the axis optimum doesn't depend on the alternating
+    // path's contraction rate. The equality is the interesting fact —
+    // pin both.
+    const allocator = std.testing.allocator;
+    var common = try skar.solve(allocator, &A5_CELL, .{ .gap_tol = DGGS_GAP_TOL, .method = .trust });
+    defer common.deinit();
+    var harder = try skar.solve(allocator, &A5_CELL_4ITER, .{ .gap_tol = DGGS_GAP_TOL, .method = .trust });
+    defer harder.deinit();
+
+    try std.testing.expect(std.meta.activeTag(common) == .converged);
+    try std.testing.expect(std.meta.activeTag(harder) == .converged);
+    for ([_]skar.Diagnostics{ common.converged.diag, harder.converged.diag }) |diag| {
+        const d = diag.trust;
+        try std.testing.expect(!d.eager_certified);
+        try std.testing.expectEqual(@as(u32, 1), d.tr_iters);
+        try std.testing.expectEqual(@as(u32, 2), d.recert_attempts);
+    }
 }

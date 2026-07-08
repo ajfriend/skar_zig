@@ -5,6 +5,17 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-07-08
+
+New EXPERIMENTAL solver selection (`SolveOptions.method`): the `.trust`
+path converges on the wide-angle and elongated inputs the default solver
+structurally cannot (dense caps past ~82°, countries like France at the
+default iteration budget), at DGGS success-speed parity; `.auto` runs the
+default with `.trust` as fallback. Breaking: per-solve diagnostics
+(`outer_iters`, `newton_polish_failures`) moved into a typed per-algorithm
+`diag` union on `Converged`/`DidNotConverge`. Default solver behavior is
+otherwise unchanged. ([#4](https://github.com/ajfriend/skar_zig/pull/4))
+
 ## [0.4.0] - 2026-06-07
 
 Replace the inner-FW boost with a size-gated sparse FW initialization: same

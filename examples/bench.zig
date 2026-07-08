@@ -83,13 +83,13 @@ pub fn main() !void {
             var aspect_ratio: f64 = 0;
             switch (lo) {
                 .converged => |c| {
-                    outer_iters = c.outer_iters;
-                    newton_polish_failures = c.newton_polish_failures;
+                    outer_iters = c.diag.alternating.outer_iters;
+                    newton_polish_failures = c.diag.alternating.newton_polish_failures;
                     aspect_ratio = c.aspectRatio();
                 },
                 .did_not_converge => |p| {
-                    outer_iters = p.outer_iters;
-                    newton_polish_failures = p.newton_polish_failures;
+                    outer_iters = p.diag.alternating.outer_iters;
+                    newton_polish_failures = p.diag.alternating.newton_polish_failures;
                     // Uncertified ratio from the last iterate — useful when
                     // chasing a DNC regression. `DidNotConverge` intentionally
                     // omits an `aspectRatio()` method since the value isn't

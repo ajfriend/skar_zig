@@ -188,8 +188,7 @@ test "checkRotationInvariance: gap branch prints case+k label" {
         .Q = sphar.Mat3.zero,
         .sigma = .{ 0, 1, 1 },
         .gap = 1.0,
-        .outer_iters = 0,
-        .newton_polish_failures = 0,
+        .diag = .{ .alternating = .{ .outer_iters = 0, .newton_polish_failures = 0 } },
         .cert = .{ .indices = &[_]u32{}, .lambdas = &[_]f64{} },
         .allocator = std.testing.allocator,
     } };
@@ -206,8 +205,7 @@ test "checkRotationInvariance: AR branch prints case+k label" {
         .Q = sphar.Mat3.zero,
         .sigma = .{ 0, 1, 2 },
         .gap = 0,
-        .outer_iters = 0,
-        .newton_polish_failures = 0,
+        .diag = .{ .alternating = .{ .outer_iters = 0, .newton_polish_failures = 0 } },
         .cert = .{ .indices = &[_]u32{}, .lambdas = &[_]f64{} },
         .allocator = std.testing.allocator,
     } };
@@ -361,7 +359,7 @@ test "coplanarity check flags great-circle inputs" {
     var unchecked = try sphar.solve(allocator, canon_pts[0..], .{ .gap_tol = tol, .coplanarity_tol = -1, .max_outer = max_outer });
     defer unchecked.deinit();
     try std.testing.expect(std.meta.activeTag(unchecked) == .did_not_converge);
-    try std.testing.expectEqual(max_outer, unchecked.did_not_converge.outer_iters);
+    try std.testing.expectEqual(max_outer, unchecked.did_not_converge.diag.alternating.outer_iters);
 }
 
 test "solve rejects malformed inputs with typed errors" {

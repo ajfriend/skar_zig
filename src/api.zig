@@ -133,6 +133,78 @@ pub const SolveOptions = struct {
     /// Each outer iteration runs `algo.FW_PER_NEWTON` inner cycles +
     /// one Newton polish + one gap check.
     max_outer: u32 = 100,
+
+    /// EXPERIMENTAL — solver path selection (prototype on the
+    /// `investigate/wide-cap-dnc` branch; see docs/wide-cap-dnc-report.md).
+    ///
+    ///   .alternating — the original solver: alternates single
+    ///            Frank–Wolfe weight steps with damped axis steps. Very
+    ///            fast on the DGGS hot path, but limit-cycles on dense
+    ///            inputs spanning ≳ 81° from the optimal axis.
+    ///   .trust — trust-region descent on the reduced convex
+    ///            objective h(b) = min_A(−log det A) over the sphere,
+    ///            using the alternating path's inner MVEE machinery as
+    ///            the oracle and the same certification. Converges on
+    ///            the wide-angle/elongated inputs the alternating path
+    ///            cannot (see src/trust.zig and docs/trust-solver.md).
+    ///   .auto  — .alternating first; if it returns
+    ///            `did_not_converge`, retry with .trust on the same
+    ///            preprocessed working set and return the better
+    ///            outcome.
+    ///
+    /// Default .alternating keeps existing behavior bit-identical while
+    /// the prototype is evaluated.
+    method: Method = .alternating,
+};
+
+/// Solver path selector for `SolveOptions.method` (see that field's
+/// doc-comment for the semantics of each variant).
+pub const Method = enum { alternating, trust, auto };
+
+/// Per-algorithm diagnostics, tagged by the solver path that produced
+/// the outcome. The mathematical contract — Q, sigma, gap, cert — is
+/// shared and method-independent; everything in here is diagnostic and
+/// algorithm-specific, so each path gets its own well-typed struct
+/// instead of overloading shared counters. Under `method = .auto` the
+/// tag additionally records WHICH path produced the returned outcome.
+pub const Diagnostics = union(enum) {
+    alternating: AlternatingDiagnostics,
+    trust: TrustDiagnostics,
+
+    /// Total solver iterations regardless of path — a rough effort
+    /// number for logs and tables. The per-path fields are the
+    /// meaningful quantities; do not compare totals across paths.
+    pub fn totalIters(self: Diagnostics) u32 {
+        return switch (self) {
+            .alternating => |d| d.outer_iters,
+            .trust => |d| d.tr_iters + d.recert_attempts,
+        };
+    }
+};
+
+/// Diagnostics for the alternating path.
+pub const AlternatingDiagnostics = struct {
+    /// Outer (axis) iterations executed.
+    outer_iters: u32,
+    /// Outer iterations where Newton polish bailed and the raw FW
+    /// weights were used for that cycle's certificate.
+    newton_polish_failures: u32,
+};
+
+/// Diagnostics for the trust path (see docs/trust-solver.md for the
+/// phase vocabulary).
+pub const TrustDiagnostics = struct {
+    /// The eager iteration-0 certificate (the alternating path's
+    /// opening cadence at the initial axis) ended the solve.
+    eager_certified: bool,
+    /// Trust-region iterations (accepted + rejected trials; each costs
+    /// one inner-oracle evaluation).
+    tr_iters: u32,
+    /// Fast-cadence re-certification attempts after the trust region
+    /// found h stationary (floor-regime certificate sampling).
+    recert_attempts: u32,
+    /// Oracle evaluations where Newton polish bailed.
+    polish_failures: u32,
 };
 
 /// Active-set certificate. `indices` / `lambdas` are paired arrays:
@@ -163,9 +235,9 @@ pub const Converged = struct {
     sigma: [3]f64,
     /// Certified duality gap |primal − dual| (≤ `gap_tol`).
     gap: f64,
-    outer_iters: u32,
-    /// Count of outer iterations where Newton polish bailed and FW weights were used.
-    newton_polish_failures: u32,
+    /// Algorithm-specific diagnostics; the tag records which solver
+    /// path produced this outcome.
+    diag: Diagnostics,
     cert: Cert,
     allocator: std.mem.Allocator,
 
@@ -218,14 +290,15 @@ pub const Infeasible = struct {
 pub const DidNotConverge = struct {
     Q: Mat3,
     sigma: [3]f64,
-    /// Last computed gap from the final outer iteration. May be near
-    /// zero (almost converged) or large (the solver gave up far from
-    /// optimal); inspect alongside `outer_iters` rather than as a
-    /// uniform quality metric — unlike `Converged.gap`, this value is
-    /// not certified to be below `gap_tol`.
+    /// Last computed gap from the final iterate. May be near zero
+    /// (almost converged) or large (the solver gave up far from
+    /// optimal); inspect alongside `diag` rather than as a uniform
+    /// quality metric — unlike `Converged.gap`, this value is not
+    /// certified to be below `gap_tol`.
     gap: f64,
-    outer_iters: u32,
-    newton_polish_failures: u32,
+    /// Algorithm-specific diagnostics; the tag records which solver
+    /// path produced this outcome.
+    diag: Diagnostics,
     /// Active-set cert from the last iterate (uncertified — solver
     /// did not close the gap).
     cert: Cert,

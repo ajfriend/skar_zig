@@ -115,6 +115,97 @@ pub const algo = struct {
     /// weights to exactly zero could remove the regime split entirely.
     pub const SEED_SPARSE_MIN_POINTS: usize = 16;
     pub const SEED_SPARSE_K: usize = 5;
+
+};
+
+/// Tuning for the EXPERIMENTAL trust solver path (`src/trust.zig`,
+/// `SolveOptions.method = .trust`): trust-region descent on the reduced
+/// convex objective h(b) over the sphere, with the alternating path's inner
+/// MVEE machinery as the oracle. Prototype values — not yet tuned.
+pub const trust = struct {
+    /// Inner MVEE oracle per h-evaluation: FW in bursts of INNER_BURST
+    /// steps with a stall exit — stop when a burst improves the design
+    /// value by less than INNER_STALL_REL·(1+|h|) — up to the
+    /// INNER_ITERS total budget, then ONE Newton polish. The stall exit
+    /// is what keeps κ-limited cells (whose g-noise sits above any
+    /// reachable INNER_TOL) from grinding the whole budget at noise
+    /// amplitude; the burst FW itself remains monotone-in-intent with
+    /// no snapshot/restore machinery, and the single final polish means
+    /// the returned state is inner-(near-)optimal so the envelope
+    /// gradient −3·c is the gradient of the h reported. History note:
+    /// a rounds/burst/patience oracle with per-round polish and best-w
+    /// tracking was tried and reverted — it could return under-refined
+    /// snapshot states whose reported gradient wasn't the gradient of
+    /// the reported h, which the trust region reads as a
+    /// systematically wrong slope (measured ρ → −7.95 as Δ → 0 on
+    /// cap82). Floor-regime cert pathologies are handled by the RECERT
+    /// phase instead.
+    pub const INNER_ITERS: u32 = 320;
+    pub const INNER_BURST: u32 = 64;
+    pub const INNER_TOL: f64 = 1e-11;
+    pub const INNER_STALL_REL: f64 = 1e-9;
+    /// Certify an accepted trust-region iterate only once the accepted
+    /// step's predicted decrease has fallen to within a couple of
+    /// orders of gap_tol: while the model still predicts ≫ gap_tol of
+    /// remaining descent, no certificate can pass and computing one is
+    /// pure overhead (early wide-cap iterates). pred is in the same
+    /// units as the gap, so this gate is scale-aware — a ‖g‖-based gate
+    /// was tried first and mis-fired on elongated regions whose Hessian
+    /// scale ≫ B0 (states survey: certificates that would have passed
+    /// were skipped). The iteration-0 certificate is always computed
+    /// (it is what makes already-optimal inputs converge in 0
+    /// iterations), and the RECERT phase always certifies.
+    pub const CERT_PRED_FACTOR: f64 = 100.0;
+    /// Trust-region radius: initial, max, shrink on rejection, growth
+    /// on a very successful step (ratio ≥ ETA_GOOD with a full-length
+    /// step), and the collapse threshold that ends the solve. Radii
+    /// are in tangent-plane units (≈ tan of the axis rotation angle).
+    pub const DELTA0: f64 = 0.5;
+    pub const DELTA_MAX: f64 = 4.0;
+    pub const SHRINK: f64 = 0.25;
+    /// Gentler shrink for ACCEPTED-but-poor steps (ρ < RHO_POOR):
+    /// progress was made, the radius just overshot the model's
+    /// fidelity range — 0.25 here makes δ leapfrog the fidelity
+    /// boundary and oscillate with GROW (measured on cap89: alternating
+    /// ρ ≈ 0.2 / ρ ≈ 0.8 iterations).
+    pub const SHRINK_POOR: f64 = 0.5;
+    pub const GROW: f64 = 2.0;
+    pub const DELTA_MIN: f64 = 1e-14;
+    /// Step acceptance thresholds on ρ = actual/predicted decrease.
+    /// ETA gates acceptance; RHO_POOR triggers a radius shrink even on
+    /// an accepted step (the textbook ρ < ¼ rule — without it the loop
+    /// can creep at ρ ≈ 0.15 forever when third-order terms of h
+    /// dominate the quadratic model over the current radius, measured
+    /// on cap89 under the majorant model: 83 iterations → 15 with the
+    /// rule); ETA_GOOD + a radius-limited step triggers growth.
+    pub const ETA: f64 = 0.05;
+    pub const RHO_POOR: f64 = 0.25;
+    pub const ETA_GOOD: f64 = 0.7;
+    /// Fallback isotropic model Hessian B = B0·I, used when the
+    /// per-evaluation majorant Hessian goes non-PD (roundoff or
+    /// far-field states). 3·I is the majorant Hessian's own limit at a
+    /// circular optimum — the fallback is the derived value, not a fit.
+    pub const B0: f64 = 3.0;
+    /// Exit the trust-region loop (to the RECERT phase) when the
+    /// step's predicted decrease falls below the merit function's own
+    /// resolution, pred ≤ PRED_NOISE_REL·(1+|h|): the ratio test can
+    /// never verify such a step, so every trial is a rejection and Δ
+    /// just marches to its floor one oracle evaluation at a time
+    /// (measured on the H3 r9 CANARY cell: |g| = 3e-10, pred = 2e-20,
+    /// 26 identical rejections before the re-cert phase fixed it in
+    /// one attempt).
+    pub const PRED_NOISE_REL: f64 = 1e-14;
+    /// Re-certification attempts after the trust region stalls without
+    /// a certified gap ≤ tol. Near the f64 gap floor the constructed
+    /// certificate is sensitive to the incidental weight state at
+    /// noise amplitude (measured on A5 res-30: the first cert's
+    /// M-Cholesky fails for the alternating path too — it succeeds on its
+    /// second outer iteration purely by re-sampling w). Each attempt
+    /// re-runs the oracle at the fixed near-optimal axis (FW steps at
+    /// noise level + a fresh polish perturb w) and re-certifies.
+    /// Bounded so genuinely floored cells stop instead of burning the
+    /// whole outer budget at oracle prices.
+    pub const RECERT_MAX: u32 = 32;
 };
 
 /// Numerical tolerances — the "how small is small" guards.
