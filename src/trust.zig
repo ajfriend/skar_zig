@@ -309,14 +309,12 @@ pub fn evalH(
     // cheaper than the k×k LU it replaces. A pivot failure just keeps
     // the fixed-w model; the ρ test guards model quality either way.
     if (tc.EXACT_HESSIAN and k >= 2) {
-        const SQRT2 = std.math.sqrt2;
         var G = [_]f64{0} ** 36; // V·Vᵀ, row-major 6×6
         var v1 = [_]f64{0} ** 6; // V·1
         var vmx = [_]f64{0} ** 6; // V·m_x
         var vmy = [_]f64{0} ** 6; // V·m_y
         for (0..k) |i| {
-            const y = wb.Yf[i].m;
-            const v = [6]f64{ y[0] * y[0], y[1] * y[1], y[2] * y[2], SQRT2 * y[0] * y[1], SQRT2 * y[0] * y[2], SQRT2 * y[1] * y[2] };
+            const v = wb.Yf[i].svec();
             for (0..6) |a| {
                 v1[a] += v[a];
                 vmx[a] += v[a] * wb.m_buf[i][0];

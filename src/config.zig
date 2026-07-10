@@ -258,12 +258,13 @@ pub const tol = struct {
     /// points): relative Tikhonov mass on the 6×6 G² block of the
     /// bordered range-space KKT system. Same recipe and value as
     /// `trust.HESS_REG`, which regularizes the same rank-≤ 6 Schur-
-    /// square structure — but newton.zig is shared by both solver
-    /// paths, so it takes its own constant rather than importing the
-    /// trust namespace. Benign: the projected RHS V·g lies in range(G)
-    /// by construction, so there is no null component to amplify, and
-    /// the perturbation is a ~1e-10 relative linear-contraction term in
-    /// the Newton recursion — no floor above NEWTON_INNER.
+    /// square structure — kept as a separate constant so that retuning
+    /// the trust path's knobs can never silently reshape the shared
+    /// polish that BOTH solver paths run. Benign: the projected RHS V·g
+    /// lies in range(G) by construction, so there is no null component
+    /// to amplify, and the perturbation is a ~1e-10 relative
+    /// linear-contraction term in the Newton recursion — no floor above
+    /// NEWTON_INNER.
     pub const NEWTON_RANGE_REG: f64 = 1e-10;
     /// Pivot floor for the 7×7 bordered range-space polish solve. The
     /// chart rescaling puts the forward-solved design vectors at O(1)

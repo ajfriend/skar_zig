@@ -95,10 +95,10 @@ fn solveBorderedKkt(H: []const f64, k: usize, g: []const f64, delta_w: []f64, s:
 }
 
 /// Range-space KKT solve for k ≥ RANGE_SPACE_MIN_K. Exploits
-/// H = VᵀV with vᵢ ∈ R⁶ the √2-weighted symmetric outer product of
-/// the forward-solved design vectors yᵢ = L⁻¹qᵢ — the same rank-≤ 6
-/// structure as the trust path's exact-Hessian correction
-/// (src/trust.zig, evalH part 2). Substituting Δw = Vᵀα into the
+/// H = VᵀV with vᵢ = svec(yᵢ) of the forward-solved design vectors
+/// yᵢ = L⁻¹qᵢ (see `Vec3.svec`) — the same rank-≤ 6 structure as the
+/// trust path's exact-Hessian correction (src/trust.zig, evalH
+/// part 2). Substituting Δw = Vᵀα into the
 /// bordered system [H, 1; 1ᵀ, 0][Δw; s] = [g; 0] and projecting the
 /// first block by V:
 ///
@@ -118,13 +118,11 @@ fn solveBorderedKkt(H: []const f64, k: usize, g: []const f64, delta_w: []f64, s:
 /// tol.NEWTON_RANGE_PIVOT_MIN).
 fn solveKktRangeSpace(Y: []const Vec3, g: []const f64, delta_w: []f64) bool {
     const k = Y.len;
-    const SQRT2 = std.math.sqrt2;
     var G = [_]f64{0} ** 36; // V·Vᵀ, row-major 6×6
     var b1 = [_]f64{0} ** 6; // V·1
     var bg = [_]f64{0} ** 6; // V·g
     for (0..k) |i| {
-        const y = Y[i].m;
-        const v = [6]f64{ y[0] * y[0], y[1] * y[1], y[2] * y[2], SQRT2 * y[0] * y[1], SQRT2 * y[0] * y[2], SQRT2 * y[1] * y[2] };
+        const v = Y[i].svec();
         for (0..6) |a| {
             b1[a] += v[a];
             bg[a] = @mulAdd(f64, g[i], v[a], bg[a]);
@@ -133,8 +131,7 @@ fn solveKktRangeSpace(Y: []const Vec3, g: []const f64, delta_w: []f64) bool {
     }
 
     // A = [G² + reg·I, V·1; (V·1)ᵀ, 0], relative Tikhonov mass on the
-    // G² block (benign: the projected RHS V·g lies in range(G) by
-    // construction — see tol.NEWTON_RANGE_REG).
+    // G² block (see tol.NEWTON_RANGE_REG). A[6][6] stays 0 from init.
     var A = [_]f64{0} ** 49;
     var tr_g2: f64 = 0;
     for (0..6) |a| {
@@ -151,7 +148,6 @@ fn solveKktRangeSpace(Y: []const Vec3, g: []const f64, delta_w: []f64) bool {
         A[a * 7 + 6] = b1[a];
         A[6 * 7 + a] = b1[a];
     }
-    A[6 * 7 + 6] = 0.0;
 
     var piv: [7]usize = undefined;
     const lu = LU.factorize(&A, 7, &piv, tol.NEWTON_RANGE_PIVOT_MIN) orelse return false;
@@ -160,8 +156,7 @@ fn solveKktRangeSpace(Y: []const Vec3, g: []const f64, delta_w: []f64) bool {
 
     // Δw = Vᵀα (the multiplier rhs[6] is discarded).
     for (0..k) |i| {
-        const y = Y[i].m;
-        const v = [6]f64{ y[0] * y[0], y[1] * y[1], y[2] * y[2], SQRT2 * y[0] * y[1], SQRT2 * y[0] * y[2], SQRT2 * y[1] * y[2] };
+        const v = Y[i].svec();
         var dw = v[0] * rhs[0];
         for (1..6) |a| dw = @mulAdd(f64, v[a], rhs[a], dw);
         delta_w[i] = dw;
@@ -199,13 +194,14 @@ pub fn newtonPolish(Ql: []const Vec3, w: []f64, active_thresh: f64, max_iter: u3
     const H = s.H;
     const delta_w = s.delta_w;
 
-    // k ≥ RANGE_SPACE_MIN_K routes the KKT solve through the rank-6
-    // range space (see solveKktRangeSpace); k below it keeps the dense
-    // path of prior behavior. Re-evaluated after boundary drops.
-    var use_range = k >= RANGE_SPACE_MIN_K;
-
     var it: u32 = 0;
     while (it < max_iter) : (it += 1) {
+        // k ≥ RANGE_SPACE_MIN_K routes the KKT solve through the rank-6
+        // range space (see solveKktRangeSpace); below it, the dense
+        // path of prior behavior. Derived fresh each iteration because
+        // boundary drops shrink k.
+        const use_range = k >= RANGE_SPACE_MIN_K;
+
         // S = Σ wᵢ qᵢ qᵢᵀ
         var S = Mat3.zero;
         for (0..k) |i| S.addSymRank1(w_a[i], q[i]);
@@ -242,15 +238,25 @@ pub fn newtonPolish(Ql: []const Vec3, w: []f64, active_thresh: f64, max_iter: u3
             // Dense bordered KKT — the k ≤ 7 primary path, and the
             // safety net for a range-solve pivot failure (provably
             // shouldn't happen; see tol.NEWTON_RANGE_PIVOT_MIN). H is
-            // symmetric: H_ij = (qᵢᵀW⁻¹qⱼ)². On the dense path Y
-            // holds full solves, so the original qᵢ·yⱼ form applies
-            // (bit-identical); on the range path Y holds forward
-            // solves, so the equal-value form (yᵢ·yⱼ)² must be used.
-            for (0..k) |i| {
-                for (i..k) |j| {
-                    const dij = if (use_range) Y[i].dot(Y[j]) else q[i].dot(Y[j]);
-                    H[i * k + j] = dij * dij;
-                    H[j * k + i] = H[i * k + j];
+            // symmetric: H_ij = (qᵢᵀW⁻¹qⱼ)², built from what Y holds
+            // on each path (see the Y/g computation above): forward
+            // solves ⇒ (yᵢ·yⱼ)²; full solves ⇒ the original qᵢ·yⱼ
+            // form, bit-identical to prior behavior.
+            if (use_range) {
+                for (0..k) |i| {
+                    for (i..k) |j| {
+                        const dij = Y[i].dot(Y[j]);
+                        H[i * k + j] = dij * dij;
+                        H[j * k + i] = H[i * k + j];
+                    }
+                }
+            } else {
+                for (0..k) |i| {
+                    for (i..k) |j| {
+                        const dij = q[i].dot(Y[j]);
+                        H[i * k + j] = dij * dij;
+                        H[j * k + i] = H[i * k + j];
+                    }
                 }
             }
             if (!solveBorderedKkt(H, k, g, delta_w, s)) return false;
@@ -274,31 +280,27 @@ pub fn newtonPolish(Ql: []const Vec3, w: []f64, active_thresh: f64, max_iter: u3
         // Boundary drop (the active-set update polish historically
         // lacked): when the Newton step is boundary-limited (r_min ≤ 1),
         // the blocking weight is headed for zero — take the step exactly
-        // TO the boundary, zero it, remove it from the active set, and
-        // continue on the reduced set. Without this, the iteration pins:
-        // the same boundary-crossing step recurs while the
-        // fraction-to-boundary alpha collapses geometrically to the
-        // NEWTON_STEP_MIN floor, returning an under-polished state
-        // (measured: g_max − 3 stuck at ~1e-2 on post-FW oracle states
-        // whose active subset wants to shed a point — the old singular
-        // dense KKT merely blurred this pinning with null-space noise).
-        // Safety vs the FW drop-step hazard (docs/trust-solver.md): a
-        // polish drop cannot fire at a converged design (the g-spread
-        // break above exits first) nor on an interior step (r_min > 1),
-        // and a wrong drop is recoverable — the next FW step re-adds the
-        // max-gradient point, unlike mveeFw's full-mass noise drop.
-        // Steps with r_min > 1 are bit-identical to prior behavior
-        // (fl(0.99·r) is monotone, so min-of-products = product-of-min).
+        // TO the boundary, remove it from the active set, and continue
+        // on the reduced set. Without this the iteration pins: the same
+        // boundary-crossing step recurs while the fraction-to-boundary
+        // alpha collapses geometrically to the NEWTON_STEP_MIN floor,
+        // returning an under-polished state. Safety vs the FW drop-step
+        // hazard (docs/trust-solver.md): a polish drop cannot fire at a
+        // converged design (the g-spread break above exits first) nor
+        // on an interior step (r_min > 1), and a wrong drop is
+        // recoverable — the next FW step re-adds the max-gradient
+        // point, unlike mveeFw's full-mass noise drop. Steps with
+        // r_min > 1 are bit-identical to prior behavior (fl(0.99·r) is
+        // monotone, so min-of-products = product-of-min). Measurements
+        // and history: PR #8.
         if (r_min <= 1.0 and k > 3) {
             for (0..k) |i| w_a[i] += r_min * delta_w[i];
             // Swap-remove the blocker; its caller-side weight is zeroed
             // by the final writeback (it left the active list).
-            w_a[blocker] = 0;
             k -= 1;
             q[blocker] = q[k];
             w_a[blocker] = w_a[k];
             active_idx[blocker] = active_idx[k];
-            use_range = k >= RANGE_SPACE_MIN_K;
             continue;
         }
 

@@ -89,6 +89,23 @@ fn liftAffineRing(
     return Ql;
 }
 
+/// The load-bearing invariants every polish call must preserve:
+/// success, Σw = 1 (see the farthestPointSeed notes in src/skar.zig),
+/// and weight nonnegativity.
+fn expectInvariants(r: PolishResult) !void {
+    try std.testing.expect(r.ok);
+    try std.testing.expect(@abs(r.w_sum - 1.0) <= 1e-13);
+    try std.testing.expect(r.w_min >= 0);
+}
+
+/// Invariants + full convergence to a known optimum: g ≡ 3 on the
+/// support and the analytic log det.
+fn expectAnalytic(r: PolishResult, analytic: f64) !void {
+    try expectInvariants(r);
+    try std.testing.expect(r.g_spread <= 1e-9);
+    try std.testing.expect(@abs(r.logdet - analytic) <= 1e-9);
+}
+
 /// Perturbed-from-uniform start: wᵢ ∝ 1 + 0.3·sin(2πi/n + 0.7),
 /// normalized to Σw = 1. Strictly positive, so every point is active
 /// and polish sees k = n.
@@ -118,13 +135,7 @@ test "range-space polish: unit-circle rings converge to the analytic optimum" {
     for ([_]usize{ 8, 12, 60 }) |n| {
         const Ql = try liftAffineRing(a, n, eye, .{ 0, 0 });
         const w = try perturbedWeights(a, n);
-        const r = try runPolish(a, Ql, w);
-
-        try std.testing.expect(r.ok);
-        try std.testing.expect(@abs(r.w_sum - 1.0) <= 1e-13);
-        try std.testing.expect(r.w_min >= 0);
-        try std.testing.expect(r.g_spread <= 1e-9);
-        try std.testing.expect(@abs(r.logdet - analytic) <= 1e-9);
+        try expectAnalytic(try runPolish(a, Ql, w), analytic);
     }
 }
 
@@ -144,13 +155,7 @@ test "range-space polish: anisotropic translated ellipse matches the affine-shif
     const n: usize = 10;
     const Ql = try liftAffineRing(a, n, A2, .{ 0.35, -0.15 });
     const w = try perturbedWeights(a, n);
-    const r = try runPolish(a, Ql, w);
-
-    try std.testing.expect(r.ok);
-    try std.testing.expect(@abs(r.w_sum - 1.0) <= 1e-13);
-    try std.testing.expect(r.w_min >= 0);
-    try std.testing.expect(r.g_spread <= 1e-9);
-    try std.testing.expect(@abs(r.logdet - analytic) <= 1e-9);
+    try expectAnalytic(try runPolish(a, Ql, w), analytic);
 }
 
 test "range-space polish: jittered annulus keeps invariants and reaches primal optimality" {
@@ -159,11 +164,8 @@ test "range-space polish: jittered annulus keeps invariants and reaches primal o
     const a = arena.allocator();
 
     // Deterministic jitter in radius and angle: an irregular k = 16
-    // input whose optimal support may be a strict subset. Polish
-    // cannot drive weights exactly to zero (fraction-to-boundary), so
-    // the pinned assertions are the invariants plus g_max → 3 (the
-    // primal optimality signal; Σwᵢgᵢ ≡ 3 identically, so g_max ≥ 3
-    // always and its excess measures distance from the optimum).
+    // input whose optimal support is a strict subset — the regime that
+    // exercises the boundary drop rule.
     const n: usize = 16;
     const Ql = try a.alloc(Vec3, n);
     for (Ql, 0..) |*q, i| {
@@ -176,9 +178,9 @@ test "range-space polish: jittered annulus keeps invariants and reaches primal o
     for (w) |*wi| wi.* = 1.0 / @as(f64, @floatFromInt(n));
 
     const r = try runPolish(a, Ql, w);
-
-    try std.testing.expect(r.ok);
-    try std.testing.expect(@abs(r.w_sum - 1.0) <= 1e-13);
-    try std.testing.expect(r.w_min >= 0);
+    try expectInvariants(r);
+    // Deliberately g_max (not g_spread): the optimal support may be a
+    // strict subset, so shrinking weights keep g_min < 3; g_max → 3 is
+    // the primal-optimality signal (Σwᵢgᵢ ≡ 3, so g_max ≥ 3 always).
     try std.testing.expect(r.g_max - 3.0 <= 1e-6);
 }
