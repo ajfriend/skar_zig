@@ -254,6 +254,27 @@ pub const tol = struct {
     pub const NEWTON_INNER: f64 = 1e-14;
     /// Newton polish: fraction-to-boundary step-size floor; below, declare stuck.
     pub const NEWTON_STEP_MIN: f64 = 1e-12;
+    /// Range-space Newton polish (k ≥ newton.RANGE_SPACE_MIN_K active
+    /// points): relative Tikhonov mass on the 6×6 G² block of the
+    /// bordered range-space KKT system. Same recipe and value as
+    /// `trust.HESS_REG`, which regularizes the same rank-≤ 6 Schur-
+    /// square structure — but newton.zig is shared by both solver
+    /// paths, so it takes its own constant rather than importing the
+    /// trust namespace. Benign: the projected RHS V·g lies in range(G)
+    /// by construction, so there is no null component to amplify, and
+    /// the perturbation is a ~1e-10 relative linear-contraction term in
+    /// the Newton recursion — no floor above NEWTON_INNER.
+    pub const NEWTON_RANGE_REG: f64 = 1e-10;
+    /// Pivot floor for the 7×7 bordered range-space polish solve. The
+    /// chart rescaling puts the forward-solved design vectors at O(1)
+    /// (g ≈ 3 near optimality), so 1e-14 separates "singular for our
+    /// purposes" from real pivots; `tol.UNDERFLOW` (1e-300) would
+    /// accept roundoff pivots and defeat the dense fallback. The
+    /// system is provably nonsingular for any valid design state
+    /// (V·1 ≠ 0 since eᵀ(V·1) = Σgᵢ > 0, plus the regularized PD
+    /// block), so a factorization failure signals extreme scaling,
+    /// not a routine state.
+    pub const NEWTON_RANGE_PIVOT_MIN: f64 = 1e-14;
     /// Hard floor for SolveError.NegativeDualityGap (FP noise below, bug above).
     pub const NEG_GAP: f64 = 1e-10;
     /// FW inner loops: minimum w_i to participate in the pairwise-swap candidate set.
