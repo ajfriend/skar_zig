@@ -313,14 +313,23 @@ pub fn evalH(
         var v1 = [_]f64{0} ** 6; // V·1
         var vmx = [_]f64{0} ** 6; // V·m_x
         var vmy = [_]f64{0} ** 6; // V·m_y
+        // G upper triangle only, mirrored after the loop (the repo's
+        // symmetric-accumulation idiom, cf. Mat3.addSymRank1): the
+        // product is exactly commutative, so the mirror is
+        // bit-identical to recomputation at ~40% fewer flops. Same
+        // treatment for ½G² below (G is exactly symmetric, so each
+        // mirrored entry's terms are the same products, commuted).
         for (0..k) |i| {
             const v = wb.Yf[i].svec();
             for (0..6) |a| {
                 v1[a] += v[a];
                 vmx[a] += v[a] * wb.m_buf[i][0];
                 vmy[a] += v[a] * wb.m_buf[i][1];
-                for (0..6) |bb| G[a * 6 + bb] += v[a] * v[bb];
+                for (a..6) |bb| G[a * 6 + bb] += v[a] * v[bb];
             }
+        }
+        for (1..6) |a| {
+            for (0..a) |bb| G[a * 6 + bb] = G[bb * 6 + a];
         }
         // A = [½G², −v1; v1ᵀ, 0] with relative Tikhonov mass on the
         // ½G² block (benign here: the RHS has no null component to
@@ -328,10 +337,11 @@ pub fn evalH(
         var A = [_]f64{0} ** 49;
         var tr_g2: f64 = 0;
         for (0..6) |a| {
-            for (0..6) |bb| {
+            for (a..6) |bb| {
                 var s: f64 = 0;
                 for (0..6) |cidx| s += G[a * 6 + cidx] * G[cidx * 6 + bb];
                 A[a * 7 + bb] = 0.5 * s;
+                A[bb * 7 + a] = 0.5 * s;
             }
             tr_g2 += A[a * 7 + a];
         }

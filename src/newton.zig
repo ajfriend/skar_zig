@@ -121,13 +121,20 @@ fn solveKktRangeSpace(Y: []const Vec3, g: []const f64, delta_w: []f64) bool {
     var G = [_]f64{0} ** 36; // V·Vᵀ, row-major 6×6
     var b1 = [_]f64{0} ** 6; // V·1
     var bg = [_]f64{0} ** 6; // V·g
+    // Upper triangle only, mirrored after the loop — the repo's
+    // symmetric-accumulation idiom (cf. Mat3.addSymRank1): v[a]·v[b]
+    // is exactly commutative, so the mirror is bit-identical to
+    // recomputation at ~40% fewer FMAs.
     for (0..k) |i| {
         const v = Y[i].svec();
         for (0..6) |a| {
             b1[a] += v[a];
             bg[a] = @mulAdd(f64, g[i], v[a], bg[a]);
-            for (0..6) |b| G[a * 6 + b] = @mulAdd(f64, v[a], v[b], G[a * 6 + b]);
+            for (a..6) |b| G[a * 6 + b] = @mulAdd(f64, v[a], v[b], G[a * 6 + b]);
         }
+    }
+    for (1..6) |a| {
+        for (0..a) |b| G[a * 6 + b] = G[b * 6 + a];
     }
 
     // A = [G² + reg·I, V·1; (V·1)ᵀ, 0], relative Tikhonov mass on the
@@ -135,10 +142,13 @@ fn solveKktRangeSpace(Y: []const Vec3, g: []const f64, delta_w: []f64) bool {
     var A = [_]f64{0} ** 49;
     var tr_g2: f64 = 0;
     for (0..6) |a| {
-        for (0..6) |b| {
+        // (G²)ᵇᵃ term-by-term equals (G²)ᵃᵇ with each product's factors
+        // commuted (G is exactly symmetric), so the mirror is bit-exact.
+        for (a..6) |b| {
             var acc: f64 = 0;
             for (0..6) |c| acc = @mulAdd(f64, G[a * 6 + c], G[c * 6 + b], acc);
             A[a * 7 + b] = acc;
+            A[b * 7 + a] = acc;
         }
         tr_g2 += A[a * 7 + a];
     }
