@@ -29,6 +29,10 @@ certificate's noise floor lower than the tolerances we certify (item 4).
 
 ### 1. Range-space Newton polish — best single item (speed + latent stability)
 
+**Status: implemented in [PR #8](https://github.com/ajfriend/skar_zig/pull/8)**
+(plus a boundary drop rule the investigation surfaced as the real endgame
+fix — see the PR for the measurements and the one flagged CANARY shift).
+
 `newtonPolish` (src/newton.zig) solves a dense bordered (k+1)×(k+1) LU per
 Newton iteration, O(k³), up to 20 iterations, inside every oracle evaluation.
 Its Hessian H_ij = (qᵢᵀW⁻¹qⱼ)² is exactly the C∘C matrix whose rank ≤ 6

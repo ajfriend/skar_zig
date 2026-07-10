@@ -277,16 +277,23 @@ test "CANARY(alternating): a common A5 r30 cell converges in exactly 2 outer ite
     try std.testing.expectEqual(@as(u32, 2), outcome.converged.diag.alternating.outer_iters);
 }
 
-test "CANARY(alternating): a harder A5 r30 cell takes more than 2 outer iterations" {
-    // This cell currently takes 4 (the rare tail of the A5 distribution);
-    // we only assert > 2 so the canary is about "demonstrably more work than
-    // the common case", not the exact tail value.
+test "CANARY(alternating): the formerly-harder A5 r30 cell converges in exactly 2 outer iterations" {
+    // History: this cell was the rare tail of the A5 distribution at 4
+    // iterations (pinned as "> 2: demonstrably more work than the common
+    // case") until the polish boundary-drop rule landed (PR #8). The
+    // extra iterations were the old pinned creep — Newton steps
+    // boundary-limited by a weight headed for zero, alpha collapsing to
+    // the step floor — not extra geometric work. With the drop the cell
+    // costs the same 2 iterations as the common cell (same sigma to 7
+    // digits, gap 1.0e-5 vs 2.9e-5 before), so the tail/common
+    // distinction dissolved and the pin is now an exact count like its
+    // siblings. Re-pinned with sign-off per CANARY policy.
     const allocator = std.testing.allocator;
     var outcome = try skar.solve(allocator, &A5_CELL_4ITER, .{ .gap_tol = DGGS_GAP_TOL, .method = .alternating });
     defer outcome.deinit();
 
     try std.testing.expect(std.meta.activeTag(outcome) == .converged);
-    try std.testing.expect(outcome.converged.diag.alternating.outer_iters > 2);
+    try std.testing.expectEqual(@as(u32, 2), outcome.converged.diag.alternating.outer_iters);
 }
 
 // ── Trust-path CANARIES (same cells, same spirit) ────────────────────────

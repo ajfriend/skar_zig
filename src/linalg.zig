@@ -80,6 +80,19 @@ pub const Vec3 = extern struct {
         } };
     }
 
+    /// Symmetric vectorization ("svec") of self·selfᵀ: the 6-vector
+    /// (x₀², x₁², x₂², √2·x₀x₁, √2·x₀x₂, √2·x₁x₂). The √2 weighting
+    /// makes the map an isometry: ⟨svec(x), svec(y)⟩ = (x·y)². Slot
+    /// order and weighting are load-bearing — every rank-6 range-space
+    /// consumer (the trust path's envelope-Hessian correction, the
+    /// Newton polish's KKT solve) must use the SAME convention for its
+    /// Gram build and the corresponding Vᵀ apply, so it lives here once.
+    pub inline fn svec(self: Vec3) [6]f64 {
+        const x = self.m;
+        const SQRT2 = std.math.sqrt2;
+        return .{ x[0] * x[0], x[1] * x[1], x[2] * x[2], SQRT2 * x[0] * x[1], SQRT2 * x[0] * x[2], SQRT2 * x[1] * x[2] };
+    }
+
     /// Pick the standard axis (ex, ey, or ez) least aligned with self.
     /// Used as the seed for `orthoBasis`.
     pub fn pickRefAxis(self: Vec3) Vec3 {

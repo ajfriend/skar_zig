@@ -5,6 +5,14 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Newton polish rebuilt on the rank-6 range-space KKT solve (large active
+sets no longer ride an exactly-singular system) with a boundary drop
+rule replacing the old pinned creep: fewer iterations nearly everywhere
+(geographies −16–32%, small DGGS cells to 1), identical answers.
+([#8](https://github.com/ajfriend/skar_zig/pull/8))
+
 ## [0.6.0] - 2026-07-08
 
 Breaking: `SolveOptions.method` now defaults to `.auto`, redefined as a

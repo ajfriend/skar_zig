@@ -7,7 +7,11 @@
 //!   `w` in place; inactive entries reset to 0 on exit.
 //!
 //! The bordered KKT linear solve is private to this module; the
-//! generic LU it rides on lives in `linalg.zig`.
+//! generic LU it rides on lives in `linalg.zig`. For k ≥
+//! `RANGE_SPACE_MIN_K` active points the dense (k+1)×(k+1) system is
+//! exactly singular (the Hessian has rank ≤ 6) and the solve routes
+//! through a 6-dim range-space system instead — see
+//! `solveKktRangeSpace`.
 
 const std = @import("std");
 const linalg = @import("linalg.zig");
@@ -50,6 +54,24 @@ pub const NewtonScratch = struct {
     }
 };
 
+/// Active-set count at which `newtonPolish` switches from the dense
+/// bordered KKT solve to the range-space solve. The polish Hessian
+/// H_ij = (qᵢᵀW⁻¹qⱼ)² is the Schur square of a rank-3 Gram, so
+/// rank(H) ≤ 6: for k ≥ 8, null(H) ∩ 1⊥ is nonempty and the dense
+/// bordered matrix [H, 1; 1ᵀ, 0] is EXACTLY singular — its LU
+/// "succeeds" only via roundoff-scale pivots (the floor is
+/// tol.UNDERFLOW), amplifying a noise component along the optimal
+/// face by O(1/ε). That component is model-flat and sum-preserving,
+/// but it inflates |Δwᵢ| and can drive the fraction-to-boundary step
+/// below NEWTON_STEP_MIN — a premature break with an under-polished
+/// state. k = 7 stays on the dense path (generically nonsingular;
+/// identical to prior behavior except when a boundary drop fires —
+/// see the drop rule in `newtonPolish`); its known asymptotic
+/// ill-conditioning — 1 → g/3 approaches range(H) as the g-spread
+/// → 0, since gᵢ = vᵢᵀe identically — is bounded by the inner_tol
+/// break firing first. Pre-existing, documented, unchanged.
+pub const RANGE_SPACE_MIN_K: usize = 8;
+
 /// Bordered KKT [H, 1; 1', 0] [Δw; -ν] = [g; 0] via LU on the (k+1)×(k+1)
 /// symmetric indefinite system.
 fn solveBorderedKkt(H: []const f64, k: usize, g: []const f64, delta_w: []f64, s: *NewtonScratch) bool {
@@ -72,8 +94,91 @@ fn solveBorderedKkt(H: []const f64, k: usize, g: []const f64, delta_w: []f64, s:
     return true;
 }
 
+/// Range-space KKT solve for k ≥ RANGE_SPACE_MIN_K. Exploits
+/// H = VᵀV with vᵢ = svec(yᵢ) of the forward-solved design vectors
+/// yᵢ = L⁻¹qᵢ (see `Vec3.svec`) — the same rank-≤ 6 structure as the
+/// trust path's exact-Hessian correction (src/trust.zig, evalH
+/// part 2). Substituting Δw = Vᵀα into the
+/// bordered system [H, 1; 1ᵀ, 0][Δw; s] = [g; 0] and projecting the
+/// first block by V:
+///
+///   [G² + reg·I  V·1] [α]   [V·g]
+///   [(V·1)ᵀ       0 ] [s] = [ 0 ],    G = V·Vᵀ (6×6).
+///
+/// Near the inner optimum all gᵢ → 3, so 1 → g/3 ∈ range(Vᵀ)
+/// (gᵢ = vᵢᵀe identically, with e the vectorization of I₃) and this
+/// is the EXACT minimum-norm Newton step, with multiplier s → 3 — a
+/// borderless "s = 0" pseudo-inverse would inflate Σw every
+/// iteration. Away from the optimum it is the model minimizer
+/// restricted to range(Vᵀ) ∩ 1⊥: still strict ascent, and it loses no
+/// ability to move the design moment W, because null(V) is exactly
+/// the set of weight directions with ΣΔwᵢ·yᵢyᵢᵀ = 0. O(k·36) build +
+/// one 7×7 LU per call, replacing the dense O(k³) — and, unlike the
+/// dense system at k ≥ 8, provably nonsingular (see
+/// tol.NEWTON_RANGE_PIVOT_MIN).
+fn solveKktRangeSpace(Y: []const Vec3, g: []const f64, delta_w: []f64) bool {
+    const k = Y.len;
+    var G = [_]f64{0} ** 36; // V·Vᵀ, row-major 6×6
+    var b1 = [_]f64{0} ** 6; // V·1
+    var bg = [_]f64{0} ** 6; // V·g
+    // Upper triangle only, mirrored after the loop — the repo's
+    // symmetric-accumulation idiom (cf. Mat3.addSymRank1): v[a]·v[b]
+    // is exactly commutative, so the mirror is bit-identical to
+    // recomputation at ~40% fewer FMAs.
+    for (0..k) |i| {
+        const v = Y[i].svec();
+        for (0..6) |a| {
+            b1[a] += v[a];
+            bg[a] = @mulAdd(f64, g[i], v[a], bg[a]);
+            for (a..6) |b| G[a * 6 + b] = @mulAdd(f64, v[a], v[b], G[a * 6 + b]);
+        }
+    }
+    for (1..6) |a| {
+        for (0..a) |b| G[a * 6 + b] = G[b * 6 + a];
+    }
+
+    // A = [G² + reg·I, V·1; (V·1)ᵀ, 0], relative Tikhonov mass on the
+    // G² block (see tol.NEWTON_RANGE_REG). A[6][6] stays 0 from init.
+    var A = [_]f64{0} ** 49;
+    var tr_g2: f64 = 0;
+    for (0..6) |a| {
+        // (G²)ᵇᵃ term-by-term equals (G²)ᵃᵇ with each product's factors
+        // commuted (G is exactly symmetric), so the mirror is bit-exact.
+        for (a..6) |b| {
+            var acc: f64 = 0;
+            for (0..6) |c| acc = @mulAdd(f64, G[a * 6 + c], G[c * 6 + b], acc);
+            A[a * 7 + b] = acc;
+            A[b * 7 + a] = acc;
+        }
+        tr_g2 += A[a * 7 + a];
+    }
+    const reg = tol.NEWTON_RANGE_REG * (1.0 + tr_g2 / 6.0);
+    for (0..6) |a| {
+        A[a * 7 + a] += reg;
+        A[a * 7 + 6] = b1[a];
+        A[6 * 7 + a] = b1[a];
+    }
+
+    var piv: [7]usize = undefined;
+    const lu = LU.factorize(&A, 7, &piv, tol.NEWTON_RANGE_PIVOT_MIN) orelse return false;
+    var rhs: [7]f64 = .{ bg[0], bg[1], bg[2], bg[3], bg[4], bg[5], 0 };
+    lu.solve(&rhs);
+
+    // Δw = Vᵀα (the multiplier rhs[6] is discarded).
+    for (0..k) |i| {
+        const v = Y[i].svec();
+        var dw = v[0] * rhs[0];
+        for (1..6) |a| dw = @mulAdd(f64, v[a], rhs[a], dw);
+        delta_w[i] = dw;
+    }
+    return true;
+}
+
 /// Newton polish on the D-optimal dual restricted to {i : w_i > active_thresh}.
-/// Mutates w in place; inactive entries reset to 0 on exit.
+/// Mutates w in place; inactive entries reset to 0 on exit. Boundary-
+/// limited Newton steps shed the blocking weight and continue on the
+/// reduced active set (the drop rule below) — so unlike the historical
+/// behavior, weights CAN reach exactly 0 during polish.
 /// Returns false on failure (<3 active, Cholesky breakdown, or KKT singular).
 pub fn newtonPolish(Ql: []const Vec3, w: []f64, active_thresh: f64, max_iter: u32, inner_tol: f64, s: *NewtonScratch) bool {
     const active_idx = s.active_idx;
@@ -101,16 +206,32 @@ pub fn newtonPolish(Ql: []const Vec3, w: []f64, active_thresh: f64, max_iter: u3
 
     var it: u32 = 0;
     while (it < max_iter) : (it += 1) {
+        // k ≥ RANGE_SPACE_MIN_K routes the KKT solve through the rank-6
+        // range space (see solveKktRangeSpace); below it, the dense
+        // path of prior behavior. Derived fresh each iteration because
+        // boundary drops shrink k.
+        const use_range = k >= RANGE_SPACE_MIN_K;
+
         // S = Σ wᵢ qᵢ qᵢᵀ
         var S = Mat3.zero;
         for (0..k) |i| S.addSymRank1(w_a[i], q[i]);
 
         const L_W = S.cholesky() orelse return false;
 
-        // yᵢ = W⁻¹ qᵢ,  gᵢ = qᵢ · yᵢ
-        for (0..k) |i| {
-            Y[i] = L_W.solve(q[i]);
-            g[i] = q[i].dot(Y[i]);
+        // Dense path: yᵢ = W⁻¹ qᵢ (full solve), gᵢ = qᵢ · yᵢ.
+        // Range path: yᵢ = L⁻¹ qᵢ (forward solve only), gᵢ = ‖yᵢ‖² —
+        // the same value up to rounding (qᵢᵀW⁻¹qᵢ = ‖L⁻¹qᵢ‖²), and
+        // the form the rank-6 factorization H = VᵀV is built from.
+        if (use_range) {
+            for (0..k) |i| {
+                Y[i] = L_W.forwardSolve(q[i]);
+                g[i] = Y[i].dot(Y[i]);
+            }
+        } else {
+            for (0..k) |i| {
+                Y[i] = L_W.solve(q[i]);
+                g[i] = q[i].dot(Y[i]);
+            }
         }
 
         var g_max: f64 = -1e30;
@@ -121,24 +242,79 @@ pub fn newtonPolish(Ql: []const Vec3, w: []f64, active_thresh: f64, max_iter: u3
         }
         if (g_max - g_min < inner_tol) break;
 
-        // H is symmetric: H_ij = (qᵢ · W⁻¹ qⱼ)² = (qᵢ · yⱼ)²
-        for (0..k) |i| {
-            for (i..k) |j| {
-                const dij = q[i].dot(Y[j]);
-                H[i * k + j] = dij * dij;
-                H[j * k + i] = H[i * k + j];
+        var solved = false;
+        if (use_range) solved = solveKktRangeSpace(Y[0..k], g[0..k], delta_w);
+        if (!solved) {
+            // Dense bordered KKT — the k ≤ 7 primary path, and the
+            // safety net for a range-solve pivot failure (provably
+            // shouldn't happen; see tol.NEWTON_RANGE_PIVOT_MIN). H is
+            // symmetric: H_ij = (qᵢᵀW⁻¹qⱼ)², built from what Y holds
+            // on each path (see the Y/g computation above): forward
+            // solves ⇒ (yᵢ·yⱼ)²; full solves ⇒ the original qᵢ·yⱼ
+            // form, bit-identical to prior behavior.
+            if (use_range) {
+                for (0..k) |i| {
+                    for (i..k) |j| {
+                        const dij = Y[i].dot(Y[j]);
+                        H[i * k + j] = dij * dij;
+                        H[j * k + i] = H[i * k + j];
+                    }
+                }
+            } else {
+                for (0..k) |i| {
+                    for (i..k) |j| {
+                        const dij = q[i].dot(Y[j]);
+                        H[i * k + j] = dij * dij;
+                        H[j * k + i] = H[i * k + j];
+                    }
+                }
             }
+            if (!solveBorderedKkt(H, k, g, delta_w, s)) return false;
         }
 
-        if (!solveBorderedKkt(H, k, g, delta_w, s)) return false;
-
-        var alpha: f64 = 1.0;
+        // Ratio to the positivity boundary: r_min = min over shrinking
+        // weights of −wᵢ/Δwᵢ, with its argmin. r_min > 1 means the full
+        // Newton step is interior.
+        var r_min: f64 = std.math.inf(f64);
+        var blocker: usize = 0;
         for (0..k) |i| {
             if (delta_w[i] < 0) {
-                const a = 0.99 * (-w_a[i] / delta_w[i]);
-                if (a < alpha) alpha = a;
+                const r = -w_a[i] / delta_w[i];
+                if (r < r_min) {
+                    r_min = r;
+                    blocker = i;
+                }
             }
         }
+
+        // Boundary drop (the active-set update polish historically
+        // lacked): when the Newton step is boundary-limited (r_min ≤ 1),
+        // the blocking weight is headed for zero — take the step exactly
+        // TO the boundary, remove it from the active set, and continue
+        // on the reduced set. Without this the iteration pins: the same
+        // boundary-crossing step recurs while the fraction-to-boundary
+        // alpha collapses geometrically to the NEWTON_STEP_MIN floor,
+        // returning an under-polished state. Safety vs the FW drop-step
+        // hazard (docs/trust-solver.md): a polish drop cannot fire at a
+        // converged design (the g-spread break above exits first) nor
+        // on an interior step (r_min > 1), and a wrong drop is
+        // recoverable — the next FW step re-adds the max-gradient
+        // point, unlike mveeFw's full-mass noise drop. Steps with
+        // r_min > 1 are bit-identical to prior behavior (fl(0.99·r) is
+        // monotone, so min-of-products = product-of-min). Measurements
+        // and history: PR #8.
+        if (r_min <= 1.0 and k > 3) {
+            for (0..k) |i| w_a[i] += r_min * delta_w[i];
+            // Swap-remove the blocker; its caller-side weight is zeroed
+            // by the final writeback (it left the active list).
+            k -= 1;
+            q[blocker] = q[k];
+            w_a[blocker] = w_a[k];
+            active_idx[blocker] = active_idx[k];
+            continue;
+        }
+
+        const alpha = @min(1.0, 0.99 * r_min);
         if (alpha < tol.NEWTON_STEP_MIN) break;
         for (0..k) |i| w_a[i] += alpha * delta_w[i];
     }
