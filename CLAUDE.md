@@ -58,3 +58,6 @@ still fast (`tests/a5_res0_test.zig`).
   adoption + sparse-gate deletion, requires CANARY sign-off).
 - `docs/trust-solver.md` — the trust solver (the `SolveOptions.method`
   default since 0.6.0): writeup, measurements, validation ledger.
+- `docs/algo-roadmap.md` — ranked candidates for future speed/convergence/
+  stability work (range-space polish, elimination, cert-floor probe), plus
+  the measured dead ends not to retry.
