@@ -1,6 +1,6 @@
 .{
     .name = .skar,
-    .version = "0.6.0",
+    .version = "0.7.0",
     .fingerprint = 0xdea1be595fe97874,
     .minimum_zig_version = "0.15.2",
     .dependencies = .{},
